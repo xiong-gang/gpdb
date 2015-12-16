@@ -472,6 +472,16 @@ static struct config_bool ConfigureNamesBool[] =
 		&enable_seqscan,
 		true, NULL, NULL
 	},
+
+	{
+		{"debug_1pc", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's use of sequential-scan plans."),
+			NULL
+		},
+		&debug_1pc,
+		false, NULL, NULL
+	},
+
 	{
 		{"enable_indexscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of index-scan plans."),

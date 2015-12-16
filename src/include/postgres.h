@@ -508,6 +508,7 @@ extern int SyncAgentMain(int, char **, const char *);
 extern void CdbProgramErrorHandler(SIGNAL_ARGS);
 extern void gp_set_thread_sigmasks(void);
 
+extern bool debug_1pc;
 
 #ifdef __cplusplus
 }   /* extern "C" */

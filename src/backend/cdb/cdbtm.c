@@ -140,8 +140,8 @@ static bool doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand, 
 										 bool *badGangs, bool raiseError, CdbDispatchDirectDesc *direct,
 										 char *serializedArgument, int serializedArgumentLen);
 static void doPrepareTransaction(void);
-static void doInsertForgetCommitted(void);
-static void doNotifyingCommitPrepared(void);
+static void doInsertForgetCommitted(bool is1PC);
+static void doNotifyingCommitPrepared(bool is1PC);
 static void doNotifyingAbort(void);
 static bool doNotifyCommittedInDoubt(char *gid);
 static void doAbortInDoubt(char *gid);
@@ -354,13 +354,13 @@ notifyCommittedDtxTransactionIsNeeded(void)
  * or by CommitTransaction
  */
 void
-notifyCommittedDtxTransaction(void)
+notifyCommittedDtxTransaction(bool is1PC)
 {
 	Assert (DistributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE);
 
 	Assert (currentGxact != NULL);
 
-	doNotifyingCommitPrepared();
+	doNotifyingCommitPrepared(is1PC);
 }
 
 static inline void
@@ -713,7 +713,7 @@ doPrepareTransaction(void)
  * Call with both ProcArrayLock and DTM lock already held.
  */
 static void
-doInsertForgetCommitted(void)
+doInsertForgetCommitted(bool is1PC)
 {
 	TMGXACT_LOG gxact_log;
 
@@ -727,7 +727,8 @@ doInsertForgetCommitted(void)
 	memcpy(&gxact_log.gid, currentGxact->gid, TMGIDSIZE);
 	gxact_log.gxid = currentGxact->gxid;
 
-	RecordDistributedForgetCommitted(&gxact_log);
+	if(!debug_1pc || !is1PC)
+		RecordDistributedForgetCommitted(&gxact_log);
 
 	setCurrentGxactState( DTX_STATE_INSERTED_FORGET_COMMITTED );
 
@@ -744,7 +745,7 @@ doInsertForgetCommitted(void)
 }
 
 static void
-doNotifyingCommitPrepared(void)
+doNotifyingCommitPrepared(bool is1PC)
 {
 	bool succeeded;
 	bool badGangs;
@@ -772,48 +773,51 @@ doNotifyingCommitPrepared(void)
 								   "",	// databaseName
 								   ""); // tableName
 #endif
-	succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_COMMIT_PREPARED, /* flags */ 0,
-											 currentGxact->gid, currentGxact->gxid,
-											 &badGangs, /* raiseError */ false,
-											 &direct, NULL, 0);
-	if (!succeeded)
+	if(!debug_1pc || !is1PC)
 	{
-		elog(WARNING, "The distributed transaction 'Commit Prepared' broadcast failed to one or more segments for gid = %s.",
-			 currentGxact->gid);
+		succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_COMMIT_PREPARED, /* flags */ 0,
+												 currentGxact->gid, currentGxact->gxid,
+												 &badGangs, /* raiseError */ false,
+												 &direct, NULL, 0);
+		if (!succeeded)
+		{
+			elog(WARNING, "The distributed transaction 'Commit Prepared' broadcast failed to one or more segments for gid = %s.",
+				 currentGxact->gid);
 
-		/*
-		 * We must succeed in delivering the commit to all segment instances, or any failed
-		 * segment instances must be marked INVALID.
-		 */
+			/*
+			 * We must succeed in delivering the commit to all segment instances, or any failed
+			 * segment instances must be marked INVALID.
+			 */
 
-		/*
-		 * Reset the dispatch logic (i.e. deallocate gang) so later we can attempt a retry
-		 * at the top in PostgresMain.
-		 */
-		elog(NOTICE, "Releasing segworker group to retry broadcast.");
-		disconnectAndDestroyAllGangs();
+			/*
+			 * Reset the dispatch logic (i.e. deallocate gang) so later we can attempt a retry
+			 * at the top in PostgresMain.
+			 */
+			elog(NOTICE, "Releasing segworker group to retry broadcast.");
+			disconnectAndDestroyAllGangs();
 
-		/*
-		 * This call will at a minimum change the session id so we will
-		 * not have SharedSnapshotAdd colissions.
-		 */
-		CheckForResetSession();
+			/*
+			 * This call will at a minimum change the session id so we will
+			 * not have SharedSnapshotAdd colissions.
+			 */
+			CheckForResetSession();
 
-		getTmLock();
-		Assert(currentGxact->state == DTX_STATE_NOTIFYING_COMMIT_PREPARED);
+			getTmLock();
+			Assert(currentGxact->state == DTX_STATE_NOTIFYING_COMMIT_PREPARED);
 
-		setCurrentGxactState( DTX_STATE_RETRY_COMMIT_PREPARED );
+			setCurrentGxactState( DTX_STATE_RETRY_COMMIT_PREPARED );
 
-		releaseTmLock();
+			releaseTmLock();
 
-		elog(DTM_DEBUG5, "Marking retry needed for distributed transaction 'Commit Prepared' broadcast to the segments for gid = %s.",
-			 currentGxact->gid);
-		return;
-	}
-	else
-	{
-		elog(DTM_DEBUG5, "The distributed transaction 'Commit Prepared' broadcast succeeded to all the segments for gid = %s.",
-			 currentGxact->gid);
+			elog(DTM_DEBUG5, "Marking retry needed for distributed transaction 'Commit Prepared' broadcast to the segments for gid = %s.",
+				 currentGxact->gid);
+			return;
+		}
+		else
+		{
+			elog(DTM_DEBUG5, "The distributed transaction 'Commit Prepared' broadcast succeeded to all the segments for gid = %s.",
+				 currentGxact->gid);
+		}
 	}
 
 	/*
@@ -826,7 +830,7 @@ doNotifyingCommitPrepared(void)
 
 	Assert(currentGxact->state == DTX_STATE_NOTIFYING_COMMIT_PREPARED);
 
-	doInsertForgetCommitted();
+	doInsertForgetCommitted(is1PC);
 
 	releaseTmLock();
 
@@ -1060,7 +1064,7 @@ doDtxPhase2Retry(void)
 
 				if (commit)
 				{
-					doInsertForgetCommitted();
+					doInsertForgetCommitted(false);
 				}
 				else
 				{
@@ -3245,7 +3249,7 @@ recoverInDoubtTransactions(void)
 
 		getTmLock();
 
-		doInsertForgetCommitted();
+		doInsertForgetCommitted(false);
 
 		releaseTmLock();
 
@@ -4082,8 +4086,8 @@ finishDistributedTransactionContext (char* debugCaller, bool aborted)
 	{
 /*		PleaseDebugMe("finishDistributedTransactionContext currentGxact == NULL"); */
 
-		elog(FATAL, "Expected currentGxact to be NULL at this point.  Found gid =%s, gxid = %u (state = %s, caller = %s)",
-			currentGxact->gid, currentGxact->gxid, DtxStateToString(currentGxact->state), debugCaller);
+		//elog(FATAL, "Expected currentGxact to be NULL at this point.  Found gid =%s, gxid = %u (state = %s, caller = %s)",
+		//	currentGxact->gid, currentGxact->gxid, DtxStateToString(currentGxact->state), debugCaller);
 	}
 
 	gxid = getDistributedTransactionId();

@@ -264,7 +264,7 @@ int
 pg_fsync_no_writethrough(int fd)
 {
 	if (enableFsync)
-		return fsync(fd);
+		return fdatasync(fd);
 	else
 		return 0;
 }

@@ -140,6 +140,7 @@ typedef struct TransactionStateData
 	SubTransactionId subTransactionId;	/* my subxact ID */
 	char	   *name;			/* savepoint name, if any */
 	int			savepointLevel; /* savepoint level */
+	bool	   isDirectDispatch;
 	TransState	state;			/* low-level state */
 	TBlockState blockState;		/* high-level state */
 	int			nestingLevel;	/* transaction nesting depth */
@@ -562,6 +563,13 @@ SetCurrentStatementStartTimestamp(void)
 	stmtStartTimestamp = GetCurrentTimestamp();
 }
 
+
+void
+SetCurrentTransactionDirectDispatch(bool isDirectDispatch)
+{
+	TransactionState s = CurrentTransactionState;
+	s->isDirectDispatch = isDirectDispatch;
+}
 /*
  *	SetCurrentStatementStartTimestampToMaster
  */
@@ -3456,7 +3464,8 @@ CommitTransaction(void)
 	/*
 	 * Prepare all QE.
 	 */
-	prepareDtxTransaction();
+	if (!debug_1pc || !s->isDirectDispatch) 
+		prepareDtxTransaction();
 
 #ifdef FAULT_INJECTOR
 	if (isPreparedDtxTransaction())
@@ -3508,7 +3517,8 @@ CommitTransaction(void)
 	/*
 	 * Here is where we really truly commit.
 	 */
-	RecordTransactionCommit();
+	if (!debug_1pc || (Gp_role == GP_ROLE_EXECUTE) || !s->isDirectDispatch) 
+		RecordTransactionCommit();
 
 	/*----------
 	 * Let others know about no transaction in progress by me. Note that
@@ -3614,7 +3624,10 @@ CommitTransaction(void)
 		 * routines might want to use them.  Plus, we want AtCommit_Memory to 
 		 * happen after using the dispatcher.
 		 */
-		notifyCommittedDtxTransaction();
+		if (debug_1pc && s->isDirectDispatch) 
+			notifyCommittedDtxTransaction(true);
+		else
+			notifyCommittedDtxTransaction(false);
 	}
 
 	/*
@@ -4501,6 +4514,11 @@ CommitTransactionCommand(void)
 			 */
 		case TBLOCK_INPROGRESS:
 		case TBLOCK_SUBINPROGRESS:
+			if (debug_1pc && s->isDirectDispatch)
+			{
+				CommitTransaction();
+				s->blockState = TBLOCK_DEFAULT;
+			}
 			CommandCounterIncrement();
 			break;
 

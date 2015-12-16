@@ -104,6 +104,8 @@ extern char *optarg;
 extern char *savedSeqServerHost;
 extern int savedSeqServerPort;
 
+bool debug_1pc = false;
+
 /* ----------------
  *		global variables
  * ----------------
@@ -1228,6 +1230,9 @@ exec_mpp_query(const char *query_string,
 		/* Make sure we are in a transaction command */
 		start_xact_command();
 		
+		if(debug_1pc)
+			SetCurrentTransactionDirectDispatch(plan->planTree->directDispatch.isDirectDispatch);
+
 		/* If we got a cancel signal in parsing or prior command, quit */
 		CHECK_FOR_INTERRUPTS();
 		
@@ -1512,7 +1517,7 @@ exec_simple_query(const char *query_string, const char *seqServerHost, int seqSe
 	 * one of those, else bad things will happen in xact.c. (Note that this
 	 * will normally change current memory context.)
 	 */
-	start_xact_command();
+	//start_xact_command();
 
 	/*
 	 * Zap any pre-existing unnamed statement.	(While not strictly necessary,
@@ -1630,6 +1635,7 @@ exec_simple_query(const char *query_string, const char *seqServerHost, int seqSe
 					 errmsg("current transaction is aborted, "
 						"commands ignored until end of transaction block")));
 
+
 		/* Make sure we are in a transaction command */
 		start_xact_command();
 
@@ -1658,10 +1664,19 @@ exec_simple_query(const char *query_string, const char *seqServerHost, int seqSe
 
 		plantree_list = pg_plan_queries(querytree_list, NULL, false);
 
+		if(debug_1pc)
+		{
+			if (list_length(plantree_list) == 1)
+			{
+				PlannedStmt *planstmt = (PlannedStmt*)list_nth(plantree_list, 0);
+				SetCurrentTransactionDirectDispatch(planstmt->planTree->directDispatch.isDirectDispatch);
+			}
+		}
 		/* Done with the snapshot used for parsing/planning */
 		ActiveSnapshot = NULL;
 		if (mySnapshot)
 			FreeSnapshot(mySnapshot);
+
 
 		/* If we got a cancel signal in analysis or planning, quit */
 		CHECK_FOR_INTERRUPTS();

@@ -184,6 +184,7 @@ extern File subxip_file;
 extern char *XactInfoKind_Name(
 	const XactInfoKind		kind);
 extern void SetSharedTransactionId(void);
+extern void SetCurrentTransactionDirectDispatch(bool isDirectDispatch);
 extern void SetSharedTransactionId_reader(TransactionId xid, CommandId cid);
 extern void SetXactSeqXlog(void);
 extern bool IsTransactionState(void);
