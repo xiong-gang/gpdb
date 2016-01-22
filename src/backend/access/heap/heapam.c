@@ -1003,7 +1003,7 @@ CdbTryOpenRelation(Oid relid, LOCKMODE reqmode, bool noWait, bool *lockUpgraded)
 		rel = try_heap_open(relid, NoLock, noWait);
 		if (!rel)
 			return NULL;
-		
+	#if 0	
 		if (rel->rd_cdbpolicy &&
 			rel->rd_cdbpolicy->ptype == POLICYTYPE_PARTITIONED)
 		{
@@ -1011,6 +1011,7 @@ CdbTryOpenRelation(Oid relid, LOCKMODE reqmode, bool noWait, bool *lockUpgraded)
 			if (lockUpgraded != NULL)
 				*lockUpgraded = true;
 		}
+	#endif
 		relation_close(rel, NoLock);
     }
 
@@ -1025,6 +1026,7 @@ CdbTryOpenRelation(Oid relid, LOCKMODE reqmode, bool noWait, bool *lockUpgraded)
 	 * with the lock.  Double check that our chosen lock mode is still
 	 * okay.
 	 */
+	#if 0
 	if (lockmode == RowExclusiveLock &&
 		rel->rd_cdbpolicy &&
 		rel->rd_cdbpolicy->ptype == POLICYTYPE_PARTITIONED)
@@ -1032,6 +1034,7 @@ CdbTryOpenRelation(Oid relid, LOCKMODE reqmode, bool noWait, bool *lockUpgraded)
 		elog(ERROR, "relation \"%s\" concurrently updated", 
 			 RelationGetRelationName(rel));
 	}
+	#endif
 
 	return rel;
 }                                       /* CdbOpenRelation */
