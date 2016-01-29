@@ -1,6 +1,8 @@
 /*-------------------------------------------------------------------------
  *
- * deadlockdetector.c
+ * seqserver.c
+ *	  Process under QD postmaster used for doling out sequence values to
+ * 		QEs.
  *
  *
  * Copyright (c) 2006-2008, Greenplum inc
@@ -92,16 +94,22 @@ typedef struct GNode
 	/* this request happens on segment: */
 	int gpSegmentId;
 
-	/* have n requester */
-	int inDegree;
-
-	/* mark during cancelling deadlock */
-	bool visited;
-
+	struct GNode *pHolder;
 	/* request lock is hold by session */
-	struct GNode *pHoldBy;
+	List *lRequester;
 }GNode;
 
+typedef struct SNode
+{
+	int sessionId;
+	int inDegree;
+	int outDegree;
+	List *lIn;
+	List *lOut;
+}SNode;
+
+
+List *glSNode;
 //typedef struct GEdge
 //{
 //	GNode *from; 
@@ -125,22 +133,24 @@ static void doDeadLockCheck(void);
 char * FindSuperuser(bool try_bootstrap);
 static char *ddtUser = NULL;
 static void dummyprint(char *fmt, ...);
-GNode *makeHolder(List **lGNode, int mppSessionId);
+GNode *makeHolder(List **lGNode, int mppSessionId, int gpSegmentId, int pid);
 GNode *makeRequester(List **lGNode, char *lockType, 
 			   int database, int relation, int page, 
 			   int tuple, int transactionId, 
 			   int transaction, int pid, int mppSessionId, 
 			   int holderTransaction, int holderPid, int holderMppSessionId, 
-			   int gpSegmentId, GNode *pHoldBy);
-static bool findCycle(List *lGNode);
+			   int gpSegmentId, GNode *pHolder);
+static bool findCycle(void);
 
-static GNode *searchGNodeInList(List *lGNode, int mppSessionId);
+static GNode *searchGNodeInList(List *lGNode, int gpSegmentId, int pid);
+
+static SNode *getSNodeFromList(int mppSessionId);
+static void addSessionDependency(List *lSNode, int sessionId, int dependSessionId);
 
 static bool removeNoInDegreeNodeOneLoop(List **lGNode);
 static void removeNoInDegreeNode(List **lGNode);
 static void cancelSession(int sessionId);
-static bool cancelDeadlockCyclesOneLoop(List **lGNode);
-static void cancelDeadlockCycles(List **lGNode);
+static void cancelDeadlockCycles(void);
 /*=========================================================================
  * GLOBAL STATE VARIABLES
  */
@@ -452,6 +462,9 @@ doDeadLockCheck(void)
 	struct pg_result **results = NULL;
 	StringInfoData errbuf;
 	List *lGNode = NULL;
+	int lsegid = -2;
+
+	Assert(glSNode == NULL);
 	
 	const char *sql = "select a.*, b.mppsessionid as hold_mppsessionid, b.pid as hold_pid, "
 				" b.transaction as hold_transaction, b.mode as hold_mode from"
@@ -465,7 +478,8 @@ doDeadLockCheck(void)
 				" (a.classid=b.classid or (a.classid is null and b.classid is null)) and"
 				" (a.objid=b.objid or (a.objid is null and b.objid is null)) and"
 				" (a.objsubid=b.objsubid or (a.objsubid is null and b.objsubid is null))"
-				" where a.granted='f' and a.pid <> b.pid;";
+				" and a.gp_segment_id = b.gp_segment_id "
+				" where a.granted='f' and a.pid <> b.pid order by a.gp_segment_id;";
 	initStringInfo(&errbuf);
 
 	results = cdbdisp_dispatchRMCommand(sql, false, &errbuf, &resultCount);
@@ -515,13 +529,25 @@ doDeadLockCheck(void)
 				int mppSessionId = atol(PQgetvalue(res, j, i_mppsessionid));
 				int holdMppSessionId = atol(PQgetvalue(res, j, i_hold_mppsessionid));
 				int gpSegmentId = atol(PQgetvalue(res, j, i_gp_segment_id));
-				GNode *pHolder = makeHolder(&lGNode, holdMppSessionId);
+
+				if (lsegid == -2)
+				{
+					lsegid = gpSegmentId;
+				}
+				else if (lsegid != gpSegmentId)
+				{
+					lsegid = gpSegmentId;	
+					list_free(lGNode);
+					lGNode = NULL;
+				}
+			
+				GNode *pHolder = makeHolder(&lGNode, holdMppSessionId, gpSegmentId, holdPid);
 				Assert(pHolder != NULL);
 				GNode *pRequester = makeRequester(&lGNode, lockType, database, relation, page, 
 												  tuple, transactionId, transaction, pid, mppSessionId, 
 												  holdTransaction, holdPid, holdMppSessionId, gpSegmentId, pHolder);
 				Assert(pRequester != NULL);
-				dummyprint("test", holdMode, mode, pRequester);
+				dummyprint("test", holdMode, mode, pHolder, pRequester);
 			}
 		}
 	}
@@ -533,19 +559,21 @@ doDeadLockCheck(void)
 
 	free(results);
 
-	findCycle(lGNode);
+	findCycle();
 }
 
-GNode *makeHolder(List **lGNode, int mppSessionId)
+GNode *makeHolder(List **lGNode, int mppSessionId, int gpSegmentId, int pid)
 {
 	GNode *gn = NULL;
-	gn = searchGNodeInList(*lGNode, mppSessionId);
+	gn = searchGNodeInList(*lGNode, gpSegmentId, pid);
 	if (NULL == gn) 
 	{
 		gn = malloc(sizeof(GNode));
 		memset(gn, 0, sizeof(GNode));	
 		*lGNode = lappend(*lGNode, gn);
 	}
+	gn->gpSegmentId = gpSegmentId;
+	gn->pid = pid;
 	gn->mppSessionId = mppSessionId;
 	return gn;
 }
@@ -555,12 +583,13 @@ GNode *makeRequester(List **lGNode, char *lockType,
 			   int tuple, int transactionId, 
 			   int transaction, int pid, int mppSessionId, 
 			   int holderTransaction, int holderPid, int holderMppSessionId, 
-			   int gpSegmentId, GNode *pHoldBy)
+			   int gpSegmentId, GNode *pHolder)
 {
 	const char *LockTypeTransactionId = "transactionid";
-	const char *LockTypeTuple = "tuple";
 	#define LOCK_TYPE_TRANSACTIONID 0
-	#define LOCK_TYPE_TUPLE 1
+	#define LOCK_TYPE_OTHER 1
+
+	Assert(pHolder != NULL);
 	
 	int iLockType = -1;
 	GNode *gn = NULL;
@@ -569,12 +598,12 @@ GNode *makeRequester(List **lGNode, char *lockType,
 	{
 		iLockType = LOCK_TYPE_TRANSACTIONID;		
 	}
-	else if (!strncmp(lockType, LockTypeTuple, strlen(LockTypeTuple)))
+	else
 	{
-		iLockType = LOCK_TYPE_TUPLE;		
+		iLockType = LOCK_TYPE_OTHER;		
 	}
 
-	gn = searchGNodeInList(*lGNode, mppSessionId);
+	gn = searchGNodeInList(*lGNode, gpSegmentId, pid);
 	if (NULL == gn) 
 	{
 		gn = malloc(sizeof(GNode));
@@ -598,67 +627,161 @@ GNode *makeRequester(List **lGNode, char *lockType,
 	gn->holderMppSessionId = holderMppSessionId;
 
 	gn->gpSegmentId = gpSegmentId;
-	gn->visited = false;
 
-	gn->pHoldBy = pHoldBy;
-	pHoldBy->inDegree++;
+	if (iLockType == LOCK_TYPE_TRANSACTIONID)
+	{
+		gn->pHolder = pHolder;
+		addSessionDependency(glSNode, gn->mppSessionId, pHolder->mppSessionId);
+
+		ListCell *cell = NULL;
+		foreach (cell, gn->lRequester)
+		{
+			GNode *gnr = (GNode *)lfirst(cell);
+			Assert(gnr->pHolder == NULL);
+			gnr->pHolder = pHolder;
+			addSessionDependency(glSNode, gnr->mppSessionId, pHolder->mppSessionId);
+		}
+
+		list_free(gn->lRequester);
+		gn->lRequester = NULL;
+	}
+	else
+	{
+		if (pHolder->pHolder != NULL) 		
+		{
+			gn->pHolder = pHolder->pHolder;		
+			addSessionDependency(glSNode, gn->mppSessionId, pHolder->pHolder->mppSessionId);
+
+			ListCell *cell = NULL;
+			foreach (cell, gn->lRequester)
+			{
+				GNode *gnr = (GNode *)lfirst(cell);
+				Assert(gnr->pHolder == NULL);
+				gnr->pHolder = pHolder->pHolder;
+				addSessionDependency(glSNode, gnr->mppSessionId, pHolder->pHolder->mppSessionId);
+			}
+		}
+		else
+		{
+			pHolder->lRequester = lappend(pHolder->lRequester, gn);
+
+			ListCell *cell = NULL;
+			foreach (cell, gn->lRequester)
+			{
+				GNode *gnr = (GNode *)lfirst(cell);
+				pHolder->lRequester = lappend(pHolder->lRequester, gnr);
+			}
+		}
+	}
 
 	return gn;
 }
 
-GNode *searchGNodeInList(List *lGNode, int mppSessionId)
+GNode *searchGNodeInList(List *lGNode, int gpSegmentId, int pid)
 {
 	ListCell *cell = NULL;
 	foreach(cell, lGNode)
 	{
 		GNode *gn = (GNode *)lfirst(cell);
-		if (gn->mppSessionId == mppSessionId) 
+		if (gn->gpSegmentId == gpSegmentId && gn->pid == pid) 
 			return gn;
 	}
 	return NULL;
 }
 
-
-bool findCycle(List *lGNode)
+void addSessionDependency(List *lSNode, int sessionId, int dependSessionId)
 {
-	if (NULL == lGNode)
+	SNode *from = getSNodeFromList(sessionId);	
+	SNode *to = getSNodeFromList(dependSessionId);	
+	from->lOut = lappend(from->lOut, to);
+	from->outDegree++;
+
+	to->lIn = lappend(to->lIn, from);
+	to->inDegree++;
+}
+
+SNode *getSNodeFromList(int mppSessionId)
+{
+	ListCell *cell = NULL;
+	SNode *sn = NULL;
+	foreach(cell, glSNode)
+	{
+		sn = (SNode *)lfirst(cell);
+		if (sn->sessionId == mppSessionId)
+			return sn;
+	}
+	
+	sn = (SNode *)malloc(sizeof(SNode));
+	memset(sn, 0, sizeof(SNode));	
+	sn->sessionId = mppSessionId;
+
+	glSNode = lappend(glSNode, sn);	
+
+	return sn;
+}
+
+bool findCycle(void)
+{
+	if (NULL == glSNode)
 	{
 		return false;
 	}
 
-	removeNoInDegreeNode(&lGNode);
+	removeNoInDegreeNode(&glSNode);
 	
 	/* find the sessions need to be cancelled */	
-	cancelDeadlockCycles(&lGNode);
+	cancelDeadlockCycles();
 	return true;
 }
 
 
-void removeNoInDegreeNode(List **lGNode)
+void removeNoInDegreeNode(List **glSNode)
 {
-	while(removeNoInDegreeNodeOneLoop(lGNode));
+	while(removeNoInDegreeNodeOneLoop(glSNode));
 	return;
 }
 
-bool removeNoInDegreeNodeOneLoop(List **lGNode)
+bool removeNoInDegreeNodeOneLoop(List **glSNode)
 {
-	ListCell *cell = list_head(*lGNode);
+	ListCell *cell = list_head(*glSNode);
 	ListCell *prev = NULL;
 	bool found = false;
 	while(NULL != cell)
 	{
-		GNode *gn = (GNode *)lfirst(cell);
-		if (gn->inDegree == 0)
+		SNode *sn = (SNode *)lfirst(cell);
+		if (sn->inDegree == 0 || sn->outDegree == 0)
 		{
-			GNode *nodeHoldBy = gn->pHoldBy;
-			ListCell *tmp = NULL;
-			if (NULL != nodeHoldBy)
+			if (sn->inDegree == 0)
 			{
-				Assert(nodeHoldBy->inDegree >= 1);
-				nodeHoldBy->inDegree--;
+				List *out = sn->lOut; 
+				if (out != NULL)
+				{
+					ListCell *cell = NULL;
+					foreach(cell, out)
+					{
+						SNode *outNode = (SNode *)lfirst(cell);
+						outNode->lIn = list_delete(outNode->lIn, sn);
+						outNode->inDegree--;
+					}
+				}
 			}
-			tmp = lnext(cell);
-			*lGNode = list_delete_cell(*lGNode, cell, prev);
+			else
+			{
+				List *in = sn->lIn; 
+				if (in != NULL)
+				{
+					ListCell *cell = NULL;
+					foreach(cell, in)
+					{
+						SNode *inNode = (SNode *)lfirst(cell);
+						inNode->lOut = list_delete(inNode->lOut, sn);
+						inNode->outDegree--;
+					}
+				}
+			}
+
+			ListCell *tmp = lnext(cell);
+			*glSNode = list_delete_cell(*glSNode, cell, prev);
 			cell = tmp;
 			found = true;
 		}
@@ -672,46 +795,31 @@ bool removeNoInDegreeNodeOneLoop(List **lGNode)
 	return found;
 }
 
-static void cancelDeadlockCycles(List **lGNode)
+static void cancelDeadlockCycles(void)
 {
-	while(cancelDeadlockCyclesOneLoop(lGNode));
+	ListCell *cell = NULL;
+	SNode *cancelSN = NULL;
+	int maxInDegree = 0;
+
+	if (glSNode == NULL)
+		return;
+
+	foreach(cell, glSNode)
+	{
+		SNode *sn = (SNode *)lfirst(cell);	
+		if (sn->inDegree > maxInDegree)
+		{
+			maxInDegree = sn->inDegree;			
+			cancelSN = sn;
+		}
+	}
+
+	Assert(cancelSN != NULL);
+	cancelSession(cancelSN->sessionId);
+	list_free(glSNode);
+	glSNode = NULL;
+
 	return;
-}
-
-static bool cancelDeadlockCyclesOneLoop(List **lGNode)
-{
-	ListCell *cell = list_head(*lGNode);
-	GNode *gn = NULL;
-	bool found = false;
-	int cancelSessionId = 0;
-
-	/* find the first non-visited node */
-	foreach(cell, *lGNode)
-	{
-		gn = (GNode *)lfirst(cell);
-		if (!gn->visited)
-		{
-			found = true;			
-			break;
-		}
-	}
-
-	if (!found)
-		return false;
-	
-	while(NULL != gn && !gn->visited)
-	{
-		if (0 == cancelSessionId && gn->lockType == LOCK_TYPE_TRANSACTIONID)
-		{
-			cancelSessionId = gn->mppSessionId;	
-		}
-		gn->visited = true;
-		gn = gn->pHoldBy;
-	}
-
-	cancelSession(cancelSessionId);
-
-	return true;
 }
 
 static void cancelSession(int sessionId)
@@ -719,7 +827,7 @@ static void cancelSession(int sessionId)
 	StringInfoData buffer;
 	bool connected = false;
 	int ret = 0;
-		
+	
 	initStringInfo(&buffer);
 	
 	const char *sql = "select procpid from pg_stat_activity where sess_id=%d"; 
