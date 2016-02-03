@@ -429,6 +429,7 @@ DeadLockDetectorMain(int argc, char *argv[])
 static void
 DeadLockDetectorLoop(void)
 {
+        int sleeptime = 100;   
 	for(;;)
 	{
 		int i = 1;
@@ -441,7 +442,7 @@ DeadLockDetectorLoop(void)
 		if (!PostmasterIsAlive(true))
 			exit(1);
 	
-		sleep(1);
+		usleep(sleeptime);
 
 		if(i)
 		{
@@ -461,26 +462,25 @@ doDeadLockCheck(void)
 	int 	resultCount = 0;
 	struct pg_result **results = NULL;
 	StringInfoData errbuf;
+	StringInfoData strres;
 	List *lGNode = NULL;
 	int lsegid = -2;
 
 	Assert(glSNode == NULL);
-	
-	const char *sql = "select a.*, b.mppsessionid as hold_mppsessionid, b.pid as hold_pid, "
-				" b.transaction as hold_transaction, b.mode as hold_mode from"
-				" pg_locks a left join pg_locks b on"
-				" a.locktype=b.locktype and"
-				" (a.database=b.database or (a.database is null and b.database is null)) and"
-				" (a.relation=b.relation or (a.relation is null and b.relation is null)) and"
-				" (a.page=b.page or (a.page is null and b.page is null)) and"
-				" (a.tuple=b.tuple or (a.tuple is null and b.tuple is null)) and"
-				" (a.transactionid=b.transactionid or (a.transactionid is null and b.transactionid is null)) and"
-				" (a.classid=b.classid or (a.classid is null and b.classid is null)) and"
-				" (a.objid=b.objid or (a.objid is null and b.objid is null)) and"
-				" (a.objsubid=b.objsubid or (a.objsubid is null and b.objsubid is null))"
-				" and a.gp_segment_id = b.gp_segment_id "
-				" where a.granted='f' and a.pid <> b.pid order by a.gp_segment_id;";
+
+        const char *sql = "select a.*, b.mppsessionid as hold_mppsessionid, b.pid as hold_pid, "
+                          " b.transaction as hold_transaction, b.mode as hold_mode from"	
+                          " pg_locks a join pg_locks b on"
+                          " a.locktype=b.locktype and"
+                          " a.granted='f' and b.granted='t' and"
+                          " a.gp_segment_id=b.gp_segment_id and"
+                          " a.pid <> b.pid and"
+                          " ((a.locktype='transactionid' and a.transactionid=b.transactionid) or"
+                          "  (a.locktype='tuple' and a.database=b.database and a.relation=b.relation and a.page=b.page and a.tuple=b.tuple)  or"
+                          "  (a.locktype='relation' and a.database=b.database and a.relation=b.relation))"
+                          " order by b.gp_segment_id;"; 
 	initStringInfo(&errbuf);
+	initStringInfo(&strres);
 
 	results = cdbdisp_dispatchRMCommand(sql, false, &errbuf, &resultCount);
 
@@ -530,6 +530,9 @@ doDeadLockCheck(void)
 				int holdMppSessionId = atol(PQgetvalue(res, j, i_hold_mppsessionid));
 				int gpSegmentId = atol(PQgetvalue(res, j, i_gp_segment_id));
 
+
+                                appendStringInfo(&strres, "nth:%d, locktype:%s, database:%d, relation:%d, page:%d, tuple:%d, transactionid:%d, transaction:%d, pid:%d, session:%d, holdtrans:%d, holdpid:%d, holdesession:%d, segment:%d", j, lockType, database, relation, page, tuple, transactionId, transaction, pid, mppSessionId, holdTransaction, holdPid, holdMppSessionId, gpSegmentId);
+
 				if (lsegid == -2)
 				{
 					lsegid = gpSegmentId;
@@ -539,6 +542,7 @@ doDeadLockCheck(void)
 					lsegid = gpSegmentId;	
 					list_free(lGNode);
 					lGNode = NULL;
+                                        resetStringInfo(&strres);
 				}
 			
 				GNode *pHolder = makeHolder(&lGNode, holdMppSessionId, gpSegmentId, holdPid);
@@ -637,7 +641,7 @@ GNode *makeRequester(List **lGNode, char *lockType,
 		foreach (cell, gn->lRequester)
 		{
 			GNode *gnr = (GNode *)lfirst(cell);
-			Assert(gnr->pHolder == NULL);
+			Assert(gnr->pHolder == NULL || gnr->pHolder == pHolder);
 			gnr->pHolder = pHolder;
 			addSessionDependency(glSNode, gnr->mppSessionId, pHolder->mppSessionId);
 		}
@@ -656,7 +660,7 @@ GNode *makeRequester(List **lGNode, char *lockType,
 			foreach (cell, gn->lRequester)
 			{
 				GNode *gnr = (GNode *)lfirst(cell);
-				Assert(gnr->pHolder == NULL);
+				Assert(gnr->pHolder == NULL || gnr->pHolder == pHolder->pHolder);
 				gnr->pHolder = pHolder->pHolder;
 				addSessionDependency(glSNode, gnr->mppSessionId, pHolder->pHolder->mppSessionId);
 			}
@@ -830,7 +834,7 @@ static void cancelSession(int sessionId)
 	
 	initStringInfo(&buffer);
 	
-	const char *sql = "select procpid from pg_stat_activity where sess_id=%d"; 
+	const char *sql = "select procpid from pg_stat_activity where sess_id=%d and current_query not like '%<IDLE>%'"; 
 	appendStringInfo(&buffer, sql, sessionId);
 	
 	PG_TRY();
@@ -844,8 +848,8 @@ static void cancelSession(int sessionId)
 
 		/* Do the query. */
 		ret = SPI_execute(buffer.data, false, 0);
-		Assert(SPI_processed == 1);
-		if (ret > 0 && SPI_tuptable != NULL)
+		//Assert(SPI_processed == 1);
+		if (ret > 0 && SPI_processed == 1 && SPI_tuptable != NULL)
 		{
 			TupleDesc tupdesc = SPI_tuptable->tupdesc;
 			SPITupleTable *tuptable = SPI_tuptable;
