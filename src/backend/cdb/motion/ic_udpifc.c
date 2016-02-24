@@ -4566,6 +4566,7 @@ handleAcks(ChunkTransportState *transportStates, ChunkTransportStateEntry *pEntr
 					break;
 				}
 
+				/* don't get out of the loop if pkt->seq equals to ackConn->receivedAckSeq, need to check UDPIC_FLAGS_STOP flag */
 				if (pkt->seq < ackConn->receivedAckSeq)
 				{
 					if (DEBUG1 >= log_min_messages)
