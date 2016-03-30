@@ -93,15 +93,26 @@ static bool SyncRepQueueIsOrderedByLSN(int mode);
  * to the wait queue. During SyncRepWakeQueue() a WALSender changes
  * the state to SYNC_REP_WAIT_COMPLETE once replication is confirmed.
  * This backend then resets its state to SYNC_REP_NOT_WAITING.
+ *
+ * 'lsn' represents the LSN to wait for.  'commit' indicates whether this LSN
+ * represents a commit record.  If it doesn't, then we wait only for the WAL
+ * to be flushed if synchronous_commit is set to the higher level of
+ * remote_apply, because only commit records provide apply feedback.
  */
 void
-SyncRepWaitForLSN(XLogRecPtr XactCommitLSN)
+SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 {
 	char	   *new_status = NULL;
 	const char *old_status;
-	int			mode = SyncRepWaitMode;
+	int			mode;
 	bool		syncStandbyPresent = false;
 	int			i = 0;
+
+	/* Cap the level for anything other than commit to remote flush only. */
+	if (commit)
+		mode = SyncRepWaitMode;
+	else
+		mode = Min(SyncRepWaitMode, SYNC_REP_WAIT_FLUSH);
 
 	/*
 	 * SIGUSR1 is used to wake us up, cannot wait from inside SIGUSR1 handler
@@ -172,7 +183,7 @@ SyncRepWaitForLSN(XLogRecPtr XactCommitLSN)
 	 * be a low cost check.
 	 */
 	if (((!IS_QUERY_DISPATCHER()) && !WalSndCtl->sync_standbys_defined) ||
-		XLByteLE(XactCommitLSN, WalSndCtl->lsn[mode]))
+		XLByteLE(lsn , WalSndCtl->lsn[mode]))
 	{
 		elogif(debug_walrepl_syncrep, LOG,
 				"syncrep wait -- Not waiting for syncrep because xlog upto LSN (%X/%X) which is "
@@ -189,7 +200,7 @@ SyncRepWaitForLSN(XLogRecPtr XactCommitLSN)
 	 * Set our waitLSN so WALSender will know when to wake us, and add
 	 * ourselves to the queue.
 	 */
-	MyProc->waitLSN = XactCommitLSN;
+	MyProc->waitLSN = lsn;
 	MyProc->syncRepState = SYNC_REP_WAITING;
 	SyncRepQueueInsert(mode);
 	Assert(SyncRepQueueIsOrderedByLSN(mode));
@@ -211,7 +222,7 @@ SyncRepWaitForLSN(XLogRecPtr XactCommitLSN)
 		new_status = (char *) palloc(len + 32 + 12 + 1);
 		memcpy(new_status, old_status, len);
 		sprintf(new_status + len, " waiting for %X/%X replication",
-				XactCommitLSN.xlogid, XactCommitLSN.xrecoff);
+				lsn.xlogid, lsn.xrecoff);
 		set_ps_display(new_status, false);
 		new_status[len] = '\0'; /* truncate off " waiting ..." */
 	}
@@ -462,6 +473,7 @@ SyncRepReleaseWaiters(void)
 	int			numflush = 0;
 	int			priority = 0;
 	int			i;
+	int			numapply = 0;
 
 	/*
 	 * If this WALSender is serving a standby that is not on the list of
@@ -527,6 +539,11 @@ SyncRepReleaseWaiters(void)
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = MyWalSnd->flush;
 		numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH);
+	}
+	if (walsndctl->lsn[SYNC_REP_WAIT_APPLY] < MyWalSnd->apply)
+	{
+		walsndctl->lsn[SYNC_REP_WAIT_APPLY] = MyWalSnd->apply;
+		numapply = SyncRepWakeQueue(false, SYNC_REP_WAIT_APPLY);
 	}
 
 	LWLockRelease(SyncRepLock);
@@ -775,6 +792,9 @@ assign_synchronous_commit(int newval, void *extra)
 			break;
 		case SYNCHRONOUS_COMMIT_REMOTE_FLUSH:
 			SyncRepWaitMode = SYNC_REP_WAIT_FLUSH;
+			break;
+		case SYNCHRONOUS_COMMIT_REMOTE_APPLY:
+			SyncRepWaitMode = SYNC_REP_WAIT_APPLY;
 			break;
 		default:
 			SyncRepWaitMode = SYNC_REP_NO_WAIT;

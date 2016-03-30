@@ -91,6 +91,11 @@ typedef struct
 	char		conninfo[MAXCONNINFO];
 
 	slock_t		mutex;			/* locks shared variables shown above */
+	/*
+	 * force walreceiver reply?  This doesn't need to be locked; memory
+	 * barriers for ordering are sufficient.
+	 */
+	bool		force_reply;
 } WalRcvData;
 
 extern WalRcvData *WalRcv;
@@ -116,5 +121,6 @@ extern int	GetReplicationApplyDelay(void);
 extern int	GetReplicationTransferLatency(void);
 extern const char *WalRcvGetStateString(WalRcvState state);
 extern XLogRecPtr WaitNextXLogAvailable(XLogRecPtr recptr, bool *finished);
+extern void WalRcvForceReply(void);
 
 #endif   /* _WALRECEIVER_H */

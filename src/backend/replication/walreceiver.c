@@ -922,7 +922,23 @@ XLogWalRcvSendHSFeedback(void)
 }
 
 /*
- * Return a string constant representing the state.
+ * Wake up the walreceiver main loop.
+ *
+ * This is called by the startup process whenever interesting xlog records
+ * are applied, so that walreceiver can check if it needs to send an apply
+ * notification back to the master which may be waiting in a COMMIT with
+ * synchronous_commit = remote_apply.
+ */
+void
+WalRcvForceReply(void)
+{
+	WalRcv->force_reply = true;
+	SetLatch(&WalRcv->latch);
+}
+
+/*
+ * Return a string constant representing the state. This is used
+ * in system functions and views, and should *not* be translated.
  */
 const char *
 WalRcvGetStateString(WalRcvState state)
