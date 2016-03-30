@@ -303,6 +303,9 @@ static uint32 ProcLastRecDataLen = 0;
  */
 static XLogRecPtr RedoRecPtr;
 
+/* Has the recovery code requested a walreceiver wakeup? */
+static bool doRequestWalReceiverReply;
+
 /*
  * RedoStartLSN points to the checkpoint's REDO location which is specified
  * in a backup label file, backup history file or control file. In standby
@@ -7427,6 +7430,16 @@ StartupXLOG(void)
 				SpinLockAcquire(&xlogctl->info_lck);
 				xlogctl->lastReplayedEndRecPtr = EndRecPtr;
 				SpinLockRelease(&xlogctl->info_lck);
+				/*
+				 * If rm_redo called XLogRequestWalReceiverReply, then we
+				 * wake up the receiver so that it notices the updated
+				 * lastReplayedEndRecPtr and sends a reply to the master.
+				 */
+				if (doRequestWalReceiverReply)
+				{
+					doRequestWalReceiverReply = false;
+					WalRcvForceReply();
+				}
 
 				/*
 				 * GPDB_84_MERGE_FIXME: Create restartpoints aggressively.
@@ -12324,4 +12337,13 @@ wait_for_mirror()
     SpinLockRelease(&xlogctl->info_lck);
 
     SyncRepWaitForLSN(tmpLogwrtResult.Flush);
+}
+
+/*
+ * Schedule a walreceiver wakeup in the main recovery loop.
+ */
+void
+XLogRequestWalReceiverReply(void)
+{
+	doRequestWalReceiverReply = true;
 }

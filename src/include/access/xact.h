@@ -58,7 +58,9 @@ typedef enum
 	SYNCHRONOUS_COMMIT_LOCAL_FLUSH,		/* wait for local flush only */
 	SYNCHRONOUS_COMMIT_REMOTE_WRITE,	/* wait for local flush and remote
 										 * write */
-	SYNCHRONOUS_COMMIT_REMOTE_FLUSH		/* wait for local and remote flush */
+	SYNCHRONOUS_COMMIT_REMOTE_FLUSH,	/* wait for local and remote flush */
+	SYNCHRONOUS_COMMIT_REMOTE_APPLY		/* wait for local flush and remote
+										 * apply */
 }	SyncCommitLevel;
 
 /* Define the default setting for synchonous_commit */
@@ -163,10 +165,12 @@ typedef struct xl_xact_commit
  */
 #define XACT_COMPLETION_UPDATE_RELCACHE_FILE	0x01
 #define XACT_COMPLETION_FORCE_SYNC_COMMIT		0x02
+#define XACT_COMPLETION_APPLY_FEEDBACK			0x03
 
 /* Access macros for above flags */
 #define XactCompletionRelcacheInitFileInval(xinfo)	(xinfo & XACT_COMPLETION_UPDATE_RELCACHE_FILE)
 #define XactCompletionForceSyncCommit(xinfo)		(xinfo & XACT_COMPLETION_FORCE_SYNC_COMMIT)
+#define XactCompletionApplyFeedback(xinfo) 			(xinfo & XACT_COMPLETION_APPLY_FEEDBACK)
 
 typedef struct xl_xact_abort
 {
