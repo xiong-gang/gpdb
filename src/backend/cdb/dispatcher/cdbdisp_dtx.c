@@ -183,22 +183,16 @@ dispatchCommandDtxProtocol(CdbDispatchResult	*dispatchResult,
 static void
 dtxBuildDispatchString(DispatchCommandParms *pParms)
 {
-	DispatchCommandQueryParms *pQueryParms = &pParms->queryParms;
-			
-	pParms->query_text = PQbuildGpQueryString(
-		pQueryParms->strCommand, pQueryParms->strCommandlen, 
-		pQueryParms->serializedQuerytree, pQueryParms->serializedQuerytreelen, 
-		pQueryParms->serializedPlantree, pQueryParms->serializedPlantreelen, 
-		pQueryParms->serializedParams, pQueryParms->serializedParamslen, 
-		pQueryParms->serializedSliceInfo, pQueryParms->serializedSliceInfolen, 
-		pQueryParms->serializedDtxContextInfo, pQueryParms->serializedDtxContextInfolen, 
-		0 /* unused flags*/, pParms->cmdID, pParms->localSlice, pQueryParms->rootIdx,
-		pQueryParms->seqServerHost, pQueryParms->seqServerHostlen, pQueryParms->seqServerPort,
-		pQueryParms->primary_gang_id,
-		GetCurrentStatementStartTimestamp(),
-		pParms->sessUserId, pParms->sessUserId_is_super,
-		pParms->outerUserId, pParms->outerUserId_is_super, pParms->currUserId,
-		&pParms->query_text_len);
+    pParms->query_text = PQbuildGpDtxProtocolCommand(
+            (int)pParms->dtxProtocolParms.dtxProtocolCommand,
+            pParms->dtxProtocolParms.flags,
+            pParms->dtxProtocolParms.dtxProtocolCommandLoggingStr,
+            pParms->dtxProtocolParms.gid,
+            pParms->dtxProtocolParms.gxid,
+            pParms->dtxProtocolParms.primary_gang_id,
+            pParms->dtxProtocolParms.argument,
+            pParms->dtxProtocolParms.argumentLength,
+            &pParms->query_text_len);
 }
 
 static void

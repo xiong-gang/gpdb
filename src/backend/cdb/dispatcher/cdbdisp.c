@@ -2293,7 +2293,8 @@ cdbdisp_destroyDispatchThreads(CdbDispatchCmdThreads *dThreads)
 			pParms->nfds = 0;
 		}
 		
-		(*pParms->mppDispatchCommandType->destroy)(pParms);
+		if(i == 0)
+			(*pParms->mppDispatchCommandType->destroy)(pParms);
 	}
 	
 	pfree(dThreads->dispatchCommandParmsAr);	
