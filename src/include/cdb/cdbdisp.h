@@ -33,6 +33,7 @@ typedef enum
 	GP_DISPATCH_COMMAND_TYPE_DTX_PROTOCOL
 } GpDispatchCommandType;
 
+
 /*
  * Parameter structure for Greenplum Database Queries
  */
@@ -99,12 +100,15 @@ typedef enum DispatchWaitMode
 	DISPATCH_WAIT_CANCEL			/* send query cancel */
 } DispatchWaitMode;
 
+
+struct DispatchType;
+
 /*
  * Parameter structure for the DispatchCommand threads
  */
 typedef struct DispatchCommandParms
 {
-	GpDispatchCommandType			mppDispatchCommandType;
+	struct DispatchType				*mppDispatchCommandType;
 	DispatchCommandQueryParms		queryParms;
 	DispatchCommandDtxProtocolParms	dtxProtocolParms;
 	
@@ -170,7 +174,17 @@ typedef struct DispatchCommandParms
 	bool		thread_valid;
 	
 }	DispatchCommandParms;
+typedef struct DispatchType
+{
+	GpDispatchCommandType type;
+	void (*buildDispatchString) (DispatchCommandParms *pParms);
+	void (*dispatch)(struct CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
+	void (*init)(DispatchCommandParms *pParms, void *inpurtParms);
+	void (*destroy)(DispatchCommandParms *pParms);
+}DispatchType;
 
+extern DispatchType DtxDispatchType;
+extern DispatchType QueryDispatchType;
 /*
  * Keeps state of all the dispatch command threads.
  */
@@ -234,7 +248,7 @@ typedef struct CdbDispatcherState
  */
 void
 cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
-					   GpDispatchCommandType		mppDispatchCommandType,
+					   DispatchType					*mppDispatchCommandType,
 					   void							*commandTypeParms,
                        struct Gang					*gp,
                        int							sliceIndex,
@@ -484,12 +498,6 @@ struct PlannerInfo;
 bool
 cdbdisp_check_estate_for_cancel(struct EState *estate);
 
-/* 
- * make a plan constant, if possible. Call must say if we're doing single row
- * inserts.
- */
-extern Node *exec_make_plan_constant(struct PlannedStmt *stmt, bool is_SRI);
-extern Node *planner_make_plan_constant(struct PlannerInfo *root, Node *n, bool is_SRI);
 
 void cdbdisp_waitThreads(void);
 /*--------------------------------------------------------------------*/
