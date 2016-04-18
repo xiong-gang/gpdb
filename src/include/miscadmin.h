@@ -100,6 +100,9 @@ extern void RedZoneHandler_DetectRunawaySession(void);
 #ifndef WIN32
 
 #ifdef USE_TEST_UTILS
+#ifdef TEST_DISPATCHER
+#define CHECK_FOR_INTERRUPTS()
+#else
 #define CHECK_FOR_INTERRUPTS() \
 do { \
 	if (gp_test_time_slice) \
@@ -128,6 +131,7 @@ do { \
 	ReportOOMConsumption(); \
 	RedZoneHandler_DetectRunawaySession();\
 } while(0)
+#endif
 #else
 #define CHECK_FOR_INTERRUPTS() \
 do { \

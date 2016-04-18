@@ -19,6 +19,8 @@
 #include <sys/poll.h>
 #endif
 
+#define TEST_DISPATCHER
+
 #include "catalog/catquery.h"
 #include "executor/execdesc.h"	/* QueryDesc */
 #include "storage/ipc.h"		/* For proc_exit_inprogress  */
@@ -47,6 +49,7 @@
 
 #include "cdb/cdbselect.h"
 #include "cdb/cdbdisp.h"
+#include "cdb/cdbdisp_utils.h"
 #include "cdb/cdbdispatchresult.h"
 #include "cdb/cdbfts.h"
 #include "cdb/cdbgang.h"
@@ -77,6 +80,8 @@ extern pthread_t main_tid;
 #define mythread() ((unsigned long) pthread_self().p)
 #endif 
 
+
+
 /*
  * default directed-dispatch parameters: don't direct anything.
  */
@@ -87,7 +92,7 @@ CdbDispatchDirectDesc default_dispatch_direct_desc = {false, 0, {0}};
  */
 
 static void *thread_DispatchCommand(void *arg);
-static bool thread_DispatchOut(DispatchCommandParms		*pParms);
+static void thread_DispatchOut(DispatchCommandParms		*pParms);
 static void thread_DispatchWait(DispatchCommandParms	*pParms);
 static void thread_DispatchWaitSingle(DispatchCommandParms		*pParms);
 
@@ -132,7 +137,7 @@ addSegDBToDispatchThreadPool(DispatchCommandParms  *ParmsAr,
 
 
 
- 
+
 /*
  * Clear our "active" flags; so that we know that the writer gangs are busy -- and don't stomp on
  * internal dispatcher structures. See MPP-6253 and MPP-6579.
@@ -159,7 +164,6 @@ cdbdisp_clearGangActiveFlag(CdbDispatcherState *ds)
  * ====================================================
  */
 
-static DtxContextInfo TempQDDtxContextInfo = DtxContextInfo_StaticInit;
 
 static MemoryContext DispatchContext = NULL;
 
@@ -170,6 +174,7 @@ static MemoryContext DispatchContext = NULL;
  * the end of them.
  */
 static volatile int32 RunningThreadCount = 0;
+
 
 /*
  * cdbdisp_dispatchToGang:
@@ -500,25 +505,10 @@ addSegDBToDispatchThreadPool(DispatchCommandParms  *ParmsAr,
 		firsttime = segdbs_in_thread_pool == 0;
 	else
 		firsttime = segdbs_in_thread_pool % gp_connections_per_thread == 0;
+
 	if (firsttime)
 	{
-		pParms->mppDispatchCommandType = mppDispatchCommandType;
-		(*mppDispatchCommandType->init)(pParms, (void*)commandTypeParms);
-		
-		pParms->sessUserId = GetSessionUserId();
-		pParms->outerUserId = GetOuterUserId();
-		pParms->currUserId = GetUserId();
-		pParms->sessUserId_is_super = superuser_arg(GetSessionUserId());
-		pParms->outerUserId_is_super = superuser_arg(GetOuterUserId());
-
-		pParms->cmdID = gp_command_count;
-		pParms->localSlice = sliceId;
-		Assert(DispatchContext != NULL);
-		pParms->dispatchResultPtrArray =
-			(CdbDispatchResult **) palloc0((gp_connections_per_thread == 0 ? largestGangsize() : gp_connections_per_thread)*
-										   sizeof(CdbDispatchResult *));
-		MemSet(&pParms->thread, 0, sizeof(pthread_t));
-		pParms->db_count = 0;
+		cdbdisp_fillParms(pParms, mppDispatchCommandType, sliceId, commandTypeParms);
 	}
 
 	/*
@@ -989,20 +979,11 @@ cdbdisp_check_estate_for_cancel(struct EState *estate)
 /*--------------------------------------------------------------------*/
 
 
-static bool  
+static void
 thread_DispatchOut(DispatchCommandParms *pParms)
 {
 	CdbDispatchResult			*dispatchResult;
 	int							i, db_count = pParms->db_count;
-
-	(*pParms->mppDispatchCommandType->buildDispatchString)(pParms);
-
-	if (pParms->query_text == NULL)
-	{
-		write_log("could not build query string, total length %d", pParms->query_text_len);
-		pParms->query_text_len = 0;
-		return false;
-	}
 
 	/*
 	 * The pParms contains an array of SegmentDatabaseDescriptors
@@ -1164,8 +1145,7 @@ thread_DispatchOut(DispatchCommandParms *pParms)
 	}
 #endif 
 	
-	return true;
-
+	return;
 }
 
 static void
@@ -1532,16 +1512,14 @@ thread_DispatchCommand(void *arg)
 	 */
 	pthread_cleanup_push(DecrementRunningCount, NULL);
 	{
-		if (thread_DispatchOut(pParms))
-		{
-			/*
-			 * thread_DispatchWaitSingle might have a problem with interupts
-			 */
-			if (pParms->db_count == 1 && false)
-				thread_DispatchWaitSingle(pParms);
-			else
-				thread_DispatchWait(pParms);
-		}
+		thread_DispatchOut(pParms);
+		/*
+		 * thread_DispatchWaitSingle might have a problem with interupts
+		 */
+		if (pParms->db_count == 1 && false)
+			thread_DispatchWaitSingle(pParms);
+		else
+			thread_DispatchWait(pParms);
 	}
 	pthread_cleanup_pop(1);
 
@@ -2083,153 +2061,6 @@ connection_error:
 
 
 
-
-char *
-qdSerializeDtxContextInfo(int *size, bool wantSnapshot, bool inCursor, int txnOptions, char *debugCaller)
-{
-	char *serializedDtxContextInfo;
-
-	Snapshot snapshot;
-	int serializedLen;
-	DtxContextInfo *pDtxContextInfo = NULL;
-	
-	/* If we already have a LatestSnapshot set then no reason to try
-	 * and get a new one.  just use that one.  But... there is one important
-	 * reason why this HAS to be here.  ROLLBACK stmts get dispatched to QEs
-	 * in the abort transaction code.  This code tears down enough stuff such
-	 * that you can't call GetTransactionSnapshot() within that code. So we
-	 * need to use the LatestSnapshot since we can't re-gen a new one.
-	 *
-	 * It is also very possible that for a single user statement which may
-	 * only generate a single snapshot that we will dispatch multiple statements
-	 * to our qExecs.  Something like:
-	 *
-	 *							QD				QEs
-	 *							|  				|
-	 * User SQL Statement ----->|	  BEGIN		|
-	 *  						|-------------->|
-	 *						    | 	  STMT		|
-	 *							|-------------->|
-	 *						 	|    PREPARE	|
-	 *							|-------------->|
-	 *							|    COMMIT		|
-	 *							|-------------->|
-	 *							|				|
-	 *
-	 * This may seem like a problem because all four of those will dispatch
-	 * the same snapshot with the same curcid.  But... this is OK because
-	 * BEGIN, PREPARE, and COMMIT don't need Snapshots on the QEs.
-	 *
-	 * NOTE: This will be a problem if we ever need to dispatch more than one
-	 *  	 statement to the qExecs and more than one needs a snapshot!
-	 */
-	*size = 0;
-	snapshot = NULL;
-
-	if (wantSnapshot)
-	{
-	
-		if (LatestSnapshot == NULL &&
-			SerializableSnapshot == NULL &&
-			!IsAbortInProgress() )  		
-		{
-			/* unfortunately, the dtm issues a select for prepared xacts at the
-			 * beginning and this is before a snapshot has been set up.  so we need
-			 * one for that but not for when we dont have a valid XID.
-			 *
-			 * but we CANT do this if an ABORT is in progress... instead we'll send
-			 * a NONE since the qExecs dont need the information to do a ROLLBACK.
-			 *
-			 */
-			elog((Debug_print_full_dtm ? LOG : DEBUG5),"qdSerializeDtxContextInfo calling GetTransactionSnapshot to make snapshot");
-			
-			GetTransactionSnapshot();
-		}
-		
-		if (LatestSnapshot != NULL)
-		{
-			elog((Debug_print_full_dtm ? LOG : DEBUG5),"qdSerializeDtxContextInfo using LatestSnapshot");
-			
-			snapshot = LatestSnapshot;
-			elog((Debug_print_snapshot_dtm ? LOG : DEBUG5),"[Distributed Snapshot #%u] *QD Use Latest* currcid = %d (gxid = %u, '%s')", 
-				 LatestSnapshot->distribSnapshotWithLocalMapping.header.distribSnapshotId,
-				 LatestSnapshot->curcid,
-				 getDistributedTransactionId(),
-				 DtxContextToString(DistributedTransactionContext));
-		}
-		else if (SerializableSnapshot != NULL)
-		{
-			elog((Debug_print_full_dtm ? LOG : DEBUG5),"qdSerializeDtxContextInfo using SerializableSnapshot");
-			
-			snapshot = SerializableSnapshot;
-			elog((Debug_print_snapshot_dtm ? LOG : DEBUG5),"[Distributed Snapshot #%u] *QD Use Serializable* currcid = %d (gxid = %u, '%s')", 
-				 SerializableSnapshot->distribSnapshotWithLocalMapping.header.distribSnapshotId,
-				 SerializableSnapshot->curcid,
-				 getDistributedTransactionId(),
-				 DtxContextToString(DistributedTransactionContext));
-
-		}
-	}
-
-	
-	switch (DistributedTransactionContext)
-	{
-		case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
-		case DTX_CONTEXT_LOCAL_ONLY:
-			if (snapshot != NULL)
-			{
-				DtxContextInfo_CreateOnMaster(&TempQDDtxContextInfo,
-											  &snapshot->distribSnapshotWithLocalMapping,
-											  snapshot->curcid, txnOptions);
-			}
-			else
-			{
-				DtxContextInfo_CreateOnMaster(&TempQDDtxContextInfo, 
-											  NULL, 0, txnOptions);
-			}
-			
-			TempQDDtxContextInfo.cursorContext = inCursor;
-
-			if (DistributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE &&
-				snapshot != NULL)
-			{
-				updateSharedLocalSnapshot(&TempQDDtxContextInfo, snapshot, "qdSerializeDtxContextInfo");
-			}
-
-			pDtxContextInfo = &TempQDDtxContextInfo;
-			break;
-
-		case DTX_CONTEXT_QD_RETRY_PHASE_2:
-		case DTX_CONTEXT_QE_ENTRY_DB_SINGLETON:
-		case DTX_CONTEXT_QE_AUTO_COMMIT_IMPLICIT:
-		case DTX_CONTEXT_QE_TWO_PHASE_EXPLICIT_WRITER:
-		case DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER:
-		case DTX_CONTEXT_QE_READER:
-		case DTX_CONTEXT_QE_PREPARED:
-		case DTX_CONTEXT_QE_FINISH_PREPARED:
-			elog(FATAL, "Unexpected distribute transaction context: '%s'",
-				 DtxContextToString(DistributedTransactionContext));
-
-		default:
-			elog(FATAL, "Unrecognized DTX transaction context: %d",
-				 (int)DistributedTransactionContext);
-	}
-	
-	serializedLen = DtxContextInfo_SerializeSize(pDtxContextInfo);
-	Assert (serializedLen > 0);
-	
-	*size = serializedLen;
-	serializedDtxContextInfo = palloc(*size);
-
-	DtxContextInfo_Serialize(serializedDtxContextInfo, pDtxContextInfo); 
-
-	elog((Debug_print_full_dtm ? LOG : DEBUG5),"qdSerializeDtxContextInfo (called by %s) returning a snapshot of %d bytes (ptr is %s)",
-	     debugCaller, *size, (serializedDtxContextInfo != NULL ? "Non-NULL" : "NULL"));
-	return serializedDtxContextInfo;
-}
-
-
-
 /*
  * cdbdisp_makeDispatchThreads:
  * Allocates memory for a CdbDispatchCmdThreads struct that holds
@@ -2338,3 +2169,46 @@ cdbdisp_waitThreads(void)
 		pg_usleep(interval);
 	}
 }
+
+/* Helper function to thread_DispatchCommand that actually kicks off the
+ * command on the libpq connection.
+ *
+ * NOTE: since this is called via a thread, the same rules apply as to
+ *		 thread_DispatchCommand absolutely no elog'ing.
+ */
+void
+dispatchCommand(CdbDispatchResult	*dispatchResult,
+					 const char			*query_text,
+					 int				query_text_len)
+{
+	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
+	PGconn	   *conn = segdbDesc->conn;
+
+	/*
+	 * Submit the command asynchronously.
+	 */
+	if (PQsendGpQuery_shared(conn, (char *)query_text, query_text_len) == 0)
+	{
+		char	   *msg = PQerrorMessage(segdbDesc->conn);
+
+		if (DEBUG3 >= log_min_messages)
+			write_log("PQsendMPPQuery_shared error %s %s",
+					  segdbDesc->whoami, msg ? msg : "");
+
+		/* Note the error. */
+		cdbdisp_appendMessage(dispatchResult, LOG,
+							  ERRCODE_GP_INTERCONNECTION_ERROR,
+							  "Command could not be sent to segment db %s;  %s",
+							  segdbDesc->whoami, msg ? msg : "");
+		PQfinish(conn);
+		segdbDesc->conn = NULL;
+		dispatchResult->stillRunning = false;
+	}
+
+
+	/*
+	 * We'll keep monitoring this QE -- whether or not the command
+	 * was dispatched -- in order to check for a lost connection
+	 * or any other errors that libpq might have in store for us.
+	 */
+}	/* dispatchCommand */

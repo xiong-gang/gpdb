@@ -16,25 +16,26 @@
 #include "cdb/cdbdispatchresult.h"
 #include "cdb/cdbgang.h"
 #include "cdb/cdbutil.h"
+#include "cdb/cdbtm.h"
 #include "cdb/cdbvars.h"
+
+#include "storage/procarray.h"      /* updateSharedLocalSnapshot */
 
 #include "gp-libpq-fe.h"
 
 
-static void dtxBuildDispatchString(DispatchCommandParms *pParms);
 static void dtxDispatchCommand(struct CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
 static void dtxDispatchDestroy(DispatchCommandParms *pParms);
 static void dtxDispatchInit(DispatchCommandParms *pParms, void *inputParms);
 
 DispatchType DtxDispatchType = {
 		GP_DISPATCH_COMMAND_TYPE_DTX_PROTOCOL,
-		dtxBuildDispatchString,
 		dtxDispatchCommand,
 		dtxDispatchInit,
 		dtxDispatchDestroy
 };
 
-
+static DtxContextInfo TempQDDtxContextInfo = DtxContextInfo_StaticInit;
 /*
  * cdbdisp_dispatchDtxProtocolCommand:
  * Sends a non-cancelable command to all segment dbs
@@ -132,72 +133,164 @@ cdbdisp_dispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	return resultSets;
 }	/* cdbdisp_dispatchDtxProtocolCommand */
 
-/* Helper function to thread_DispatchCommand that actually kicks off the
- * command on the libpq connection.
- *
- * NOTE: since this is called via a thread, the same rules apply as to
- *		 thread_DispatchCommand absolutely no elog'ing.
- */
-static void
-dispatchCommandDtxProtocol(CdbDispatchResult	*dispatchResult,
-						   const char			*query_text,
-						   int					query_text_len,
-						   DtxProtocolCommand	dtxProtocolCommand)
+
+
+
+
+char *
+qdSerializeDtxContextInfo(int *size, bool wantSnapshot, bool inCursor, int txnOptions, char *debugCaller)
 {
-	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
-	PGconn	   *conn = segdbDesc->conn;
+	char *serializedDtxContextInfo;
 
-	/* Don't use elog, it's not thread-safe */
-	if (DEBUG3 >= log_min_messages)
-		write_log("%s <- dtx protocol command %d", segdbDesc->whoami, (int)dtxProtocolCommand);
+	Snapshot snapshot;
+	int serializedLen;
+	DtxContextInfo *pDtxContextInfo = NULL;
 
-	/*
-	 * Submit the command asynchronously.
+	/* If we already have a LatestSnapshot set then no reason to try
+	 * and get a new one.  just use that one.  But... there is one important
+	 * reason why this HAS to be here.  ROLLBACK stmts get dispatched to QEs
+	 * in the abort transaction code.  This code tears down enough stuff such
+	 * that you can't call GetTransactionSnapshot() within that code. So we
+	 * need to use the LatestSnapshot since we can't re-gen a new one.
+	 *
+	 * It is also very possible that for a single user statement which may
+	 * only generate a single snapshot that we will dispatch multiple statements
+	 * to our qExecs.  Something like:
+	 *
+	 *							QD				QEs
+	 *							|  				|
+	 * User SQL Statement ----->|	  BEGIN		|
+	 *  						|-------------->|
+	 *						    | 	  STMT		|
+	 *							|-------------->|
+	 *						 	|    PREPARE	|
+	 *							|-------------->|
+	 *							|    COMMIT		|
+	 *							|-------------->|
+	 *							|				|
+	 *
+	 * This may seem like a problem because all four of those will dispatch
+	 * the same snapshot with the same curcid.  But... this is OK because
+	 * BEGIN, PREPARE, and COMMIT don't need Snapshots on the QEs.
+	 *
+	 * NOTE: This will be a problem if we ever need to dispatch more than one
+	 *  	 statement to the qExecs and more than one needs a snapshot!
 	 */
-	if (PQsendGpQuery_shared(conn, (char *)query_text, query_text_len) == 0)
-	{
-		char *msg = PQerrorMessage(segdbDesc->conn);
+	*size = 0;
+	snapshot = NULL;
 
-		if (DEBUG3 >= log_min_messages)
-			write_log("PQsendMPPQuery_shared error %s %s",segdbDesc->whoami,
-						 msg ? msg : "");
-		/* Note the error. */
-		cdbdisp_appendMessage(dispatchResult, LOG,
-							  ERRCODE_GP_INTERCONNECTION_ERROR,
-							  "Command could not be sent to segment db %s;  %s",
-							  segdbDesc->whoami,
-							  msg ? msg : "");
-		PQfinish(conn);
-		segdbDesc->conn = NULL;
-		dispatchResult->stillRunning = false;
+	if (wantSnapshot)
+	{
+
+		if (LatestSnapshot == NULL &&
+			SerializableSnapshot == NULL &&
+			!IsAbortInProgress() )
+		{
+			/* unfortunately, the dtm issues a select for prepared xacts at the
+			 * beginning and this is before a snapshot has been set up.  so we need
+			 * one for that but not for when we dont have a valid XID.
+			 *
+			 * but we CANT do this if an ABORT is in progress... instead we'll send
+			 * a NONE since the qExecs dont need the information to do a ROLLBACK.
+			 *
+			 */
+			elog((Debug_print_full_dtm ? LOG : DEBUG5),"qdSerializeDtxContextInfo calling GetTransactionSnapshot to make snapshot");
+
+			GetTransactionSnapshot();
+		}
+
+		if (LatestSnapshot != NULL)
+		{
+			elog((Debug_print_full_dtm ? LOG : DEBUG5),"qdSerializeDtxContextInfo using LatestSnapshot");
+
+			snapshot = LatestSnapshot;
+			elog((Debug_print_snapshot_dtm ? LOG : DEBUG5),"[Distributed Snapshot #%u] *QD Use Latest* currcid = %d (gxid = %u, '%s')",
+				 LatestSnapshot->distribSnapshotWithLocalMapping.header.distribSnapshotId,
+				 LatestSnapshot->curcid,
+				 getDistributedTransactionId(),
+				 DtxContextToString(DistributedTransactionContext));
+		}
+		else if (SerializableSnapshot != NULL)
+		{
+			elog((Debug_print_full_dtm ? LOG : DEBUG5),"qdSerializeDtxContextInfo using SerializableSnapshot");
+
+			snapshot = SerializableSnapshot;
+			elog((Debug_print_snapshot_dtm ? LOG : DEBUG5),"[Distributed Snapshot #%u] *QD Use Serializable* currcid = %d (gxid = %u, '%s')",
+				 SerializableSnapshot->distribSnapshotWithLocalMapping.header.distribSnapshotId,
+				 SerializableSnapshot->curcid,
+				 getDistributedTransactionId(),
+				 DtxContextToString(DistributedTransactionContext));
+
+		}
 	}
 
-	/*
-	 * We'll keep monitoring this QE -- whether or not the command
-	 * was dispatched -- in order to check for a lost connection
-	 * or any other errors that libpq might have in store for us.
-	 */
-}	/* dispatchCommand */
 
+	switch (DistributedTransactionContext)
+	{
+		case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
+		case DTX_CONTEXT_LOCAL_ONLY:
+			if (snapshot != NULL)
+			{
+				DtxContextInfo_CreateOnMaster(&TempQDDtxContextInfo,
+											  &snapshot->distribSnapshotWithLocalMapping,
+											  snapshot->curcid, txnOptions);
+			}
+			else
+			{
+				DtxContextInfo_CreateOnMaster(&TempQDDtxContextInfo,
+											  NULL, 0, txnOptions);
+			}
 
-static void
-dtxBuildDispatchString(DispatchCommandParms *pParms)
-{
-    pParms->query_text = PQbuildGpDtxProtocolCommand(
-            (int)pParms->dtxProtocolParms.dtxProtocolCommand,
-            pParms->dtxProtocolParms.flags,
-            pParms->dtxProtocolParms.dtxProtocolCommandLoggingStr,
-            pParms->dtxProtocolParms.gid,
-            pParms->dtxProtocolParms.gxid,
-            pParms->dtxProtocolParms.primary_gang_id,
-            pParms->dtxProtocolParms.argument,
-            pParms->dtxProtocolParms.argumentLength,
-            &pParms->query_text_len);
+			TempQDDtxContextInfo.cursorContext = inCursor;
+
+			if (DistributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE &&
+				snapshot != NULL)
+			{
+				updateSharedLocalSnapshot(&TempQDDtxContextInfo, snapshot, "qdSerializeDtxContextInfo");
+			}
+
+			pDtxContextInfo = &TempQDDtxContextInfo;
+			break;
+
+		case DTX_CONTEXT_QD_RETRY_PHASE_2:
+		case DTX_CONTEXT_QE_ENTRY_DB_SINGLETON:
+		case DTX_CONTEXT_QE_AUTO_COMMIT_IMPLICIT:
+		case DTX_CONTEXT_QE_TWO_PHASE_EXPLICIT_WRITER:
+		case DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER:
+		case DTX_CONTEXT_QE_READER:
+		case DTX_CONTEXT_QE_PREPARED:
+		case DTX_CONTEXT_QE_FINISH_PREPARED:
+			elog(FATAL, "Unexpected distribute transaction context: '%s'",
+				 DtxContextToString(DistributedTransactionContext));
+
+		default:
+			elog(FATAL, "Unrecognized DTX transaction context: %d",
+				 (int)DistributedTransactionContext);
+	}
+
+	serializedLen = DtxContextInfo_SerializeSize(pDtxContextInfo);
+	Assert (serializedLen > 0);
+
+	*size = serializedLen;
+	serializedDtxContextInfo = palloc(*size);
+
+	DtxContextInfo_Serialize(serializedDtxContextInfo, pDtxContextInfo);
+
+	elog((Debug_print_full_dtm ? LOG : DEBUG5),"qdSerializeDtxContextInfo (called by %s) returning a snapshot of %d bytes (ptr is %s)",
+	     debugCaller, *size, (serializedDtxContextInfo != NULL ? "Non-NULL" : "NULL"));
+	return serializedDtxContextInfo;
 }
+
+
 
 static void
 dtxDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms)
 {
+	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
+	TimestampTz beforeSend = 0;
+	long		secs;
+	int			usecs;
+
 	if (Debug_dtm_action == DEBUG_DTM_ACTION_DELAY &&
 		Debug_dtm_action_target == DEBUG_DTM_ACTION_TARGET_PROTOCOL &&
 		Debug_dtm_action_protocol == pParms->dtxProtocolParms.dtxProtocolCommand &&
@@ -210,10 +303,24 @@ dtxDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pPar
 		pg_usleep(Debug_dtm_action_delay_ms * 1000);
 	}
 
-	dispatchCommandDtxProtocol(dispatchResult, pParms->query_text, pParms->query_text_len, 
-    									   pParms->dtxProtocolParms.dtxProtocolCommand);
+	/* Don't use elog, it's not thread-safe */
+	if (DEBUG3 >= log_min_messages)
+		write_log("%s <- dtx protocol command %d", segdbDesc->whoami, (int)pParms->dtxProtocolParms.dtxProtocolCommand);
 
-	dispatchResult->hasDispatched = true;
+	if (DEBUG1 >= log_min_messages)
+		beforeSend = GetCurrentTimestamp();
+
+	dispatchCommand(dispatchResult, pParms->query_text, pParms->query_text_len);
+
+	if (DEBUG1 >= log_min_messages)
+	{
+		TimestampDifference(beforeSend,
+							GetCurrentTimestamp(),
+							&secs, &usecs);
+
+		if (secs != 0 || usecs > 1000) /* Time > 1ms? */
+			write_log("time for PQsendGpQuery_shared %ld.%06d", secs, usecs);
+	}
 }
 
 
@@ -229,7 +336,7 @@ static void
 dtxDispatchInit(DispatchCommandParms *pParms, void *inputParms)
 {
 	DispatchCommandDtxProtocolParms *pDtxProtocolParms = (DispatchCommandDtxProtocolParms *) inputParms;
-	
+
 	pParms->dtxProtocolParms.dtxProtocolCommand = pDtxProtocolParms->dtxProtocolCommand;
 	pParms->dtxProtocolParms.flags = pDtxProtocolParms->flags;
 	pParms->dtxProtocolParms.dtxProtocolCommandLoggingStr = pDtxProtocolParms->dtxProtocolCommandLoggingStr;
@@ -241,4 +348,14 @@ dtxDispatchInit(DispatchCommandParms *pParms, void *inputParms)
 	pParms->dtxProtocolParms.primary_gang_id = pDtxProtocolParms->primary_gang_id;
 	pParms->dtxProtocolParms.argument = pDtxProtocolParms->argument;
 	pParms->dtxProtocolParms.argumentLength = pDtxProtocolParms->argumentLength;
+    pParms->query_text = PQbuildGpDtxProtocolCommand(
+            (int)pParms->dtxProtocolParms.dtxProtocolCommand,
+            pParms->dtxProtocolParms.flags,
+            pParms->dtxProtocolParms.dtxProtocolCommandLoggingStr,
+            pParms->dtxProtocolParms.gid,
+            pParms->dtxProtocolParms.gxid,
+            pParms->dtxProtocolParms.primary_gang_id,
+            pParms->dtxProtocolParms.argument,
+            pParms->dtxProtocolParms.argumentLength,
+            &pParms->query_text_len);
 }

@@ -26,10 +26,6 @@
 #include "utils/memutils.h"
 #include "miscadmin.h"
 
-static void queryBuildDispatchString(DispatchCommandParms *pParms);
-static void queryDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
-static void queryDispatchDestroy(DispatchCommandParms *pParms);
-static void queryDispatchInit(DispatchCommandParms *pParms, void *inputParms);
 
 /* determines which dispatchOptions need to be set. */
 static int generateTxnOptions(bool needTwoPhase);
@@ -60,15 +56,16 @@ static int fillSliceVector(SliceTable * sliceTable, int sliceIndex, sliceVec *sl
 
 extern bool Test_print_direct_dispatch_info;
 
+static void queryDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
+static void queryDispatchDestroy(DispatchCommandParms *pParms);
+static void queryDispatchInit(DispatchCommandParms *pParms, void *inputParms);
+
 DispatchType QueryDispatchType = {
 		GP_DISPATCH_COMMAND_TYPE_QUERY,
-		queryBuildDispatchString,
 		queryDispatchCommand,
 		queryDispatchInit,
 		queryDispatchDestroy
 };
-
-
 /*
  * This code was refactored out of cdbdisp_dispatchPlan.  It's
  * used both for dispatching plans when we are using normal gangs,
@@ -979,70 +976,6 @@ cdbdisp_dispatchCommand(const char                 *strCommand,
 }	/* cdbdisp_dispatchCommand */
 
 
-/* Helper function to thread_DispatchCommand that actually kicks off the
- * command on the libpq connection.
- *
- * NOTE: since this is called via a thread, the same rules apply as to
- *		 thread_DispatchCommand absolutely no elog'ing.
- */
-static void
-dispatchCommandQuery(CdbDispatchResult	*dispatchResult,
-					 const char			*query_text,
-					 int				query_text_len,
-					 const char			*strCommand)
-{
-	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
-	PGconn	   *conn = segdbDesc->conn;
-	TimestampTz beforeSend = 0;
-	long		secs;
-	int			usecs;
-
-	/* Don't use elog, it's not thread-safe */
-	if (DEBUG3 >= log_min_messages)
-		write_log("%s <- %.120s", segdbDesc->whoami, strCommand);
-
-	if (DEBUG1 >= log_min_messages)
-		beforeSend = GetCurrentTimestamp();
-
-	/*
-	 * Submit the command asynchronously.
-	 */
-	if (PQsendGpQuery_shared(conn, (char *)query_text, query_text_len) == 0)
-	{
-		char	   *msg = PQerrorMessage(segdbDesc->conn);
-
-		if (DEBUG3 >= log_min_messages)
-			write_log("PQsendMPPQuery_shared error %s %s",
-					  segdbDesc->whoami, msg ? msg : "");
-
-		/* Note the error. */
-		cdbdisp_appendMessage(dispatchResult, LOG,
-							  ERRCODE_GP_INTERCONNECTION_ERROR,
-							  "Command could not be sent to segment db %s;  %s",
-							  segdbDesc->whoami, msg ? msg : "");
-		PQfinish(conn);
-		segdbDesc->conn = NULL;
-		dispatchResult->stillRunning = false;
-	}
-
-	if (DEBUG1 >= log_min_messages)
-	{
-		TimestampDifference(beforeSend,
-							GetCurrentTimestamp(),
-							&secs, &usecs);
-
-		if (secs != 0 || usecs > 1000) /* Time > 1ms? */
-			write_log("time for PQsendGpQuery_shared %ld.%06d", secs, usecs);
-	}
-
-
-	/*
-	 * We'll keep monitoring this QE -- whether or not the command
-	 * was dispatched -- in order to check for a lost connection
-	 * or any other errors that libpq might have in store for us.
-	 */
-}	/* dispatchCommand */
-
 /*
  * CdbDoCommandNoTxn:
  * Combination of cdbdisp_dispatchCommand and cdbdisp_finishCommand.
@@ -1319,32 +1252,32 @@ void remove_subquery_in_RTEs(Node *node)
 }
 
 
-
-static void
-queryBuildDispatchString(DispatchCommandParms *pParms)
-{
-	DispatchCommandQueryParms *pQueryParms = &pParms->queryParms;
-
-	pParms->query_text = PQbuildGpQueryString(
-		pQueryParms->strCommand, pQueryParms->strCommandlen, 
-		pQueryParms->serializedQuerytree, pQueryParms->serializedQuerytreelen, 
-		pQueryParms->serializedPlantree, pQueryParms->serializedPlantreelen, 
-		pQueryParms->serializedParams, pQueryParms->serializedParamslen, 
-		pQueryParms->serializedSliceInfo, pQueryParms->serializedSliceInfolen, 
-		pQueryParms->serializedDtxContextInfo, pQueryParms->serializedDtxContextInfolen, 
-		0 /* unused flags*/, pParms->cmdID, pParms->localSlice, pQueryParms->rootIdx,
-		pQueryParms->seqServerHost, pQueryParms->seqServerHostlen, pQueryParms->seqServerPort,
-		pQueryParms->primary_gang_id,
-		GetCurrentStatementStartTimestamp(),
-		pParms->sessUserId, pParms->sessUserId_is_super,
-		pParms->outerUserId, pParms->outerUserId_is_super, pParms->currUserId,
-		&pParms->query_text_len);
-}
-
 static void
 queryDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms)
 {
-	dispatchCommandQuery(dispatchResult, pParms->query_text, pParms->query_text_len, pParms->queryParms.strCommand);
+	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
+	TimestampTz beforeSend = 0;
+	long		secs;
+	int			usecs;
+
+	/* Don't use elog, it's not thread-safe */
+	if (DEBUG3 >= log_min_messages)
+		write_log("%s <- %.120s", segdbDesc->whoami, pParms->queryParms.strCommand);
+
+	if (DEBUG1 >= log_min_messages)
+		beforeSend = GetCurrentTimestamp();
+
+	dispatchCommand(dispatchResult, pParms->query_text, pParms->query_text_len);
+
+	if (DEBUG1 >= log_min_messages)
+	{
+		TimestampDifference(beforeSend,
+							GetCurrentTimestamp(),
+							&secs, &usecs);
+
+		if (secs != 0 || usecs > 1000) /* Time > 1ms? */
+			write_log("time for PQsendGpQuery_shared %ld.%06d", secs, usecs);
+	}
 }
 
 
@@ -1478,6 +1411,24 @@ queryDispatchInit(DispatchCommandParms *pParms, void *inputParms)
 		pParms->queryParms.seqServerHostlen = pQueryParms->seqServerHostlen;
 		pParms->queryParms.seqServerPort = pQueryParms->seqServerPort;
 	}
-	
+
 	pParms->queryParms.primary_gang_id = pQueryParms->primary_gang_id;
+
+	pParms->query_text = PQbuildGpQueryString(
+		pQueryParms->strCommand, pQueryParms->strCommandlen,
+		pQueryParms->serializedQuerytree, pQueryParms->serializedQuerytreelen,
+		pQueryParms->serializedPlantree, pQueryParms->serializedPlantreelen,
+		pQueryParms->serializedParams, pQueryParms->serializedParamslen,
+		pQueryParms->serializedSliceInfo, pQueryParms->serializedSliceInfolen,
+		pQueryParms->serializedDtxContextInfo, pQueryParms->serializedDtxContextInfolen,
+		0 /* unused flags*/, pParms->cmdID, pParms->localSlice, pQueryParms->rootIdx,
+		pQueryParms->seqServerHost, pQueryParms->seqServerHostlen, pQueryParms->seqServerPort,
+		pQueryParms->primary_gang_id,
+		GetCurrentStatementStartTimestamp(),
+		pParms->sessUserId, pParms->sessUserId_is_super,
+		pParms->outerUserId, pParms->outerUserId_is_super, pParms->currUserId,
+		&pParms->query_text_len);
 }
+
+
+

@@ -174,10 +174,10 @@ typedef struct DispatchCommandParms
 	bool		thread_valid;
 	
 }	DispatchCommandParms;
+
 typedef struct DispatchType
 {
 	GpDispatchCommandType type;
-	void (*buildDispatchString) (DispatchCommandParms *pParms);
 	void (*dispatch)(struct CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
 	void (*init)(DispatchCommandParms *pParms, void *inpurtParms);
 	void (*destroy)(DispatchCommandParms *pParms);
@@ -501,5 +501,8 @@ cdbdisp_check_estate_for_cancel(struct EState *estate);
 
 void cdbdisp_waitThreads(void);
 /*--------------------------------------------------------------------*/
-
+void
+dispatchCommand(struct CdbDispatchResult	*dispatchResult,
+					 const char			*query_text,
+					 int				query_text_len);
 #endif   /* CDBDISP_H */
