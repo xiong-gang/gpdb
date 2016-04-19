@@ -65,6 +65,9 @@ cdbdisp_makeDispatchThreads(int paramCount)
     {
     	DispatchCommandParms *pParms = &dThreads->dispatchCommandParmsAr[i];
 
+    	/* important */
+    	pParms->localSlice = -1;
+
     	pParms->cmdID = gp_command_count;
     	pParms->sessUserId = sessUserId;
     	pParms->outerUserId = outerUserId;
@@ -158,6 +161,26 @@ void destroyDispatcherState(CdbDispatcherState	*ds)
 	ds->primaryResults = NULL;
 }
 
+void commandParmsSetSlice(MemoryContext *cxt, DispatchCommandParms *parm, int sliceId)
+{
+	/* DTX command and RM command don't need slice id */
+	if (sliceId < 0)
+		return;
+
+	/* set once for each parm */
+	if(parm->localSlice >= 0)
+		return;
+
+	char *query = parm->query_text;
+	int len = parm->query_text_len;
+	char *newQuery = MemoryContextAlloc(cxt, len);
+	int tmp = htonl(sliceId);
+
+	memcpy(newQuery, query, len);
+	memcpy(newQuery + 1 + sizeof(int), &tmp, sizeof(tmp));
+	parm->query_text = newQuery;
+	parm->localSlice = sliceId;
+}
 
 HTAB *
 process_aotupcounts(PartitionNode *parts, HTAB *ht,

@@ -18,4 +18,5 @@ int getMaxThreads();
 void cdbdisp_freeParms(DispatchCommandParms *pParms, bool isFirst);
 void makeDispatcherState(CdbDispatcherState	*ds, int nResults, int nSlices, bool cancelOnError);
 void destroyDispatcherState(CdbDispatcherState	*ds);
+void commandParmsSetSlice(MemoryContext *cxt, DispatchCommandParms *parm, int sliceId);
 #endif   /* CDBDISP_UTILS_H */

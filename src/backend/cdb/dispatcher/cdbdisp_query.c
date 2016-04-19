@@ -126,13 +126,13 @@ PQbuildGpQueryString(const char  *command,
 	total_query_len =
 		1 /* 'M' */ +
 		sizeof(len) /* message length */ +
+		sizeof(localSlice) +
 		sizeof(gp_command_count) +
 		sizeof(sessionUserId) +
 		1 /* sessionUserIsSuper */ +
 		sizeof(outerUserId) +
 		1 /* outerUserIsSuper */ +
 		sizeof(currentUserId) +
-		sizeof(localSlice) +
 		sizeof(rootIdx) +
 		sizeof(primary_gang_id) +
 		sizeof(n32) * 2 /* currentStatementStartTimestamp */ +
@@ -168,6 +168,10 @@ PQbuildGpQueryString(const char  *command,
 
 	pos += 4; /* place holder for message length */
 
+	tmp = htonl(localSlice);
+	memcpy(pos, &tmp, sizeof(localSlice));
+	pos += sizeof(localSlice);
+
 	tmp = htonl(gp_command_count);
 	memcpy(pos, &tmp, sizeof(gp_command_count));
 	pos += sizeof(gp_command_count);
@@ -194,10 +198,6 @@ PQbuildGpQueryString(const char  *command,
 	tmp = htonl(currentUserId);
 	memcpy(pos, &tmp, sizeof(currentUserId));
 	pos += sizeof(currentUserId);
-
-	tmp = htonl(localSlice);
-	memcpy(pos, &tmp, sizeof(localSlice));
-	pos += sizeof(localSlice);
 
 	tmp = htonl(rootIdx);
 	memcpy(pos, &tmp, sizeof(rootIdx));
@@ -322,13 +322,13 @@ static void initDispatcherParms(struct CdbDispatcherState *ds, DispatchCommandQu
 	MemoryContext oldContext = MemoryContextSwitchTo(ds->dispatchStateContext);
 
 	char *queryText = PQbuildGpQueryString(
-		pQueryParms->strCommand, pQueryParms->strCommandlen,
+		pQueryParms->strCommand, strlen(pQueryParms->strCommand)+1,
 		pQueryParms->serializedQuerytree, pQueryParms->serializedQuerytreelen,
 		pQueryParms->serializedPlantree, pQueryParms->serializedPlantreelen,
 		pQueryParms->serializedParams, pQueryParms->serializedParamslen,
 		pQueryParms->serializedSliceInfo, pQueryParms->serializedSliceInfolen,
 		pQueryParms->serializedDtxContextInfo, pQueryParms->serializedDtxContextInfolen,
-		0 /* unused flags*/, pParms->cmdID, pParms->localSlice, pQueryParms->rootIdx,
+		0 /* unused flags*/, pParms->cmdID, 0 /* place holder, set later */, pQueryParms->rootIdx,
 		pQueryParms->seqServerHost, pQueryParms->seqServerHostlen, pQueryParms->seqServerPort,
 		pQueryParms->primary_gang_id,
 		GetCurrentStatementStartTimestamp(),
@@ -336,9 +336,9 @@ static void initDispatcherParms(struct CdbDispatcherState *ds, DispatchCommandQu
 		pParms->outerUserId, pParms->outerUserId_is_super, pParms->currUserId,
 		&len);
 
-	if (pParms->query_text == NULL)
+	if (queryText == NULL)
 	{
-		elog(ERROR, "could not build query string, total length %d", pParms->query_text_len);
+		elog(ERROR, "could not build query string, total length %d", len);
 	}
 
 //	newQueryParms = palloc0(sizeof(DispatchCommandQueryParms));

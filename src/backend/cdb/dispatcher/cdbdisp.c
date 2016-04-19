@@ -300,7 +300,7 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 
 		parmsIndex = gp_connections_per_thread == 0 ? 0 : segdbs_in_thread_pool / gp_connections_per_thread;
 		pParms = &(ds->dispatchThreads->dispatchCommandParmsAr + ds->dispatchThreads->threadCount)[parmsIndex];
-		pParms->localSlice = sliceIndex;
+		commandParmsSetSlice(ds->dispatchStateContext, pParms, sliceIndex);
 		pParms->dispatchResultPtrArray[pParms->db_count++] = qeResult;
 
 		/*
