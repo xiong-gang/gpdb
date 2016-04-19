@@ -18,7 +18,7 @@ int			gp_connections_per_thread = 64;
 bool		Debug_cancel_print = false;
 volatile bool InterruptPending = false;
 volatile int32 InterruptHoldoffCount = 0;
-
+int			gp_command_count = 0;
 
 /* global variables */
 bool		proc_exit_inprogress = false;
@@ -27,6 +27,14 @@ GpRoleValue Gp_role = GP_ROLE_DISPATCH;
 ErrorContextCallback *error_context_stack = NULL;
 sigjmp_buf *PG_exception_stack = NULL;
 
+Gang *mockCreateGang(void);
+Oid GetUserId(void);
+Oid GetOuterUserId(void);
+Oid GetSessionUserId(void);
+bool superuser_arg(Oid roleid);
+TimestampTz GetCurrentTimestamp(void);
+void TimestampDifference(TimestampTz start_time, TimestampTz stop_time,
+		long *secs, int *microsecs);
 
 
 /* assert */
@@ -214,6 +222,10 @@ AllocSetContextCreate(MemoryContext parent,
 {
 	return TopMemoryContext;
 }
+void
+MemoryContextDeleteImpl(MemoryContext context, const char* sfile, const char *func, int sline)
+{
+}
 
 /* fault injection */
 SimExESSubClass simex_check(const char *file, int32 line)
@@ -379,52 +391,42 @@ pg_enc2name pg_enc2name_tbl[] =
 {
 	DEF_ENC2NAME(UTF8, 65001),
 };
+Oid
+GetUserId(void)
+{
+	return 0;
+}
+Oid
+GetOuterUserId(void)
+{
+	return 0;
+}
+Oid
+GetSessionUserId(void)
+{
+	return 0;
+}
+bool
+superuser_arg(Oid roleid)
+{
+	return true;
+}
+
+TimestampTz
+GetCurrentTimestamp(void)
+{
+	return 0;
+}
+void
+TimestampDifference(TimestampTz start_time, TimestampTz stop_time,
+					long *secs, int *microsecs)
+{
+}
 
 
 
 
 /* test */
-static void testBuildDispatchString(DispatchCommandParms *pParms);
-static void testDispatchCommand(struct CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
-static void testDispatchDestroy(DispatchCommandParms *pParms);
-static void testDispatchInit(DispatchCommandParms *pParms, void *inputParms);
-
-DispatchType TestDispatchType = {
-		GP_DISPATCH_COMMAND_TYPE_DTX_PROTOCOL,
-		testBuildDispatchString,
-		testDispatchCommand,
-		testDispatchInit,
-		testDispatchDestroy
-};
-
-static void
-testBuildDispatchString(DispatchCommandParms *pParms)
-{
-	pParms->query_text = malloc(100);
-	*pParms->query_text = 'T';
-	pParms->query_text_len = 100;
-}
-
-static void
-testDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms)
-{
-	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
-
-	if (DEBUG3 >= log_min_messages)
-		write_log("%s <- dtx protocol command %d", segdbDesc->whoami, (int)pParms->dtxProtocolParms.dtxProtocolCommand);
-
-	dispatchCommand(dispatchResult, pParms->query_text, pParms->query_text_len);
-}
-
-static void
-testDispatchDestroy(DispatchCommandParms *pParms)
-{
-}
-
-static void
-testDispatchInit(DispatchCommandParms *pParms, void *inputParms)
-{
-}
 
 Gang *mockCreateGang()
 {
@@ -438,15 +440,22 @@ int main()
 {
 	main_tid = pthread_self();
 
-	int nSlices = 10;
-	struct CdbDispatcherState ds;
+	int i = 0;
+	struct CdbDispatcherState ds = {0};
 	Gang *mockGang = mockCreateGang();
+	makeDispatcherState(&ds, 10, 0, false);
+	CdbDispatchCmdThreads *dThreads = ds.dispatchThreads;
+	struct DispatchCommandParms *pParms;
+	char queryText[100];
+	for (i = 0; i < dThreads->dispatchCommandParmsArSize; i++)
+	{
+		pParms = &dThreads->dispatchCommandParmsAr[i];
+		pParms->query_text = queryText;
+		pParms->query_text_len = 100;
+	}
+	ds.primaryResults->writer_gang = mockGang;
 
-	ds.primaryResults = cdbdisp_makeDispatchResults(nSlices * largestGangsize(),
-												   10,
-												   true);
-	ds.dispatchThreads = NULL;
 
-	cdbdisp_dispatchToGang(&ds, &TestDispatchType, NULL, mockGang, 0, 10, NULL);
+	cdbdisp_dispatchToGang(&ds, mockGang, 0, NULL);
 
 }

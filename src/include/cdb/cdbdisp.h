@@ -455,11 +455,6 @@ CdbDispatchUtilityStatement(struct Node *stmt, char* debugCaller __attribute__((
 void
 CdbDispatchUtilityStatement_NoTwoPhase(struct Node *stmt, char* debugCaller __attribute__((unused)) );
 
-/*
- * free all memory allocated for a CdbDispatchCmdThreads object.
- */
-void
-cdbdisp_destroyDispatchThreads(CdbDispatchCmdThreads *dThreads);
 
 /* used to take the current Transaction Snapshot and serialized a version of it
  * into the static variable serializedDtxContextInfo */
@@ -482,4 +477,7 @@ void
 dispatchCommand(struct CdbDispatchResult	*dispatchResult,
 					 const char			*query_text,
 					 int				query_text_len);
+void destroyDispatcherState(CdbDispatcherState	*ds);
+void makeDispatcherState(CdbDispatcherState	*ds, int nResults, int nSlices, bool cancelOnError);
+
 #endif   /* CDBDISP_H */
