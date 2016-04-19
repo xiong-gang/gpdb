@@ -14,6 +14,14 @@
 #include "cdb/cdbgang.h"
 #include "cdb/cdbdisp_utils.h"
 #include "cdb/cdbdispatchresult.h"
+#include "utils/memutils.h"
+
+static CdbDispatchCmdThreads *
+cdbdisp_makeDispatchThreads(int paramCount);
+static CdbDispatchResults *
+cdbdisp_makeDispatchResults(int     resultCapacity,
+                            int     sliceCapacity,
+                            bool    cancelOnError);
 
 int getMaxThreads()
 {
@@ -25,46 +33,89 @@ int getMaxThreads()
 	return maxThreads;
 }
 
-void cdbdisp_fillParms(DispatchCommandParms *pParms, DispatchType *mppDispatchCommandType,
-						int sliceId, int maxfds, void *commandTypeParms)
+/*
+ * cdbdisp_makeDispatchThreads:
+ * Allocates memory for a CdbDispatchCmdThreads struct that holds
+ * the thread count and array of dispatch command parameters (which
+ * is being allocated here as well).
+ */
+static CdbDispatchCmdThreads *
+cdbdisp_makeDispatchThreads(int paramCount)
 {
-	pParms->localSlice = sliceId;
-	pParms->cmdID = gp_command_count;
-	pParms->db_count = 0;
-	pParms->sessUserId = GetSessionUserId();
-	pParms->outerUserId = GetOuterUserId();
-	pParms->currUserId = GetUserId();
-	pParms->sessUserId_is_super = superuser_arg(GetSessionUserId());
-	pParms->outerUserId_is_super = superuser_arg(GetOuterUserId());
+	CdbDispatchCmdThreads *dThreads = palloc0(sizeof(*dThreads));
+	int i = 0;
+	Oid sessUserId = GetSessionUserId();
+	Oid outerUserId = GetOuterUserId();
+	Oid currUserId = GetUserId();
+	bool sessUserIdIsSuper = superuser_arg(GetSessionUserId());
+	bool outerUserIdIsSuper = superuser_arg(GetOuterUserId());
+	int maxfds = 0;
 
-	pParms->nfds = maxfds;
-	pParms->fds = (struct pollfd *) palloc0(sizeof(struct pollfd) * maxfds);
+	dThreads->dispatchCommandParmsAr =
+		(DispatchCommandParms *)palloc0(paramCount * sizeof(DispatchCommandParms));
+	dThreads->dispatchCommandParmsArSize = paramCount;
+    dThreads->threadCount = 0;
 
-	pParms->dispatchResultPtrArray =
-		(CdbDispatchResult **) palloc0((gp_connections_per_thread == 0 ? largestGangsize() : gp_connections_per_thread)*
-									   sizeof(CdbDispatchResult *));
-	MemSet(&pParms->thread, 0, sizeof(pthread_t));
+	if (gp_connections_per_thread == 0)
+		maxfds = largestGangsize();
+	else
+		maxfds = gp_connections_per_thread;
 
-	pParms->mppDispatchCommandType = mppDispatchCommandType;
-	(*mppDispatchCommandType->init)(pParms, (void*)commandTypeParms);
-}
+    for (i = 0; i < paramCount; i++)
+    {
+    	DispatchCommandParms *pParms = &dThreads->dispatchCommandParmsAr[i];
 
-void cdbdisp_freeParms(DispatchCommandParms *pParms, bool isFirst)
+    	pParms->cmdID = gp_command_count;
+    	pParms->sessUserId = sessUserId;
+    	pParms->outerUserId = outerUserId;
+    	pParms->currUserId = currUserId;
+    	pParms->sessUserId_is_super = sessUserIdIsSuper;
+    	pParms->outerUserId_is_super = outerUserIdIsSuper;
+
+    	pParms->dispatchResultPtrArray =
+    		(CdbDispatchResult **) palloc0((gp_connections_per_thread == 0 ? largestGangsize() : gp_connections_per_thread)*
+    									   sizeof(CdbDispatchResult *));
+    	pParms->nfds = maxfds;
+    	pParms->fds = (struct pollfd *) palloc0(sizeof(struct pollfd) * maxfds);
+
+    	MemSet(&pParms->thread, 0, sizeof(pthread_t));
+    }
+
+    return dThreads;
+}                               /* cdbdisp_makeDispatchThreads */
+
+/*
+ * cdbdisp_makeDispatchResults:
+ * Allocates a CdbDispatchResults object in the current memory context.
+ * The caller is responsible for calling DestroyCdbDispatchResults on the returned
+ * pointer when done using it.
+ */
+static CdbDispatchResults *
+cdbdisp_makeDispatchResults(int     resultCapacity,
+                            int     sliceCapacity,
+                            bool    cancelOnError)
 {
-	if (pParms->dispatchResultPtrArray)
-	{
-		pfree(pParms->dispatchResultPtrArray);
-		pParms->dispatchResultPtrArray = NULL;
-	}
+    CdbDispatchResults *results = palloc0(sizeof(*results));
+    int     nbytes = resultCapacity * sizeof(results->resultArray[0]);
 
-	if (pParms->fds != NULL)
-	{
-		pfree(pParms->fds);
-		pParms->fds = NULL;
-	}
+    results->resultArray = palloc0(nbytes);
+    results->resultCapacity = resultCapacity;
+    results->resultCount = 0;
+    results->iFirstError = -1;
+    results->errcode = 0;
+    results->cancelOnError = cancelOnError;
 
-	(*pParms->mppDispatchCommandType->destroy)(pParms, isFirst);
-}
+    results->sliceMap = NULL;
+    results->sliceCapacity = sliceCapacity;
+    if (sliceCapacity > 0)
+    {
+        nbytes = sliceCapacity * sizeof(results->sliceMap[0]);
+        results->sliceMap = palloc0(nbytes);
+    }
+
+    return results;
+}                               /* cdbdisp_makeDispatchResults */
+
 
 void makeDispatcherState(CdbDispatcherState	*ds, int nResults, int nSlices, bool cancelOnError)
 {
@@ -76,12 +127,37 @@ void makeDispatcherState(CdbDispatcherState	*ds, int nResults, int nSlices, bool
 	 * 1 * maxthreads * slices for each primary
 	 * X 2 for good measure ? */
 	int paramCount = maxThreads * 4 * Max(nSlices, 5);
-
+	MemoryContext oldContext;
+	ds->dispatchStateContext = AllocSetContextCreate(TopMemoryContext,
+													"Dispatch Context",
+													ALLOCSET_DEFAULT_MINSIZE,
+													ALLOCSET_DEFAULT_INITSIZE,
+													ALLOCSET_DEFAULT_MAXSIZE);
+	oldContext = MemoryContextSwitchTo(ds->dispatchStateContext);
 	ds->primaryResults = cdbdisp_makeDispatchResults(nResults, nSlices, cancelOnError);
-	//todo: memory context
 	ds->dispatchThreads = cdbdisp_makeDispatchThreads(paramCount);
+	MemoryContextSwitchTo(oldContext);
 	elog(DEBUG4, "dispatcher: allocating command array with maxslices %d paramCount %d", nSlices, paramCount);
 }
+
+void destroyDispatcherState(CdbDispatcherState	*ds)
+{
+	CdbDispatchResults * results = ds->primaryResults;
+    if (results->resultArray != NULL)
+    {
+        int i;
+        for (i = 0; i < results->resultCount; i++)
+        {
+            cdbdisp_termResult(&results->resultArray[i]);
+        }
+    }
+
+	MemoryContextDelete(ds->dispatchStateContext);
+	ds->dispatchStateContext = NULL;
+	ds->dispatchThreads = NULL;
+	ds->primaryResults = NULL;
+}
+
 
 HTAB *
 process_aotupcounts(PartitionNode *parts, HTAB *ht,

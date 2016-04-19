@@ -143,22 +143,6 @@ cdbdisp_clearGangActiveFlag(CdbDispatcherState *ds)
 }
 
 
-
-
-
-/* 
- * ====================================================
- * STATIC STATE VARIABLES should not be declared!
- * global state will break the ability to run cursors.
- * only globals with a higher granularity than a running
- * command (i.e: transaction, session) are ok.
- * ====================================================
- */
-
-
-static MemoryContext DispatchContext = NULL;
-
-
 /*
  * Counter to indicate there are some dispatch threads running.  This will
  * be incremented at the beginning of dispatch threads and decremented at
@@ -208,11 +192,8 @@ static volatile int32 RunningThreadCount = 0;
  */
 void
 cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
-					   DispatchType				   *mppDispatchCommandType,
-					   void						   *commandTypeParms,
                        struct Gang                 *gp,
                        int                          sliceIndex,
-                       unsigned int                 maxSlices,
                        CdbDispatchDirectDesc		*disp_direct)
 {
 	struct CdbDispatchResults	*dispatchResults = ds->primaryResults;
@@ -223,8 +204,6 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 		newThreads = 0;
 	int db_descriptors_size;
 	SegmentDatabaseDescriptor *db_descriptors;
-
-	MemoryContext oldContext;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 	Assert(gp && gp->size > 0);
@@ -265,18 +244,6 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 	segdbs_in_thread_pool = 0;
 	
 	Assert(db_descriptors_size <= largestGangsize());
-
-
-	if (DispatchContext == NULL)
-	{
-		DispatchContext = AllocSetContextCreate(TopMemoryContext,
-												"Dispatch Context",
-												ALLOCSET_DEFAULT_MINSIZE,
-												ALLOCSET_DEFAULT_INITSIZE,
-												ALLOCSET_DEFAULT_MAXSIZE);
-	}
-	
-	Assert(DispatchContext != NULL);
 	Assert(ds->dispatchThreads != NULL);
 	/*
 	 * If we attempt to reallocate, there is a race here: we
@@ -304,8 +271,6 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 		segdbDesc = &db_descriptors[i];
 		DispatchCommandParms *pParms = NULL;
 		int parmsIndex = 0;
-		bool needInitParms = false;
-		int maxfds = 0;
 
 		Assert(segdbDesc != NULL);
 
@@ -333,34 +298,9 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 			segdbDesc->error_message.len)
 			cdbdisp_mergeConnectionErrors(qeResult, segdbDesc);
 
-		if (gp_connections_per_thread == 0)
-		{
-			parmsIndex = 0;
-			maxfds = db_descriptors_size;
-			needInitParms = segdbs_in_thread_pool == 0;
-		}
-		else
-		{
-			parmsIndex = segdbs_in_thread_pool / gp_connections_per_thread;
-			maxfds = gp_connections_per_thread;
-			needInitParms = segdbs_in_thread_pool % gp_connections_per_thread == 0;
-		}
-
-		/*
-		 * The proper index into the DispatchCommandParms array is computed, based on
-		 * having gp_connections_per_thread segdbDesc's in each thread.
-		 * If it's the first access to an array location, determined
-		 * by (*segdbCount) % gp_connections_per_thread == 0,
-		 * then we initialize the struct members for that array location first.
-		 */
+		parmsIndex = gp_connections_per_thread == 0 ? 0 : segdbs_in_thread_pool / gp_connections_per_thread;
 		pParms = &(ds->dispatchThreads->dispatchCommandParmsAr + ds->dispatchThreads->threadCount)[parmsIndex];
-		if(needInitParms)
-		{
-			newThreads++;
-			oldContext = MemoryContextSwitchTo(DispatchContext);
-			cdbdisp_fillParms(pParms, mppDispatchCommandType, sliceIndex, maxfds, commandTypeParms);
-			MemoryContextSwitchTo(oldContext);
-		}
+		pParms->localSlice = sliceIndex;
 		pParms->dispatchResultPtrArray[pParms->db_count++] = qeResult;
 
 		/*
@@ -374,6 +314,18 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 
 		segdbs_in_thread_pool++;
 	}
+
+    if (segdbs_in_thread_pool == 0)
+    {
+            newThreads = 0;
+    }
+    else
+    {
+            if (gp_connections_per_thread == 0)
+                    newThreads = 1;
+            else
+                    newThreads = 1 + (segdbs_in_thread_pool - 1) / gp_connections_per_thread;
+    }
 
 	/*
 	 * Create the threads. (which also starts the dispatching).
@@ -678,7 +630,6 @@ cdbdisp_returnResults(CdbDispatchResults *primaryResults,
 												resultSets + nresults,
 												nslots - nresults - 1);
 		}
-		cdbdisp_destroyDispatchResults(gangResults);
 	}
 
 	/* Put a stopper at the end of the array. */
@@ -740,10 +691,7 @@ cdbdisp_finishCommand(struct CdbDispatcherState *ds,
 		if (handle_results_callback != NULL)
 			handle_results_callback(ds->primaryResults, ctx);
 
-		cdbdisp_destroyDispatchResults(ds->primaryResults);
-		ds->primaryResults = NULL;
-		cdbdisp_destroyDispatchThreads(ds->dispatchThreads);
-		ds->dispatchThreads = NULL;
+		destroyDispatcherState(ds);
 		return;
 	}
 
@@ -751,11 +699,7 @@ cdbdisp_finishCommand(struct CdbDispatcherState *ds,
 	initStringInfo(&buf);
 	cdbdisp_dumpDispatchResults(ds->primaryResults, &buf, false);
 
-	cdbdisp_destroyDispatchResults(ds->primaryResults);
-	ds->primaryResults = NULL;
-
-	cdbdisp_destroyDispatchThreads(ds->dispatchThreads);
-	ds->dispatchThreads = NULL;
+	destroyDispatcherState(ds);
 
 	/* Too bad, our gang got an error. */
 	PG_TRY();
@@ -856,10 +800,7 @@ cdbdisp_handleError(struct CdbDispatcherState *ds)
          * have been examined before raising the error that the caller is
          * currently handling.
          */
-        cdbdisp_destroyDispatchResults(ds->primaryResults);
-		ds->primaryResults = NULL;
-		cdbdisp_destroyDispatchThreads(ds->dispatchThreads);
-		ds->dispatchThreads = NULL;
+    	destroyDispatcherState(ds);
     }
 }                               /* cdbdisp_handleError */
 
@@ -976,9 +917,8 @@ thread_DispatchOut(DispatchCommandParms *pParms)
 			 */
 			PQsetnonblocking(dispatchResult->segdbDesc->conn, TRUE);
 #endif 
-			
-			(*pParms->mppDispatchCommandType->dispatch)(dispatchResult, pParms);
-			
+
+			dispatchCommand(dispatchResult, pParms->query_text, pParms->query_text_len);
             dispatchResult->hasDispatched = true;
         }
 	}
@@ -1976,61 +1916,6 @@ connection_error:
 
 
 
-/*
- * cdbdisp_makeDispatchThreads:
- * Allocates memory for a CdbDispatchCmdThreads struct that holds
- * the thread count and array of dispatch command parameters (which
- * is being allocated here as well).
- */
-CdbDispatchCmdThreads *
-cdbdisp_makeDispatchThreads(int paramCount)
-{
-	CdbDispatchCmdThreads *dThreads = palloc0(sizeof(*dThreads));
-
-	dThreads->dispatchCommandParmsAr =
-		(DispatchCommandParms *)palloc0(paramCount * sizeof(DispatchCommandParms));
-	
-	dThreads->dispatchCommandParmsArSize = paramCount;
-
-    dThreads->threadCount = 0;
-
-    return dThreads;
-}                               /* cdbdisp_makeDispatchThreads */
-
-/*
- * cdbdisp_destroyDispatchThreads:
- * Frees all memory allocated in CdbDispatchCmdThreads struct.
- */
-void
-cdbdisp_destroyDispatchThreads(CdbDispatchCmdThreads *dThreads)
-{
-
-	DispatchCommandParms *pParms;
-	int i;
-
-	if (!dThreads)
-        return;
-
-	/*
-	 * pfree the memory allocated for the dispatchCommandParmsAr
-	 */
-	elog(DEBUG3, "destroydispatchthreads: threadcount %d array size %d", dThreads->threadCount, dThreads->dispatchCommandParmsArSize);
-	for (i = 0; i < dThreads->dispatchCommandParmsArSize; i++)
-	{
-		pParms = &(dThreads->dispatchCommandParmsAr[i]);
-		bool isFirst = (i == 0);
-
-		cdbdisp_freeParms(pParms, isFirst);
-	}
-	
-	pfree(dThreads->dispatchCommandParmsAr);	
-	dThreads->dispatchCommandParmsAr = NULL;
-
-    dThreads->dispatchCommandParmsArSize = 0;
-    dThreads->threadCount = 0;
-		
-	pfree(dThreads);
-}                               /* cdbdisp_destroyDispatchThreads */
 
 /*
  * Synchronize threads to finish for this process to die.  Dispatching
@@ -2078,6 +1963,12 @@ dispatchCommand(CdbDispatchResult	*dispatchResult,
 {
 	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
 	PGconn	   *conn = segdbDesc->conn;
+	TimestampTz beforeSend = 0;
+	long		secs;
+	int			usecs;
+
+	if (DEBUG1 >= log_min_messages)
+		beforeSend = GetCurrentTimestamp();
 
 	/*
 	 * Submit the command asynchronously.
@@ -2100,7 +1991,15 @@ dispatchCommand(CdbDispatchResult	*dispatchResult,
 		dispatchResult->stillRunning = false;
 	}
 
+	if (DEBUG1 >= log_min_messages)
+	{
+		TimestampDifference(beforeSend,
+							GetCurrentTimestamp(),
+							&secs, &usecs);
 
+		if (secs != 0 || usecs > 1000) /* Time > 1ms? */
+			write_log("time for PQsendGpQuery_shared %ld.%06d", secs, usecs);
+	}
 	/*
 	 * We'll keep monitoring this QE -- whether or not the command
 	 * was dispatched -- in order to check for a lost connection

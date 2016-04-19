@@ -108,15 +108,13 @@ struct DispatchType;
  */
 typedef struct DispatchCommandParms
 {
-	struct DispatchType				*mppDispatchCommandType;
-	DispatchCommandQueryParms		queryParms;
-	DispatchCommandDtxProtocolParms	dtxProtocolParms;
+//	struct DispatchType				*mppDispatchCommandType;
+//	DispatchCommandQueryParms		*queryParms;
+//	DispatchCommandDtxProtocolParms	*dtxProtocolParms;
 	
 	char		*query_text;
 	int			query_text_len;
-	
-	int			localSlice;
-	
+
 	/*
 	 * options for controlling certain behavior
 	 * on the remote backend before query processing. Like
@@ -129,15 +127,6 @@ typedef struct DispatchCommandParms
 	 * thread gets the same command-id
 	 */
 	int			cmdID;
-	
-	/*
-	 * db_count: The number of segdbs that this thread is responsible
-	 * for dispatching the command to.
-	 * Equals the count of segdbDescPtrArray below.
-	 */
-	int			db_count;
-	
-	
 	/*
 	 * Session auth info
 	 */
@@ -146,7 +135,15 @@ typedef struct DispatchCommandParms
 	Oid			currUserId;
 	bool		sessUserId_is_super;
 	bool		outerUserId_is_super;
-
+	
+	int			localSlice;
+	/*
+	 * db_count: The number of segdbs that this thread is responsible
+	 * for dispatching the command to.
+	 * Equals the count of segdbDescPtrArray below.
+	 */
+	int			db_count;
+	
 	/*
 	 * dispatchResultPtrArray: Array[0..db_count-1] of CdbDispatchResult*
 	 * Each CdbDispatchResult object points to a SegmentDatabaseDescriptor
@@ -175,16 +172,6 @@ typedef struct DispatchCommandParms
 	
 }	DispatchCommandParms;
 
-typedef struct DispatchType
-{
-	GpDispatchCommandType type;
-	void (*dispatch)(struct CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
-	void (*init)(DispatchCommandParms *pParms, void *inpurtParms);
-	void (*destroy)(DispatchCommandParms *pParms, bool isFirst);
-}DispatchType;
-
-extern DispatchType DtxDispatchType;
-extern DispatchType QueryDispatchType;
 /*
  * Keeps state of all the dispatch command threads.
  */
@@ -209,6 +196,7 @@ typedef struct CdbDispatcherState
 {
 	struct CdbDispatchResults    *primaryResults;
 	struct CdbDispatchCmdThreads *dispatchThreads;
+	MemoryContext dispatchStateContext;
 } CdbDispatcherState;
 
 /*--------------------------------------------------------------------*/
@@ -247,11 +235,8 @@ typedef struct CdbDispatcherState
  */
 void
 cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
-					   DispatchType					*mppDispatchCommandType,
-					   void							*commandTypeParms,
                        struct Gang					*gp,
                        int							sliceIndex,
-                       unsigned int					maxSlices,
                        CdbDispatchDirectDesc		*direct);
 
 /*
@@ -469,13 +454,6 @@ CdbDispatchUtilityStatement(struct Node *stmt, char* debugCaller __attribute__((
 
 void
 CdbDispatchUtilityStatement_NoTwoPhase(struct Node *stmt, char* debugCaller __attribute__((unused)) );
-
-/*
- * create a CdbDispatchCmdThreads object that holds the dispatch
- * threads state, and an array of dispatch command params. 
- */
-CdbDispatchCmdThreads *
-cdbdisp_makeDispatchThreads(int paramCount);
 
 /*
  * free all memory allocated for a CdbDispatchCmdThreads object.

@@ -12,6 +12,7 @@
 #include "postgres.h"
 #include "cdb/cdbconn.h"
 #include "cdb/cdbdisp.h"
+#include "cdb/cdbdisp_utils.h"
 #include "cdb/cdbdispatchresult.h"
 #include "cdb/cdbgang.h"
 #include "cdb/cdbutil.h"
@@ -41,7 +42,7 @@ cdbdisp_dispatchSetCommandToAllGangs(const char	*strCommand,
                         bool					cancelOnError,
                         bool					needTwoPhase,
                         struct CdbDispatcherState *ds);
-
+static void initDispatcherParms(struct CdbDispatcherState *ds, DispatchCommandQueryParms *pQueryParms);
 /*
  * We need an array describing the relationship between a slice and
  * the number of "child" slices which depend on it.
@@ -56,16 +57,396 @@ static int fillSliceVector(SliceTable * sliceTable, int sliceIndex, sliceVec *sl
 
 extern bool Test_print_direct_dispatch_info;
 
-static void queryDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
-static void queryDispatchDestroy(DispatchCommandParms *pParms, bool isFirst);
-static void queryDispatchInit(DispatchCommandParms *pParms, void *inputParms);
 
-DispatchType QueryDispatchType = {
-		GP_DISPATCH_COMMAND_TYPE_QUERY,
-		queryDispatchCommand,
-		queryDispatchInit,
-		queryDispatchDestroy
-};
+/* Special Greenplum-only method for executing SQL statements.  Specifies a global
+ * transaction context that the statement should be executed within.
+ *
+ * This should *ONLY* ever be used by the Greenplum Database Query Dispatcher and NEVER (EVER)
+ * by anyone else.
+ *
+ * snapshot - serialized form of Snapshot data.
+ * xid      - Global Transaction Id to use.
+ * flags    - specifies additional processing instructions to the remote server.
+ *			  e.g.  Auto explicitly start a transaction before executing this
+ *		      statement.
+ * gp_command_count - Client request serial# to be passed to the qExec.
+ */
+/*
+ * Our goal is to build one copy of the Greenplum Database query stucture, and to
+ * have each dispatcher connection hold pointers into the single copy.
+ * query
+ * So the code below does the same work, roughly as:
+ *
+ * 	if (pqPutMsgStart('M', false, conn) < 0 ||
+ *		pqPutInt(gp_command_count, 4, conn ) < 0 ||
+ *		pqPuts(snapshotInfo, conn ) < 0 ||
+ *		pqPutInt(flags, 4, conn ) < 0 ||
+ *		pqPuts(command, conn) < 0 ||
+ *		pqPutMsgEnd(conn) < 0)
+ *
+ * The remaining work (protocol xmit state, mostly) is done by
+ * PQsendGpQuery_shared().
+ */
+char *
+PQbuildGpQueryString(const char  *command,
+					 int          command_len,
+					 const char  *querytree,
+					 int          querytree_len,
+					 const char  *plantree,
+					 int          plantree_len,
+					 const char  *params,
+					 int          params_len,
+					 const char  *sliceinfo,
+					 int          sliceinfo_len,
+					 const char  *snapshotInfo,
+					 int          snapshotInfo_len,
+					 int          flags,
+					 int          gp_command_count,
+					 int          localSlice,
+					 int          rootIdx,
+					 const char  *seqServerHost,
+					 int          seqServerHostlen,
+					 int          seqServerPort,
+					 int          primary_gang_id,
+					 int64        currentStatementStartTimestamp,
+					 Oid          sessionUserId,
+					 bool         sessionUserIsSuper,
+					 Oid          outerUserId,
+					 bool         outerUserIsSuper,
+					 Oid          currentUserId,
+					 int         *final_len)
+{
+	int	tmp, len;
+	uint32		n32;
+	int	total_query_len;
+	char *shared_query, *pos;
+	char one = 1;
+	char zero = 0;
+
+	total_query_len =
+		1 /* 'M' */ +
+		sizeof(len) /* message length */ +
+		sizeof(gp_command_count) +
+		sizeof(sessionUserId) +
+		1 /* sessionUserIsSuper */ +
+		sizeof(outerUserId) +
+		1 /* outerUserIsSuper */ +
+		sizeof(currentUserId) +
+		sizeof(localSlice) +
+		sizeof(rootIdx) +
+		sizeof(primary_gang_id) +
+		sizeof(n32) * 2 /* currentStatementStartTimestamp */ +
+		sizeof(command_len) +
+		sizeof(querytree_len) +
+		sizeof(plantree_len) +
+		sizeof(params_len) +
+		sizeof(sliceinfo_len) +
+		sizeof(snapshotInfo_len) +
+		snapshotInfo_len +
+		sizeof(flags) +
+		sizeof(seqServerHostlen) +
+		sizeof(seqServerPort) +
+		command_len +
+		querytree_len +
+		plantree_len +
+		params_len +
+		sliceinfo_len +
+		seqServerHostlen;
+
+	shared_query = palloc(total_query_len);
+	if (shared_query == NULL)
+	{
+		/* tell our caller how much memory we wanted */
+		if (final_len != NULL)
+			*final_len = total_query_len;
+		return NULL;
+	}
+
+	pos = shared_query;
+
+	*pos++ = 'M';
+
+	pos += 4; /* place holder for message length */
+
+	tmp = htonl(gp_command_count);
+	memcpy(pos, &tmp, sizeof(gp_command_count));
+	pos += sizeof(gp_command_count);
+
+	tmp = htonl(sessionUserId);
+	memcpy(pos, &tmp, sizeof(sessionUserId));
+	pos += sizeof(sessionUserId);
+
+	if (sessionUserIsSuper)
+		*pos++ = one;
+	else
+		*pos++ = zero;
+
+
+	tmp = htonl(outerUserId);
+	memcpy(pos, &tmp, sizeof(outerUserId));
+	pos += sizeof(outerUserId);
+
+	if (outerUserIsSuper)
+		*pos++ = one;
+	else
+		*pos++ = zero;
+
+	tmp = htonl(currentUserId);
+	memcpy(pos, &tmp, sizeof(currentUserId));
+	pos += sizeof(currentUserId);
+
+	tmp = htonl(localSlice);
+	memcpy(pos, &tmp, sizeof(localSlice));
+	pos += sizeof(localSlice);
+
+	tmp = htonl(rootIdx);
+	memcpy(pos, &tmp, sizeof(rootIdx));
+	pos += sizeof(rootIdx);
+
+	tmp = htonl(primary_gang_id);
+	memcpy(pos, &tmp, sizeof(primary_gang_id));
+	pos += sizeof(primary_gang_id);
+
+	/* High order half first, since we're doing MSB-first */
+	n32 = (uint32) (currentStatementStartTimestamp >> 32);
+	n32 = htonl(n32);
+	memcpy(pos, &n32, sizeof(n32));
+	pos += sizeof(n32);
+
+	/* Now the low order half */
+	n32 = (uint32) currentStatementStartTimestamp;
+	n32 = htonl(n32);
+	memcpy(pos, &n32, sizeof(n32));
+	pos += sizeof(n32);
+
+	tmp = htonl(command_len);
+	memcpy(pos, &tmp, sizeof(command_len));
+	pos += sizeof(command_len);
+
+	tmp = htonl(querytree_len);
+	memcpy(pos, &tmp, sizeof(querytree_len));
+	pos += sizeof(querytree_len);
+
+	tmp = htonl(plantree_len);
+	memcpy(pos, &tmp, sizeof(plantree_len));
+	pos += sizeof(plantree_len);
+
+	tmp = htonl(params_len);
+	memcpy(pos, &tmp, sizeof(params_len));
+	pos += sizeof(params_len);
+
+	tmp = htonl(sliceinfo_len);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(snapshotInfo_len);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	if (snapshotInfo_len > 0)
+	{
+		memcpy(pos, snapshotInfo, snapshotInfo_len);
+		pos += snapshotInfo_len;
+	}
+
+	tmp = htonl(flags);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(seqServerHostlen);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(seqServerPort);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	if (command_len > 0)
+	{
+		memcpy(pos, command, command_len);
+		pos += command_len;
+	}
+
+	if (querytree_len > 0)
+	{
+		memcpy(pos, querytree, querytree_len);
+		pos += querytree_len;
+	}
+
+	if (plantree_len > 0)
+	{
+		memcpy(pos, plantree, plantree_len);
+		pos += plantree_len;
+	}
+
+	if (params_len > 0)
+	{
+		memcpy(pos, params, params_len);
+		pos += params_len;
+	}
+
+	if (sliceinfo_len > 0)
+	{
+		memcpy(pos, sliceinfo, sliceinfo_len);
+		pos += sliceinfo_len;
+	}
+
+	if (seqServerHostlen > 0)
+	{
+		memcpy(pos, seqServerHost, seqServerHostlen);
+		pos += seqServerHostlen;
+	}
+
+	len = pos - shared_query - 1;
+
+	/* fill in length placeholder */
+	tmp = htonl(len);
+	memcpy(shared_query+1, &tmp, sizeof(len));
+
+	Assert(len + 1 == total_query_len);
+
+	if (final_len)
+		*final_len = len + 1;
+
+	return shared_query;
+}
+
+static void initDispatcherParms(struct CdbDispatcherState *ds, DispatchCommandQueryParms *pQueryParms)
+{
+	CdbDispatchCmdThreads *dThreads = ds->dispatchThreads;
+	int i = 0;
+	int len = 0;
+//	DispatchCommandQueryParms *newQueryParms = NULL;
+	DispatchCommandParms *pParms = &dThreads->dispatchCommandParmsAr[0];
+
+	MemoryContext oldContext = MemoryContextSwitchTo(ds->dispatchStateContext);
+
+	char *queryText = PQbuildGpQueryString(
+		pQueryParms->strCommand, pQueryParms->strCommandlen,
+		pQueryParms->serializedQuerytree, pQueryParms->serializedQuerytreelen,
+		pQueryParms->serializedPlantree, pQueryParms->serializedPlantreelen,
+		pQueryParms->serializedParams, pQueryParms->serializedParamslen,
+		pQueryParms->serializedSliceInfo, pQueryParms->serializedSliceInfolen,
+		pQueryParms->serializedDtxContextInfo, pQueryParms->serializedDtxContextInfolen,
+		0 /* unused flags*/, pParms->cmdID, pParms->localSlice, pQueryParms->rootIdx,
+		pQueryParms->seqServerHost, pQueryParms->seqServerHostlen, pQueryParms->seqServerPort,
+		pQueryParms->primary_gang_id,
+		GetCurrentStatementStartTimestamp(),
+		pParms->sessUserId, pParms->sessUserId_is_super,
+		pParms->outerUserId, pParms->outerUserId_is_super, pParms->currUserId,
+		&len);
+
+	if (pParms->query_text == NULL)
+	{
+		elog(ERROR, "could not build query string, total length %d", pParms->query_text_len);
+	}
+
+//	newQueryParms = palloc0(sizeof(DispatchCommandQueryParms));
+//
+//	if (pQueryParms->strCommand == NULL || strlen(pQueryParms->strCommand) == 0)
+//	{
+//		newQueryParms.strCommand = NULL;
+//		newQueryParms.strCommandlen = 0;
+//	}
+//	else
+//	{
+//		/* Caller frees if desired */
+//		newQueryParms.strCommand = pstrdup(pQueryParms->strCommand);
+//		newQueryParms.strCommandlen = strlen(pQueryParms->strCommand) + 1;
+//	}
+//
+//	if (pQueryParms->serializedQuerytree == NULL || pQueryParms->serializedQuerytreelen == 0)
+//	{
+//		newQueryParms.serializedQuerytree = NULL;
+//		newQueryParms.serializedQuerytreelen = 0;
+//	}
+//	else
+//	{
+//		newQueryParms.serializedQuerytreelen = pQueryParms->serializedQuerytreelen;
+//		newQueryParms.serializedQuerytree = palloc0(pQueryParms->serializedQuerytreelen);
+//		memcpy(newQueryParms.serializedQuerytree, pQueryParms->serializedQuerytree, pQueryParms->serializedQuerytreelen);
+//		pfree(pQueryParms->serializedQuerytree);
+//	}
+//
+//	if (pQueryParms->serializedPlantree == NULL || pQueryParms->serializedPlantreelen == 0)
+//	{
+//		newQueryParms.serializedPlantree = NULL;
+//		newQueryParms.serializedPlantreelen = 0;
+//	}
+//	else
+//	{
+//		newQueryParms.serializedPlantreelen = pQueryParms->serializedPlantreelen;
+//		newQueryParms.serializedPlantree = palloc0(pQueryParms->serializedPlantreelen);
+//		memcpy(newQueryParms.serializedPlantree, pQueryParms->serializedPlantree, pQueryParms->serializedPlantreelen);
+//		pfree(pQueryParms->serializedPlantree);
+//	}
+//
+//	if (pQueryParms->serializedParams == NULL || pQueryParms->serializedParamslen == 0)
+//	{
+//		newQueryParms.serializedParams = NULL;
+//		newQueryParms.serializedParamslen = 0;
+//	}
+//	else
+//	{
+//		newQueryParms.serializedParamslen = pQueryParms->serializedParamslen;
+//		newQueryParms.serializedParams = palloc0(pQueryParms->serializedParamslen);
+//		memcpy(newQueryParms.serializedParams, pQueryParms->serializedParams, pQueryParms->serializedParamslen);
+//		pfree(pQueryParms->serializedParams);
+//	}
+//
+//	if (pQueryParms->serializedSliceInfo == NULL || pQueryParms->serializedSliceInfolen == 0)
+//	{
+//		newQueryParms.serializedSliceInfo = NULL;
+//		newQueryParms.serializedSliceInfolen = 0;
+//	}
+//	else
+//	{
+//		newQueryParms.serializedSliceInfolen = pQueryParms->serializedSliceInfolen;
+//		newQueryParms.serializedSliceInfo = palloc0(pQueryParms->serializedSliceInfolen);
+//		memcpy(newQueryParms.serializedSliceInfo, pQueryParms->serializedSliceInfo, pQueryParms->serializedSliceInfolen);
+//		pfree(pQueryParms->serializedSliceInfo);
+//	}
+//
+//	if (pQueryParms->serializedDtxContextInfo == NULL || pQueryParms->serializedDtxContextInfolen == 0)
+//	{
+//		newQueryParms.serializedDtxContextInfo = NULL;
+//		newQueryParms.serializedDtxContextInfolen = 0;
+//	}
+//	else
+//	{
+//		newQueryParms.serializedDtxContextInfolen = pQueryParms->serializedDtxContextInfolen;
+//		newQueryParms.serializedDtxContextInfo = palloc0(pQueryParms->serializedDtxContextInfolen);
+//		memcpy(newQueryParms.serializedDtxContextInfo, pQueryParms->serializedDtxContextInfo, pQueryParms->serializedDtxContextInfolen);
+//		pfree(pQueryParms->serializedDtxContextInfo);
+//	}
+//
+//	if (pQueryParms->seqServerHost == NULL || pQueryParms->seqServerHostlen == 0)
+//	{
+//		newQueryParms.seqServerHost = NULL;
+//		newQueryParms.seqServerHostlen = 0;
+//		newQueryParms.seqServerPort = -1;
+//	}
+//	else
+//	{
+//		newQueryParms.seqServerHostlen = pQueryParms->seqServerHostlen;
+//		newQueryParms.seqServerHost = palloc0(pQueryParms->seqServerHostlen);
+//		memcpy(newQueryParms.seqServerHost, pQueryParms->seqServerHost, pQueryParms->seqServerHostlen);
+//		pfree(pQueryParms->seqServerHost);
+//		newQueryParms.seqServerPort = pQueryParms->seqServerPort;
+//	}
+//
+//	newQueryParms.rootIdx = pQueryParms->rootIdx;
+//	newQueryParms.primary_gang_id = pQueryParms->primary_gang_id;
+
+	for (i = 0; i < dThreads->dispatchCommandParmsArSize; i++)
+	{
+		pParms = &dThreads->dispatchCommandParmsAr[i];
+//		pParms->queryParms = newQueryParms;
+		pParms->query_text = queryText;
+		pParms->query_text_len = len;
+	}
+	MemoryContextSwitchTo(oldContext);
+}
 /*
  * This code was refactored out of cdbdisp_dispatchPlan.  It's
  * used both for dispatching plans when we are using normal gangs,
@@ -112,6 +493,7 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 	}
 
 	makeDispatcherState(ds, nSlices * largestGangsize(), sliceLim, cancelOnError);
+	initDispatcherParms(ds, pQueryParms);
 
 	cdb_total_plans++;
 	cdb_total_slices += nSlices;
@@ -258,10 +640,7 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 			if (primaryGang->type == GANGTYPE_PRIMARY_WRITER)
 				ds->primaryResults->writer_gang = primaryGang;
 
-			cdbdisp_dispatchToGang(ds,
-								   &QueryDispatchType,
-								   pQueryParms, primaryGang,
-								   si, sliceLim, &direct);
+			cdbdisp_dispatchToGang(ds, primaryGang, si, &direct);
 		}
 	}
 
@@ -806,20 +1185,15 @@ cdbdisp_dispatchSetCommandToAllGangs(const char	*strCommand,
 	 */
 	gangCount = 1 + list_length(idleReaderGangs);
 	makeDispatcherState(ds, nsegdb * gangCount, 0, cancelOnError);
+	initDispatcherParms(ds, &queryParms);
 
 	ds->primaryResults->writer_gang = primaryGang;
-	cdbdisp_dispatchToGang(ds,
-						   &QueryDispatchType,
-						   &queryParms,
-						   primaryGang, -1, gangCount, DEFAULT_DISP_DIRECT);
+	cdbdisp_dispatchToGang(ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
 
 	foreach(le, idleReaderGangs)
 	{
 		Gang  *rg = lfirst(le);
-		cdbdisp_dispatchToGang(ds,
-							   &QueryDispatchType,
-							   &queryParms,
-							   rg, -1, gangCount, DEFAULT_DISP_DIRECT);
+		cdbdisp_dispatchToGang(ds, rg, -1, DEFAULT_DISP_DIRECT);
 	}
 
 	/*
@@ -863,9 +1237,7 @@ CdbSetGucOnAllGangs(const char *strCommand,
 		CdbCheckDispatchResult((struct CdbDispatcherState *)&ds,
 							   DISPATCH_WAIT_CANCEL);
 
-		cdbdisp_destroyDispatchResults(ds.primaryResults);
-		cdbdisp_destroyDispatchThreads(ds.dispatchThreads);
-
+		destroyDispatcherState((struct CdbDispatcherState *)&ds);
 		PG_RE_THROW();
 		/* not reached */
 	}
@@ -949,12 +1321,10 @@ cdbdisp_dispatchCommand(const char                 *strCommand,
 	 * Dispatch the command.
 	 */
 	makeDispatcherState(ds, nsegdb, 0, cancelOnError);
+	initDispatcherParms(ds, &queryParms);
 	ds->primaryResults->writer_gang = primaryGang;
 
-	cdbdisp_dispatchToGang(ds,
-						   &QueryDispatchType,
-						   &queryParms,
-						   primaryGang, -1, 1, DEFAULT_DISP_DIRECT);
+	cdbdisp_dispatchToGang(ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
 
 	/*
 	 * don't pfree serializedShapshot here, it will be pfree'd when
@@ -1107,9 +1477,7 @@ cdbdisp_dispatchRMCommand(const char *strCommand,
 		CdbCheckDispatchResult((struct CdbDispatcherState *)&ds,
 							   DISPATCH_WAIT_NONE);
 
-		cdbdisp_destroyDispatchResults(ds.primaryResults);
-		cdbdisp_destroyDispatchThreads(ds.dispatchThreads);
-
+		destroyDispatcherState((struct CdbDispatcherState *)&ds);
 		PG_RE_THROW();
 		/* not reached */
 	}
@@ -1118,7 +1486,7 @@ cdbdisp_dispatchRMCommand(const char *strCommand,
 	resultSets = cdbdisp_returnResults(ds.primaryResults, errmsgbuf, numresults);
 
 	/* free memory allocated for the dispatch threads struct */
-	cdbdisp_destroyDispatchThreads(ds.dispatchThreads);
+	destroyDispatcherState((struct CdbDispatcherState *)&ds);
 
 	return resultSets;
 }	/* cdbdisp_dispatchRMCommand */
@@ -1170,8 +1538,7 @@ CdbDispatchUtilityStatement_Internal(struct Node *stmt, bool needTwoPhase, char 
 		CdbCheckDispatchResult((struct CdbDispatcherState *)&ds,
 							   DISPATCH_WAIT_CANCEL);
 
-		cdbdisp_destroyDispatchResults(ds.primaryResults);
-		cdbdisp_destroyDispatchThreads(ds.dispatchThreads);
+		destroyDispatcherState((struct CdbDispatcherState *)&ds);
 
 		PG_RE_THROW();
 		/* not reached */
@@ -1240,201 +1607,30 @@ void remove_subquery_in_RTEs(Node *node)
 }
 
 
-static void
-queryDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms)
-{
-	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
-	TimestampTz beforeSend = 0;
-	long		secs;
-	int			usecs;
-
-	/* Don't use elog, it's not thread-safe */
-	if (DEBUG3 >= log_min_messages)
-		write_log("%s <- %.120s", segdbDesc->whoami, pParms->queryParms.strCommand);
-
-	if (DEBUG1 >= log_min_messages)
-		beforeSend = GetCurrentTimestamp();
-
-	dispatchCommand(dispatchResult, pParms->query_text, pParms->query_text_len);
-
-	if (DEBUG1 >= log_min_messages)
-	{
-		TimestampDifference(beforeSend,
-							GetCurrentTimestamp(),
-							&secs, &usecs);
-
-		if (secs != 0 || usecs > 1000) /* Time > 1ms? */
-			write_log("time for PQsendGpQuery_shared %ld.%06d", secs, usecs);
-	}
-}
-
-
-static void
-queryDispatchDestroy(DispatchCommandParms *pParms, bool isFirst)
-{
-	DispatchCommandQueryParms *pQueryParms = &pParms->queryParms;
-
-	if (pQueryParms->strCommand)
-	{
-		/* Caller frees if desired */
-		pQueryParms->strCommand = NULL;
-	}
-
-	if (pQueryParms->serializedDtxContextInfo)
-	{
-		if (isFirst)
-			pfree(pQueryParms->serializedDtxContextInfo);
-		pQueryParms->serializedDtxContextInfo = NULL;
-	}
-
-	if (pQueryParms->serializedSliceInfo)
-	{
-		if (isFirst)
-			pfree(pQueryParms->serializedSliceInfo);
-		pQueryParms->serializedSliceInfo = NULL;
-	}
-
-	if (pQueryParms->serializedQuerytree)
-	{
-		if (isFirst)
-			pfree(pQueryParms->serializedQuerytree);
-		pQueryParms->serializedQuerytree = NULL;
-	}
-
-	if (pQueryParms->serializedPlantree)
-	{
-		if (isFirst)
-			pfree(pQueryParms->serializedPlantree);
-		pQueryParms->serializedPlantree = NULL;
-	}
-
-	if (pQueryParms->serializedParams)
-	{
-		if (isFirst)
-			pfree(pQueryParms->serializedParams);
-		pQueryParms->serializedParams = NULL;
-	}
-
-	if (pParms->query_text)
-	{
-		/* NOTE: query_text gets malloc()ed by the pqlib code, use
-		 * free() not pfree() */
-		free(pParms->query_text);
-		pParms->query_text = NULL;
-	}
-}
-
-
-static void
-queryDispatchInit(DispatchCommandParms *pParms, void *inputParms)
-{
-	DispatchCommandQueryParms *pQueryParms = (DispatchCommandQueryParms *) inputParms;
-
-	if (pQueryParms->strCommand == NULL || strlen(pQueryParms->strCommand) == 0)
-	{
-		pParms->queryParms.strCommand = NULL;
-		pParms->queryParms.strCommandlen = 0;
-	}
-	else
-	{
-		pParms->queryParms.strCommand = pQueryParms->strCommand;
-		pParms->queryParms.strCommandlen = strlen(pQueryParms->strCommand) + 1;
-	}
-
-	if (pQueryParms->serializedQuerytree == NULL || pQueryParms->serializedQuerytreelen == 0)
-	{
-		pParms->queryParms.serializedQuerytree = NULL;
-		pParms->queryParms.serializedQuerytreelen = 0;
-	}
-	else
-	{
-		pParms->queryParms.serializedQuerytree = pQueryParms->serializedQuerytree;
-		pParms->queryParms.serializedQuerytreelen = pQueryParms->serializedQuerytreelen;
-	}
-
-	if (pQueryParms->serializedPlantree == NULL || pQueryParms->serializedPlantreelen == 0)
-	{
-		pParms->queryParms.serializedPlantree = NULL;
-		pParms->queryParms.serializedPlantreelen = 0;
-	}
-	else
-	{
-		pParms->queryParms.serializedPlantree = pQueryParms->serializedPlantree;
-		pParms->queryParms.serializedPlantreelen = pQueryParms->serializedPlantreelen;
-	}
-
-	if (pQueryParms->serializedParams == NULL || pQueryParms->serializedParamslen == 0)
-	{
-		pParms->queryParms.serializedParams = NULL;
-		pParms->queryParms.serializedParamslen = 0;
-	}
-	else
-	{
-		pParms->queryParms.serializedParams = pQueryParms->serializedParams;
-		pParms->queryParms.serializedParamslen = pQueryParms->serializedParamslen;
-	}
-
-	if (pQueryParms->serializedSliceInfo == NULL || pQueryParms->serializedSliceInfolen == 0)
-	{
-		pParms->queryParms.serializedSliceInfo = NULL;
-		pParms->queryParms.serializedSliceInfolen = 0;
-	}
-	else
-	{
-		pParms->queryParms.serializedSliceInfo = pQueryParms->serializedSliceInfo;
-		pParms->queryParms.serializedSliceInfolen = pQueryParms->serializedSliceInfolen;
-	}
-
-	if (pQueryParms->serializedDtxContextInfo == NULL || pQueryParms->serializedDtxContextInfolen == 0)
-	{
-		pParms->queryParms.serializedDtxContextInfo = NULL;
-		pParms->queryParms.serializedDtxContextInfolen = 0;
-	}
-	else
-	{
-		pParms->queryParms.serializedDtxContextInfo = pQueryParms->serializedDtxContextInfo;
-		pParms->queryParms.serializedDtxContextInfolen = pQueryParms->serializedDtxContextInfolen;
-	}
-
-	pParms->queryParms.rootIdx = pQueryParms->rootIdx;
-
-	if (pQueryParms->seqServerHost == NULL || pQueryParms->seqServerHostlen == 0)
-	{
-		pParms->queryParms.seqServerHost = NULL;
-		pParms->queryParms.seqServerHostlen = 0;
-		pParms->queryParms.seqServerPort = -1;
-	}
-
-	else
-	{
-		pParms->queryParms.seqServerHost = pQueryParms->seqServerHost;
-		pParms->queryParms.seqServerHostlen = pQueryParms->seqServerHostlen;
-		pParms->queryParms.seqServerPort = pQueryParms->seqServerPort;
-	}
-
-	pParms->queryParms.primary_gang_id = pQueryParms->primary_gang_id;
-
-	pParms->query_text = PQbuildGpQueryString(
-		pQueryParms->strCommand, pQueryParms->strCommandlen,
-		pQueryParms->serializedQuerytree, pQueryParms->serializedQuerytreelen,
-		pQueryParms->serializedPlantree, pQueryParms->serializedPlantreelen,
-		pQueryParms->serializedParams, pQueryParms->serializedParamslen,
-		pQueryParms->serializedSliceInfo, pQueryParms->serializedSliceInfolen,
-		pQueryParms->serializedDtxContextInfo, pQueryParms->serializedDtxContextInfolen,
-		0 /* unused flags*/, pParms->cmdID, pParms->localSlice, pQueryParms->rootIdx,
-		pQueryParms->seqServerHost, pQueryParms->seqServerHostlen, pQueryParms->seqServerPort,
-		pQueryParms->primary_gang_id,
-		GetCurrentStatementStartTimestamp(),
-		pParms->sessUserId, pParms->sessUserId_is_super,
-		pParms->outerUserId, pParms->outerUserId_is_super, pParms->currUserId,
-		&pParms->query_text_len);
-
-	if (pParms->query_text == NULL)
-	{
-		elog(ERROR, "could not build query string, total length %d", pParms->query_text_len);
-		pParms->query_text_len = 0;
-	}
-}
-
-
-
+//static void
+//queryDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms)
+//{
+//	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
+//	TimestampTz beforeSend = 0;
+//	long		secs;
+//	int			usecs;
+//
+//	/* Don't use elog, it's not thread-safe */
+//	if (DEBUG3 >= log_min_messages)
+//		write_log("%s <- %.120s", segdbDesc->whoami, pParms->queryParms.strCommand);
+//
+//	if (DEBUG1 >= log_min_messages)
+//		beforeSend = GetCurrentTimestamp();
+//
+//	dispatchCommand(dispatchResult, pParms->query_text, pParms->query_text_len);
+//
+//	if (DEBUG1 >= log_min_messages)
+//	{
+//		TimestampDifference(beforeSend,
+//							GetCurrentTimestamp(),
+//							&secs, &usecs);
+//
+//		if (secs != 0 || usecs > 1000) /* Time > 1ms? */
+//			write_log("time for PQsendGpQuery_shared %ld.%06d", secs, usecs);
+//	}
+//}

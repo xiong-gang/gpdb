@@ -229,12 +229,6 @@ typedef struct CdbDispatchResults
 } CdbDispatchResults;
 
 
-/* Allocate a CdbDispatchResults object in the current memory context. */
-CdbDispatchResults *
-cdbdisp_makeDispatchResults(int     resultCapacity,
-                            int     sliceCapacity,
-                            bool    cancelOnError);
-
 /* Clean up and free a CdbDispatchResults object. */
 void
 cdbdisp_destroyDispatchResults(CdbDispatchResults  *results);

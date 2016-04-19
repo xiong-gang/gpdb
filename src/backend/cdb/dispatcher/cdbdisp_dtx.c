@@ -11,31 +11,179 @@
 
 #include "postgres.h"
 #include "utils/guc.h"
+#include "utils/memutils.h"
 #include "cdb/cdbconn.h"
 #include "cdb/cdbdisp.h"
+#include "cdb/cdbdisp_utils.h"
 #include "cdb/cdbdispatchresult.h"
 #include "cdb/cdbgang.h"
 #include "cdb/cdbutil.h"
 #include "cdb/cdbtm.h"
 #include "cdb/cdbvars.h"
+#include "utils/palloc.h"
 
 #include "storage/procarray.h"      /* updateSharedLocalSnapshot */
 
 #include "gp-libpq-fe.h"
 
-
-static void dtxDispatchCommand(struct CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
-static void dtxDispatchDestroy(DispatchCommandParms *pParms, bool isFirst);
-static void dtxDispatchInit(DispatchCommandParms *pParms, void *inputParms);
-
-DispatchType DtxDispatchType = {
-		GP_DISPATCH_COMMAND_TYPE_DTX_PROTOCOL,
-		dtxDispatchCommand,
-		dtxDispatchInit,
-		dtxDispatchDestroy
-};
-
 static DtxContextInfo TempQDDtxContextInfo = DtxContextInfo_StaticInit;
+static void
+initDtxParms(struct CdbDispatcherState *ds, DispatchCommandDtxProtocolParms *pDtxProtocolParms);
+
+
+/* Special Greenplum Database-only method for executing DTX protocol commands.
+ *
+ * Our goal is to build one copy of the Greenplum Database DTX command, and to
+ * have each dispatcher connection hold pointers into the single copy.
+ * query
+ * So the code below does the same work, roughly as:
+ *
+ * 	if (pqPutMsgStart('T', false, conn) < 0 ||
+ *		pqPutInt(dtxProtocolCommand, 4, conn ) < 0 ||
+ *		pqPutMsgEnd(conn) < 0)
+ *
+ * The remaining work (protocol xmit state, mostly) is done by
+ * PQsendGpQuery_shared().
+ */
+char *
+PQbuildGpDtxProtocolCommand(
+					  int						dtxProtocolCommand,
+					  int						flags,
+					  char*						dtxProtocolCommandLoggingStr,
+					  char*						gid,
+					  int   					gxid,
+					  int						primary_gang_id,
+					  char*                     argument,
+					  int                       argumentLength,
+					  int         		    	*final_len)
+{
+	int loggingStrLen;
+	int gidLen;
+	int	tmp, len;
+	int	total_query_len;
+	char *shared_query, *pos;
+
+	loggingStrLen = strlen(dtxProtocolCommandLoggingStr) + 1;
+	gidLen = strlen(gid) + 1;
+
+	total_query_len = 5 /* overhead */ + 4 /* dtxProtocolCommand */ +
+		   4 /*flags */ + 8 /* lengths */ +
+		   loggingStrLen + gidLen + 4 /* gxid */ + 8 /* gang ids */ +
+		   argumentLength + 4 /* argumentLength field */;
+
+	shared_query = palloc(total_query_len);
+	if (shared_query == NULL)
+	{
+		/* tell our caller how much memory we wanted */
+		if (final_len != NULL)
+			*final_len = total_query_len;
+		return NULL;
+	}
+
+	pos = shared_query;
+
+	*pos++ = 'T';
+
+	pos += 4; /* place holder for message length */
+
+	tmp = htonl(dtxProtocolCommand);
+	memcpy(pos, &tmp, 4);
+	pos += 4;
+
+	tmp = htonl(flags);
+	memcpy(pos, &tmp, 4);
+	pos += 4;
+
+	tmp = htonl(loggingStrLen);
+	memcpy(pos, &tmp, 4);
+	pos += 4;
+
+	memcpy(pos, dtxProtocolCommandLoggingStr, loggingStrLen);
+	pos += loggingStrLen;
+
+	tmp = htonl(gidLen);
+	memcpy(pos, &tmp, 4);
+	pos += 4;
+
+	memcpy(pos, gid, gidLen);
+	pos += gidLen;
+
+	tmp = htonl(gxid);
+	memcpy(pos, &tmp, 4);
+	pos += 4;
+
+	tmp = htonl(primary_gang_id);
+	memcpy(pos, &tmp, 4);
+	pos += 4;
+
+	tmp = htonl(argumentLength);
+	memcpy(pos, &tmp, 4);
+	pos += 4;
+
+	if ( argumentLength > 0 )
+		memcpy(pos, argument, argumentLength);
+	pos += argumentLength;
+
+	len = pos - shared_query - 1;
+
+	/* fill in length placeholder */
+	tmp = htonl(len);
+	memcpy(shared_query+1, &tmp, 4);
+
+	if (final_len)
+		*final_len = len + 1;
+
+	return shared_query;
+}
+
+void initDtxParms(struct CdbDispatcherState *ds, DispatchCommandDtxProtocolParms *pDtxProtocolParms)
+{
+	CdbDispatchCmdThreads *dThreads = ds->dispatchThreads;
+	int i = 0;
+	int len = 0;
+	DispatchCommandParms *pParms = NULL;
+
+	MemoryContext oldContext = MemoryContextSwitchTo(ds->dispatchStateContext);
+
+	char *queryText = PQbuildGpDtxProtocolCommand(
+            (int)pDtxProtocolParms->dtxProtocolCommand,
+            pDtxProtocolParms->flags,
+            pDtxProtocolParms->dtxProtocolCommandLoggingStr,
+            pDtxProtocolParms->gid,
+            pDtxProtocolParms->gxid,
+            pDtxProtocolParms->primary_gang_id,
+            pDtxProtocolParms->argument,
+            pDtxProtocolParms->argumentLength,
+            &len);
+
+	if (queryText == NULL)
+	{
+		elog(ERROR, "could not build query string, total length %d", len);
+	}
+
+//	DispatchCommandDtxProtocolParms *pNewDtxParms = palloc0(sizeof(DispatchCommandDtxProtocolParms));
+//	pNewDtxParms->dtxProtocolCommand = pDtxProtocolParms->dtxProtocolCommand;
+//	pNewDtxParms->flags = pDtxProtocolParms->flags;
+//	pNewDtxParms->dtxProtocolCommandLoggingStr = pDtxProtocolParms->dtxProtocolCommandLoggingStr;
+//	if (strlen(pDtxProtocolParms->gid) >= TMGIDSIZE)
+//		elog(PANIC, "Distribute transaction identifier too long (%d)",
+//			 (int)strlen(pDtxProtocolParms->gid));
+//	memcpy(pNewDtxParms->gid, pDtxProtocolParms->gid, TMGIDSIZE);
+//	pNewDtxParms->gxid = pDtxProtocolParms->gxid;
+//	pNewDtxParms->primary_gang_id = pDtxProtocolParms->primary_gang_id;
+//	pNewDtxParms->argument = pDtxProtocolParms->argument;
+//	pNewDtxParms->argumentLength = pDtxProtocolParms->argumentLength;
+
+	for (i = 0; i < dThreads->dispatchCommandParmsArSize; i++)
+	{
+		pParms = &dThreads->dispatchCommandParmsAr[i];
+//		pParms->queryParms = pNewDtxParms;
+		pParms->query_text = queryText;
+		pParms->query_text_len = len;
+	}
+	MemoryContextSwitchTo(oldContext);
+}
+
 /*
  * cdbdisp_dispatchDtxProtocolCommand:
  * Sends a non-cancelable command to all segment dbs
@@ -103,13 +251,12 @@ cdbdisp_dispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	/*
      * Dispatch the command.
      */
-	makeDispatcherState(ds, nsegdb, 0, /* cancelOnError */ false);
+	makeDispatcherState(&ds, nsegdb, 0, /* cancelOnError */ false);
+	initDtxParms(&ds, &dtxProtocolParms);
 
 	ds.primaryResults->writer_gang = primaryGang;
 
-	cdbdisp_dispatchToGang(&ds, &DtxDispatchType,
-						   &dtxProtocolParms,
-						   primaryGang, -1, 1, direct);
+	cdbdisp_dispatchToGang(&ds, primaryGang, -1, direct);
 
 	/* Wait for all QEs to finish.	Don't cancel. */
 	CdbCheckDispatchResult(&ds, DISPATCH_WAIT_NONE);
@@ -126,7 +273,7 @@ cdbdisp_dispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	resultSets = cdbdisp_returnResults(ds.primaryResults, errmsgbuf, numresults);
 
 	/* free memory allocated for the dispatch threads struct */
-	cdbdisp_destroyDispatchThreads(ds.dispatchThreads);
+	destroyDispatcherState(&ds);
 
 	return resultSets;
 }	/* cdbdisp_dispatchDtxProtocolCommand */
@@ -280,93 +427,45 @@ qdSerializeDtxContextInfo(int *size, bool wantSnapshot, bool inCursor, int txnOp
 }
 
 
+//
+//static void
+//dtxDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms)
+//{
+//	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
+//	TimestampTz beforeSend = 0;
+//	long		secs;
+//	int			usecs;
+//
+//	if (Debug_dtm_action == DEBUG_DTM_ACTION_DELAY &&
+//		Debug_dtm_action_target == DEBUG_DTM_ACTION_TARGET_PROTOCOL &&
+//		Debug_dtm_action_protocol == pParms->dtxProtocolParms.dtxProtocolCommand &&
+//		Debug_dtm_action_segment == dispatchResult->segdbDesc->segment_database_info->segindex)
+//	{
+//		write_log("Delaying '%s' broadcast for segment %d by %d milliseconds.",
+//				  DtxProtocolCommandToString(Debug_dtm_action_protocol),
+//				  Debug_dtm_action_segment,
+//				  Debug_dtm_action_delay_ms);
+//		pg_usleep(Debug_dtm_action_delay_ms * 1000);
+//	}
+//
+//	/* Don't use elog, it's not thread-safe */
+//	if (DEBUG3 >= log_min_messages)
+//		write_log("%s <- dtx protocol command %d", segdbDesc->whoami, (int)pParms->dtxProtocolParms.dtxProtocolCommand);
+//
+//	if (DEBUG1 >= log_min_messages)
+//		beforeSend = GetCurrentTimestamp();
+//
+//	dispatchCommand(dispatchResult, pParms->query_text, pParms->query_text_len);
+//
+//	if (DEBUG1 >= log_min_messages)
+//	{
+//		TimestampDifference(beforeSend,
+//							GetCurrentTimestamp(),
+//							&secs, &usecs);
+//
+//		if (secs != 0 || usecs > 1000) /* Time > 1ms? */
+//			write_log("time for PQsendGpQuery_shared %ld.%06d", secs, usecs);
+//	}
+//}
+//
 
-static void
-dtxDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms)
-{
-	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
-	TimestampTz beforeSend = 0;
-	long		secs;
-	int			usecs;
-
-	if (Debug_dtm_action == DEBUG_DTM_ACTION_DELAY &&
-		Debug_dtm_action_target == DEBUG_DTM_ACTION_TARGET_PROTOCOL &&
-		Debug_dtm_action_protocol == pParms->dtxProtocolParms.dtxProtocolCommand &&
-		Debug_dtm_action_segment == dispatchResult->segdbDesc->segment_database_info->segindex)
-	{
-		write_log("Delaying '%s' broadcast for segment %d by %d milliseconds.",
-				  DtxProtocolCommandToString(Debug_dtm_action_protocol),
-				  Debug_dtm_action_segment,
-				  Debug_dtm_action_delay_ms);
-		pg_usleep(Debug_dtm_action_delay_ms * 1000);
-	}
-
-	/* Don't use elog, it's not thread-safe */
-	if (DEBUG3 >= log_min_messages)
-		write_log("%s <- dtx protocol command %d", segdbDesc->whoami, (int)pParms->dtxProtocolParms.dtxProtocolCommand);
-
-	if (DEBUG1 >= log_min_messages)
-		beforeSend = GetCurrentTimestamp();
-
-	dispatchCommand(dispatchResult, pParms->query_text, pParms->query_text_len);
-
-	if (DEBUG1 >= log_min_messages)
-	{
-		TimestampDifference(beforeSend,
-							GetCurrentTimestamp(),
-							&secs, &usecs);
-
-		if (secs != 0 || usecs > 1000) /* Time > 1ms? */
-			write_log("time for PQsendGpQuery_shared %ld.%06d", secs, usecs);
-	}
-}
-
-
-static void
-dtxDispatchDestroy(DispatchCommandParms *pParms, bool isFirst)
-{
-	DispatchCommandDtxProtocolParms *pDtxProtocolParms = &pParms->dtxProtocolParms;
-	pDtxProtocolParms->dtxProtocolCommand = 0;
-	if (pParms->query_text)
-	{
-		/* NOTE: query_text gets malloc()ed by the pqlib code, use
-		 * free() not pfree() */
-		free(pParms->query_text);
-		pParms->query_text = NULL;
-	}
-}
-
-
-static void
-dtxDispatchInit(DispatchCommandParms *pParms, void *inputParms)
-{
-	DispatchCommandDtxProtocolParms *pDtxProtocolParms = (DispatchCommandDtxProtocolParms *) inputParms;
-
-	pParms->dtxProtocolParms.dtxProtocolCommand = pDtxProtocolParms->dtxProtocolCommand;
-	pParms->dtxProtocolParms.flags = pDtxProtocolParms->flags;
-	pParms->dtxProtocolParms.dtxProtocolCommandLoggingStr = pDtxProtocolParms->dtxProtocolCommandLoggingStr;
-	if (strlen(pDtxProtocolParms->gid) >= TMGIDSIZE)
-		elog(PANIC, "Distribute transaction identifier too long (%d)",
-			 (int)strlen(pDtxProtocolParms->gid));
-	memcpy(pParms->dtxProtocolParms.gid, pDtxProtocolParms->gid, TMGIDSIZE);
-	pParms->dtxProtocolParms.gxid = pDtxProtocolParms->gxid;
-	pParms->dtxProtocolParms.primary_gang_id = pDtxProtocolParms->primary_gang_id;
-	pParms->dtxProtocolParms.argument = pDtxProtocolParms->argument;
-	pParms->dtxProtocolParms.argumentLength = pDtxProtocolParms->argumentLength;
-    pParms->query_text = PQbuildGpDtxProtocolCommand(
-            (int)pParms->dtxProtocolParms.dtxProtocolCommand,
-            pParms->dtxProtocolParms.flags,
-            pParms->dtxProtocolParms.dtxProtocolCommandLoggingStr,
-            pParms->dtxProtocolParms.gid,
-            pParms->dtxProtocolParms.gxid,
-            pParms->dtxProtocolParms.primary_gang_id,
-            pParms->dtxProtocolParms.argument,
-            pParms->dtxProtocolParms.argumentLength,
-            &pParms->query_text_len);
-
-	if (pParms->query_text == NULL)
-	{
-		elog(ERROR, "could not build query string, total length %d", pParms->query_text_len);
-		pParms->query_text_len = 0;
-	}
-}
