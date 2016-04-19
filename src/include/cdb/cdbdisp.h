@@ -180,7 +180,7 @@ typedef struct DispatchType
 	GpDispatchCommandType type;
 	void (*dispatch)(struct CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
 	void (*init)(DispatchCommandParms *pParms, void *inpurtParms);
-	void (*destroy)(DispatchCommandParms *pParms);
+	void (*destroy)(DispatchCommandParms *pParms, bool isFirst);
 }DispatchType;
 
 extern DispatchType DtxDispatchType;
@@ -193,7 +193,6 @@ typedef struct CdbDispatchCmdThreads
 	struct DispatchCommandParms *dispatchCommandParmsAr;
 	int	dispatchCommandParmsArSize;
 	int	threadCount;
-	
 }   CdbDispatchCmdThreads;
 
 typedef struct CdbDispatchDirectDesc

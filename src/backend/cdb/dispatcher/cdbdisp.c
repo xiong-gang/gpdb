@@ -123,15 +123,6 @@ static bool                     /* returns true if command complete */
 processResults(CdbDispatchResult   *dispatchResult);
 
 
-static void
-addSegDBToDispatchThreadPool(DispatchCommandParms  *ParmsAr,
-                             int                    segdbs_in_thread_pool,
-							 DispatchType		   *mppDispatchCommandType,
-							 void				   *commandTypeParms,
-							 int					sliceId,
-							 CdbDispatchResult     *dispatchResult);
-
-
 
 
 
@@ -229,8 +220,7 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 	int	i,
 		max_threads,
 		segdbs_in_thread_pool = 0,
-		x,
-		newThreads = 0;	
+		newThreads = 0;
 	int db_descriptors_size;
 	SegmentDatabaseDescriptor *db_descriptors;
 
@@ -276,11 +266,7 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 	
 	Assert(db_descriptors_size <= largestGangsize());
 
-	if (gp_connections_per_thread == 0)
-		max_threads = 1;	/* one, not zero, because we need to allocate one param block */
-	else
-		max_threads = 1 + (largestGangsize() - 1) / gp_connections_per_thread;
-	
+
 	if (DispatchContext == NULL)
 	{
 		DispatchContext = AllocSetContextCreate(TopMemoryContext,
@@ -289,43 +275,23 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 												ALLOCSET_DEFAULT_INITSIZE,
 												ALLOCSET_DEFAULT_MAXSIZE);
 	}
-	Assert(DispatchContext != NULL);
 	
-	oldContext = MemoryContextSwitchTo(DispatchContext);
-
-	if (ds->dispatchThreads == NULL)
+	Assert(DispatchContext != NULL);
+	Assert(ds->dispatchThreads != NULL);
+	/*
+	 * If we attempt to reallocate, there is a race here: we
+	 * know that we have threads running using the
+	 * dispatchCommandParamsAr! If we reallocate we
+	 * potentially yank it out from under them! Don't do
+	 * it!
+	 */
+	max_threads = getMaxThreads();
+	if (ds->dispatchThreads->dispatchCommandParmsArSize < (ds->dispatchThreads->threadCount + max_threads))
 	{
-		/* the maximum number of command parameter blocks we'll possibly need is
-		 * one for each slice on the primary gang. Max sure that we
-		 * have enough -- once we've created the command block we're stuck with it
-		 * for the duration of this statement (including CDB-DTM ). 
-		 * 1 * maxthreads * slices for each primary
-		 * X 2 for good measure ? */
-		int paramCount = max_threads * 4 * Max(maxSlices, 5);
-
-		elog(DEBUG4, "dispatcher: allocating command array with maxslices %d paramCount %d", maxSlices, paramCount);
-			
-		ds->dispatchThreads = cdbdisp_makeDispatchThreads(paramCount);
-	}
-	else
-	{
-		/*
-		 * If we attempt to reallocate, there is a race here: we
-		 * know that we have threads running using the
-		 * dispatchCommandParamsAr! If we reallocate we
-		 * potentially yank it out from under them! Don't do
-		 * it!
-		 */
-		if (ds->dispatchThreads->dispatchCommandParmsArSize < (ds->dispatchThreads->threadCount + max_threads))
-		{
-			elog(ERROR, "Attempted to reallocate dispatchCommandParmsAr while other threads still running size %d new threadcount %d",
-				 ds->dispatchThreads->dispatchCommandParmsArSize, ds->dispatchThreads->threadCount + max_threads);
-		}
+		elog(ERROR, "Attempted to reallocate dispatchCommandParmsAr while other threads still running size %d new threadcount %d",
+			 ds->dispatchThreads->dispatchCommandParmsArSize, ds->dispatchThreads->threadCount + max_threads);
 	}
 
-	MemoryContextSwitchTo(oldContext);
-
-	x = 0;
 	/*
 	 * Create the thread parms structures based targetSet parameter.
 	 * This will add the segdbDesc pointers appropriate to the
@@ -335,8 +301,11 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 	for (i = 0; i < db_descriptors_size; i++)
 	{
 		CdbDispatchResult *qeResult;
-
 		segdbDesc = &db_descriptors[i];
+		DispatchCommandParms *pParms = NULL;
+		int parmsIndex = 0;
+		bool needInitParms = false;
+		int maxfds = 0;
 
 		Assert(segdbDesc != NULL);
 
@@ -364,12 +333,35 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 			segdbDesc->error_message.len)
 			cdbdisp_mergeConnectionErrors(qeResult, segdbDesc);
 
-		addSegDBToDispatchThreadPool(ds->dispatchThreads->dispatchCommandParmsAr + ds->dispatchThreads->threadCount,
-									 x,
-					   				 mppDispatchCommandType,
-					   				 commandTypeParms,
-									 sliceIndex,
-                                     qeResult);
+		if (gp_connections_per_thread == 0)
+		{
+			parmsIndex = 0;
+			maxfds = db_descriptors_size;
+			needInitParms = segdbs_in_thread_pool == 0;
+		}
+		else
+		{
+			parmsIndex = segdbs_in_thread_pool / gp_connections_per_thread;
+			maxfds = gp_connections_per_thread;
+			needInitParms = segdbs_in_thread_pool % gp_connections_per_thread == 0;
+		}
+
+		/*
+		 * The proper index into the DispatchCommandParms array is computed, based on
+		 * having gp_connections_per_thread segdbDesc's in each thread.
+		 * If it's the first access to an array location, determined
+		 * by (*segdbCount) % gp_connections_per_thread == 0,
+		 * then we initialize the struct members for that array location first.
+		 */
+		pParms = &(ds->dispatchThreads->dispatchCommandParmsAr + ds->dispatchThreads->threadCount)[parmsIndex];
+		if(needInitParms)
+		{
+			newThreads++;
+			oldContext = MemoryContextSwitchTo(DispatchContext);
+			cdbdisp_fillParms(pParms, mppDispatchCommandType, sliceIndex, maxfds, commandTypeParms);
+			MemoryContextSwitchTo(oldContext);
+		}
+		pParms->dispatchResultPtrArray[pParms->db_count++] = qeResult;
 
 		/*
 		 * This CdbDispatchResult/SegmentDatabaseDescriptor pair will be
@@ -380,32 +372,8 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 		 */
 		qeResult->stillRunning = true;
 
-		x++;
+		segdbs_in_thread_pool++;
 	}
-	segdbs_in_thread_pool = x;
-
-	/*
-	 * Compute the thread count based on how many segdbs were added into the
-	 * thread pool, knowing that each thread handles gp_connections_per_thread
-	 * segdbs.
-	 */
-	if (segdbs_in_thread_pool == 0)
-		newThreads += 0;
-	else
-		if (gp_connections_per_thread == 0)
-			newThreads += 1;
-		else
-			newThreads += 1 + (segdbs_in_thread_pool - 1) / gp_connections_per_thread;
-
-	oldContext = MemoryContextSwitchTo(DispatchContext);
-	for (i = 0; i < newThreads; i++)
-	{
-		DispatchCommandParms *pParms = &(ds->dispatchThreads->dispatchCommandParmsAr + ds->dispatchThreads->threadCount)[i];
-
-		pParms->fds = (struct pollfd *) palloc0(sizeof(struct pollfd) * pParms->db_count);
-		pParms->nfds = pParms->db_count;
-	}
-	MemoryContextSwitchTo(oldContext);
 
 	/*
 	 * Create the threads. (which also starts the dispatching).
@@ -465,59 +433,6 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 	elog(DEBUG4, "dispatchToGang: Total threads now %d", ds->dispatchThreads->threadCount);
 }	/* cdbdisp_dispatchToGang */
 
-
-/*
- * addSegDBToDispatchThreadPool
- * Helper function used to add a segdb's segdbDesc to the thread pool to have commands dispatched to.
- * It figures out which thread will handle it, based on the setting of
- * gp_connections_per_thread.
- */
-static void
-addSegDBToDispatchThreadPool(DispatchCommandParms  *ParmsAr,
-                             int                    segdbs_in_thread_pool,
-						     DispatchType		   *mppDispatchCommandType,
-						     void				   *commandTypeParms,
-                             int					sliceId,
-                             CdbDispatchResult     *dispatchResult)
-{
-	DispatchCommandParms *pParms;
-	int			ParmsIndex;
-	bool 		firsttime = false;
-
-	/*
-	 * The proper index into the DispatchCommandParms array is computed, based on
-	 * having gp_connections_per_thread segdbDesc's in each thread.
-	 * If it's the first access to an array location, determined
-	 * by (*segdbCount) % gp_connections_per_thread == 0,
-	 * then we initialize the struct members for that array location first.
-	 */
-	if (gp_connections_per_thread == 0)
-		ParmsIndex = 0;
-	else
-		ParmsIndex = segdbs_in_thread_pool / gp_connections_per_thread;
-	pParms = &ParmsAr[ParmsIndex];
-
-	/* 
-	 * First time through?
-	 */
-
-	if (gp_connections_per_thread==0)
-		firsttime = segdbs_in_thread_pool == 0;
-	else
-		firsttime = segdbs_in_thread_pool % gp_connections_per_thread == 0;
-
-	if (firsttime)
-	{
-		cdbdisp_fillParms(pParms, mppDispatchCommandType, sliceId, commandTypeParms);
-	}
-
-	/*
-	 * Just add to the end of the used portion of the dispatchResultPtrArray
-	 * and bump the count of members
-	 */
-	pParms->dispatchResultPtrArray[pParms->db_count++] = dispatchResult;
-
-}	/* addSegDBToDispatchThreadPool */
 
 
 /*
@@ -2103,29 +2018,9 @@ cdbdisp_destroyDispatchThreads(CdbDispatchCmdThreads *dThreads)
 	for (i = 0; i < dThreads->dispatchCommandParmsArSize; i++)
 	{
 		pParms = &(dThreads->dispatchCommandParmsAr[i]);
-		if (pParms->dispatchResultPtrArray)
-		{
-			pfree(pParms->dispatchResultPtrArray);
-			pParms->dispatchResultPtrArray = NULL;
-		}
-		if (pParms->query_text)
-		{
-			/* NOTE: query_text gets malloc()ed by the pqlib code, use
-			 * free() not pfree() */
-			free(pParms->query_text);
-			pParms->query_text = NULL;
-		}
+		bool isFirst = (i == 0);
 
-		if (pParms->nfds != 0)
-		{
-			if (pParms->fds != NULL)
-				pfree(pParms->fds);
-			pParms->fds = NULL;
-			pParms->nfds = 0;
-		}
-		
-		if(i == 0)
-			(*pParms->mppDispatchCommandType->destroy)(pParms);
+		cdbdisp_freeParms(pParms, isFirst);
 	}
 	
 	pfree(dThreads->dispatchCommandParmsAr);	

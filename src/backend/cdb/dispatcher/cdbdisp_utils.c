@@ -1,5 +1,11 @@
 #include "postgres.h"
 
+#ifdef HAVE_POLL_H
+#include <poll.h>
+#endif
+#ifdef HAVE_SYS_POLL_H
+#include <sys/poll.h>
+#endif
 #include "gp-libpq-fe.h"               /* prerequisite for libpq-int.h */
 #include "gp-libpq-int.h"              /* PQExpBufferData */
 #include "cdb/cdbpartition.h"
@@ -9,9 +15,18 @@
 #include "cdb/cdbdisp_utils.h"
 #include "cdb/cdbdispatchresult.h"
 
+int getMaxThreads()
+{
+	int maxThreads = 0;
+	if (gp_connections_per_thread == 0)
+		maxThreads = 1;	/* one, not zero, because we need to allocate one param block */
+	else
+		maxThreads = 1 + (largestGangsize() - 1) / gp_connections_per_thread;
+	return maxThreads;
+}
 
 void cdbdisp_fillParms(DispatchCommandParms *pParms, DispatchType *mppDispatchCommandType,
-						int sliceId, void *commandTypeParms)
+						int sliceId, int maxfds, void *commandTypeParms)
 {
 	pParms->localSlice = sliceId;
 	pParms->cmdID = gp_command_count;
@@ -22,6 +37,9 @@ void cdbdisp_fillParms(DispatchCommandParms *pParms, DispatchType *mppDispatchCo
 	pParms->sessUserId_is_super = superuser_arg(GetSessionUserId());
 	pParms->outerUserId_is_super = superuser_arg(GetOuterUserId());
 
+	pParms->nfds = maxfds;
+	pParms->fds = (struct pollfd *) palloc0(sizeof(struct pollfd) * maxfds);
+
 	pParms->dispatchResultPtrArray =
 		(CdbDispatchResult **) palloc0((gp_connections_per_thread == 0 ? largestGangsize() : gp_connections_per_thread)*
 									   sizeof(CdbDispatchResult *));
@@ -29,14 +47,41 @@ void cdbdisp_fillParms(DispatchCommandParms *pParms, DispatchType *mppDispatchCo
 
 	pParms->mppDispatchCommandType = mppDispatchCommandType;
 	(*mppDispatchCommandType->init)(pParms, (void*)commandTypeParms);
-//	if (pParms->query_text == NULL)
-//	{
-//		write_log("could not build query string, total length %d", pParms->query_text_len);
-//		pParms->query_text_len = 0;
-//		return false;
-//	}
 }
 
+void cdbdisp_freeParms(DispatchCommandParms *pParms, bool isFirst)
+{
+	if (pParms->dispatchResultPtrArray)
+	{
+		pfree(pParms->dispatchResultPtrArray);
+		pParms->dispatchResultPtrArray = NULL;
+	}
+
+	if (pParms->fds != NULL)
+	{
+		pfree(pParms->fds);
+		pParms->fds = NULL;
+	}
+
+	(*pParms->mppDispatchCommandType->destroy)(pParms, isFirst);
+}
+
+void makeDispatcherState(CdbDispatcherState	*ds, int nResults, int nSlices, bool cancelOnError)
+{
+	int maxThreads = getMaxThreads();
+	/* the maximum number of command parameter blocks we'll possibly need is
+	 * one for each slice on the primary gang. Max sure that we
+	 * have enough -- once we've created the command block we're stuck with it
+	 * for the duration of this statement (including CDB-DTM ).
+	 * 1 * maxthreads * slices for each primary
+	 * X 2 for good measure ? */
+	int paramCount = maxThreads * 4 * Max(nSlices, 5);
+
+	ds->primaryResults = cdbdisp_makeDispatchResults(nResults, nSlices, cancelOnError);
+	//todo: memory context
+	ds->dispatchThreads = cdbdisp_makeDispatchThreads(paramCount);
+	elog(DEBUG4, "dispatcher: allocating command array with maxslices %d paramCount %d", nSlices, paramCount);
+}
 
 HTAB *
 process_aotupcounts(PartitionNode *parts, HTAB *ht,

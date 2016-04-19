@@ -25,7 +25,7 @@
 
 
 static void dtxDispatchCommand(struct CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
-static void dtxDispatchDestroy(DispatchCommandParms *pParms);
+static void dtxDispatchDestroy(DispatchCommandParms *pParms, bool isFirst);
 static void dtxDispatchInit(DispatchCommandParms *pParms, void *inputParms);
 
 DispatchType DtxDispatchType = {
@@ -103,9 +103,7 @@ cdbdisp_dispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	/*
      * Dispatch the command.
      */
-    ds.dispatchThreads = NULL;
-
-	ds.primaryResults = cdbdisp_makeDispatchResults(nsegdb, 0, /* cancelOnError */ false);
+	makeDispatcherState(ds, nsegdb, 0, /* cancelOnError */ false);
 
 	ds.primaryResults->writer_gang = primaryGang;
 
@@ -325,10 +323,17 @@ dtxDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pPar
 
 
 static void
-dtxDispatchDestroy(DispatchCommandParms *pParms)
+dtxDispatchDestroy(DispatchCommandParms *pParms, bool isFirst)
 {
 	DispatchCommandDtxProtocolParms *pDtxProtocolParms = &pParms->dtxProtocolParms;
 	pDtxProtocolParms->dtxProtocolCommand = 0;
+	if (pParms->query_text)
+	{
+		/* NOTE: query_text gets malloc()ed by the pqlib code, use
+		 * free() not pfree() */
+		free(pParms->query_text);
+		pParms->query_text = NULL;
+	}
 }
 
 
@@ -358,4 +363,10 @@ dtxDispatchInit(DispatchCommandParms *pParms, void *inputParms)
             pParms->dtxProtocolParms.argument,
             pParms->dtxProtocolParms.argumentLength,
             &pParms->query_text_len);
+
+	if (pParms->query_text == NULL)
+	{
+		elog(ERROR, "could not build query string, total length %d", pParms->query_text_len);
+		pParms->query_text_len = 0;
+	}
 }

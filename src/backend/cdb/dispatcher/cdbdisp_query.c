@@ -57,7 +57,7 @@ static int fillSliceVector(SliceTable * sliceTable, int sliceIndex, sliceVec *sl
 extern bool Test_print_direct_dispatch_info;
 
 static void queryDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pParms);
-static void queryDispatchDestroy(DispatchCommandParms *pParms);
+static void queryDispatchDestroy(DispatchCommandParms *pParms, bool isFirst);
 static void queryDispatchInit(DispatchCommandParms *pParms, void *inputParms);
 
 DispatchType QueryDispatchType = {
@@ -88,9 +88,6 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 	if (log_dispatch_stats)
 		ResetUsage();
 
-	ds->primaryResults = NULL;
-	ds->dispatchThreads = NULL;
-
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 
 	if (sliceTbl)
@@ -114,10 +111,7 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 		nSlices = fillSliceVector(sliceTbl, rootIdx, sliceVector, sliceLim);
 	}
 
-	/* Allocate result array with enough slots for QEs of primary gangs. */
-	ds->primaryResults = cdbdisp_makeDispatchResults(nSlices * largestGangsize(),
-												   sliceLim,
-												   cancelOnError);
+	makeDispatcherState(ds, nSlices * largestGangsize(), sliceLim, cancelOnError);
 
 	cdb_total_plans++;
 	cdb_total_slices += nSlices;
@@ -783,9 +777,6 @@ cdbdisp_dispatchSetCommandToAllGangs(const char	*strCommand,
 	int			nsegdb = getgpsegmentCount();
 	int			gangCount;
 
-	ds->primaryResults = NULL;
-	ds->dispatchThreads = NULL;
-
 	MemSet(&queryParms, 0, sizeof(queryParms));
 	queryParms.strCommand = strCommand;
 	queryParms.serializedQuerytree = serializedQuerytree;
@@ -814,7 +805,7 @@ cdbdisp_dispatchSetCommandToAllGangs(const char	*strCommand,
 	 * Dispatch the command.
 	 */
 	gangCount = 1 + list_length(idleReaderGangs);
-	ds->primaryResults = cdbdisp_makeDispatchResults(nsegdb * gangCount, 0, cancelOnError);
+	makeDispatcherState(ds, nsegdb * gangCount, 0, cancelOnError);
 
 	ds->primaryResults->writer_gang = primaryGang;
 	cdbdisp_dispatchToGang(ds,
@@ -929,9 +920,6 @@ cdbdisp_dispatchCommand(const char                 *strCommand,
     	elog((Debug_print_full_dtm ? LOG : DEBUG3), "cdbdisp_dispatchCommand: %.50s (needTwoPhase = %s)",
     	     strCommand, (needTwoPhase ? "true" : "false"));
 
-    ds->primaryResults = NULL;
-	ds->dispatchThreads = NULL;
-
 	MemSet(&queryParms, 0, sizeof(queryParms));
 	queryParms.strCommand = strCommand;
 	queryParms.serializedQuerytree = serializedQuerytree;
@@ -960,7 +948,7 @@ cdbdisp_dispatchCommand(const char                 *strCommand,
 	/*
 	 * Dispatch the command.
 	 */
-	ds->primaryResults = cdbdisp_makeDispatchResults(nsegdb, 0, cancelOnError);
+	makeDispatcherState(ds, nsegdb, 0, cancelOnError);
 	ds->primaryResults->writer_gang = primaryGang;
 
 	cdbdisp_dispatchToGang(ds,
@@ -1282,7 +1270,7 @@ queryDispatchCommand(CdbDispatchResult *dispatchResult, DispatchCommandParms *pP
 
 
 static void
-queryDispatchDestroy(DispatchCommandParms *pParms)
+queryDispatchDestroy(DispatchCommandParms *pParms, bool isFirst)
 {
 	DispatchCommandQueryParms *pQueryParms = &pParms->queryParms;
 
@@ -1294,32 +1282,45 @@ queryDispatchDestroy(DispatchCommandParms *pParms)
 
 	if (pQueryParms->serializedDtxContextInfo)
 	{
-		pfree(pQueryParms->serializedDtxContextInfo);
+		if (isFirst)
+			pfree(pQueryParms->serializedDtxContextInfo);
 		pQueryParms->serializedDtxContextInfo = NULL;
 	}
 
 	if (pQueryParms->serializedSliceInfo)
 	{
-		pfree(pQueryParms->serializedSliceInfo);
+		if (isFirst)
+			pfree(pQueryParms->serializedSliceInfo);
 		pQueryParms->serializedSliceInfo = NULL;
 	}
 
 	if (pQueryParms->serializedQuerytree)
 	{
-		pfree(pQueryParms->serializedQuerytree);
+		if (isFirst)
+			pfree(pQueryParms->serializedQuerytree);
 		pQueryParms->serializedQuerytree = NULL;
 	}
 
 	if (pQueryParms->serializedPlantree)
 	{
-		pfree(pQueryParms->serializedPlantree);
+		if (isFirst)
+			pfree(pQueryParms->serializedPlantree);
 		pQueryParms->serializedPlantree = NULL;
 	}
 
 	if (pQueryParms->serializedParams)
 	{
-		pfree(pQueryParms->serializedParams);
+		if (isFirst)
+			pfree(pQueryParms->serializedParams);
 		pQueryParms->serializedParams = NULL;
+	}
+
+	if (pParms->query_text)
+	{
+		/* NOTE: query_text gets malloc()ed by the pqlib code, use
+		 * free() not pfree() */
+		free(pParms->query_text);
+		pParms->query_text = NULL;
 	}
 }
 
@@ -1327,7 +1328,6 @@ queryDispatchDestroy(DispatchCommandParms *pParms)
 static void
 queryDispatchInit(DispatchCommandParms *pParms, void *inputParms)
 {
-
 	DispatchCommandQueryParms *pQueryParms = (DispatchCommandQueryParms *) inputParms;
 
 	if (pQueryParms->strCommand == NULL || strlen(pQueryParms->strCommand) == 0)
@@ -1428,6 +1428,12 @@ queryDispatchInit(DispatchCommandParms *pParms, void *inputParms)
 		pParms->sessUserId, pParms->sessUserId_is_super,
 		pParms->outerUserId, pParms->outerUserId_is_super, pParms->currUserId,
 		&pParms->query_text_len);
+
+	if (pParms->query_text == NULL)
+	{
+		elog(ERROR, "could not build query string, total length %d", pParms->query_text_len);
+		pParms->query_text_len = 0;
+	}
 }
 
 

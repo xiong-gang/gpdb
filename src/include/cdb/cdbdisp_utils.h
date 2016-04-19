@@ -14,7 +14,9 @@
 #include "cdb/cdbdisp.h"
 #include "miscadmin.h"
 
+int getMaxThreads();
 void cdbdisp_fillParms(DispatchCommandParms *pParms, DispatchType *mppDispatchCommandType,
-						int sliceId, void *commandTypeParms);
-
+						int sliceId, int maxfds, void *commandTypeParms);
+void cdbdisp_freeParms(DispatchCommandParms *pParms, bool isFirst);
+void makeDispatcherState(CdbDispatcherState	*ds, int nResults, int nSlices, bool cancelOnError);
 #endif   /* CDBDISP_UTILS_H */
