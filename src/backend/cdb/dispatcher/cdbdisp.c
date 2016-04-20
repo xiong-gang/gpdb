@@ -19,7 +19,7 @@
 #include <sys/poll.h>
 #endif
 
-#define TEST_DISPATCHER
+//#define TEST_DISPATCHER
 
 #include "catalog/catquery.h"
 #include "executor/execdesc.h"	/* QueryDesc */
@@ -88,6 +88,14 @@ extern pthread_t main_tid;
 CdbDispatchDirectDesc default_dispatch_direct_desc = {false, 0, {0}};
 
 /*
+ * Counter to indicate there are some dispatch threads running.  This will
+ * be incremented at the beginning of dispatch threads and decremented at
+ * the end of them.
+ */
+static volatile int32 RunningThreadCount = 0;
+
+
+/*
  * Static Helper functions
  */
 
@@ -148,15 +156,6 @@ cdbdisp_clearGangActiveFlag(CdbDispatcherState *ds)
 		ds->primaryResults->writer_gang->dispatcherActive = false;
 	}
 }
-
-
-/*
- * Counter to indicate there are some dispatch threads running.  This will
- * be incremented at the beginning of dispatch threads and decremented at
- * the end of them.
- */
-static volatile int32 RunningThreadCount = 0;
-
 
 /*
  * cdbdisp_dispatchToGang:
@@ -1398,7 +1397,7 @@ thread_DispatchCommand(void *arg)
  * NOTE: since this is called via a thread, the same rules apply as to
  *		 thread_DispatchCommand absolutely no elog'ing.
  */
-bool
+static bool
 shouldStillDispatchCommand(DispatchCommandParms *pParms, CdbDispatchResult * dispatchResult)
 {
 	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
@@ -1478,7 +1477,7 @@ shouldStillDispatchCommand(DispatchCommandParms *pParms, CdbDispatchResult * dis
  *
  * NOTE: The cleanup of the connections will be performed by handlePollTimeout().
  */
-void
+static void
 handlePollError(DispatchCommandParms *pParms,
 				  int db_count,
 				  int sock_errno)
@@ -1595,7 +1594,7 @@ cdbdisp_signalQE(SegmentDatabaseDescriptor *segdbDesc,
  * NOTE: since this is called via a thread, the same rules apply as to
  *		 thread_DispatchCommand absolutely no elog'ing.
  */
-void
+static void
 handlePollTimeout(DispatchCommandParms * pParms,
 					int db_count,
 					int *timeoutCounter, bool useSampling)
@@ -1729,7 +1728,7 @@ handlePollTimeout(DispatchCommandParms * pParms,
 
 }	/* handlePollTimeout */
 
-void
+static void
 CollectQEWriterTransactionInformation(SegmentDatabaseDescriptor *segdbDesc, CdbDispatchResult *dispatchResult)
 {
 	PGconn *conn = segdbDesc->conn;
@@ -1747,7 +1746,7 @@ CollectQEWriterTransactionInformation(SegmentDatabaseDescriptor *segdbDesc, CdbD
 	}
 }
 
-bool							/* returns true if command complete */
+static bool							/* returns true if command complete */
 processResults(CdbDispatchResult *dispatchResult)
 {
 	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
@@ -2158,16 +2157,22 @@ void makeDispatcherState(CdbDispatcherState	*ds, int nResults, int nSlices, bool
 void destroyDispatcherState(CdbDispatcherState	*ds)
 {
 	CdbDispatchResults * results = ds->primaryResults;
-    if (results->resultArray != NULL)
+    if (results != NULL && results->resultArray != NULL)
     {
         int i;
         for (i = 0; i < results->resultCount; i++)
         {
             cdbdisp_termResult(&results->resultArray[i]);
         }
+        results->resultArray = NULL;
     }
 
-	MemoryContextDelete(ds->dispatchStateContext);
+    if (ds->dispatchStateContext != NULL)
+    {
+        MemoryContextDelete(ds->dispatchStateContext);
+        ds->dispatchStateContext = NULL;
+    }
+
 	ds->dispatchStateContext = NULL;
 	ds->dispatchThreads = NULL;
 	ds->primaryResults = NULL;
