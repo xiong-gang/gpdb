@@ -27,197 +27,197 @@ int		gp_segment_connect_timeout = 180;
 
 static void MPPnoticeReceiver(void * arg, const PGresult * res)
 {
-	PQExpBufferData             msgbuf;
-	PGMessageField *pfield;
-	int elevel = INFO;
-	char * sqlstate = "00000";
-	char * severity = "WARNING";
-	char * file = "";
-	char * line = NULL;
-	char * func = "";
-	char  message[1024];
-	char * detail = NULL;
-	char * hint = NULL;
-	char * context = NULL;
-	
-	SegmentDatabaseDescriptor    *segdbDesc = (SegmentDatabaseDescriptor    *) arg;
-	if (!res)
-		return;
-		
-	
-	strcpy(message,"missing error text");
-	
-	for (pfield = res->errFields; pfield != NULL; pfield = pfield->next)
-	{
-		switch (pfield->code)
-		{
-			case PG_DIAG_SEVERITY:
-				severity = pfield->contents;
-				if (strcmp(pfield->contents,"WARNING")==0)
-					elevel = WARNING;
-				else if (strcmp(pfield->contents,"NOTICE")==0)
-					elevel = NOTICE;
-				else if (strcmp(pfield->contents,"DEBUG1")==0 ||
-					     strcmp(pfield->contents,"DEBUG")==0)
-					elevel = DEBUG1;
-				else if (strcmp(pfield->contents,"DEBUG2")==0)
-					elevel = DEBUG2;
-				else if (strcmp(pfield->contents,"DEBUG3")==0)
-					elevel = DEBUG3;
-				else if (strcmp(pfield->contents,"DEBUG4")==0)
-					elevel = DEBUG4;
-				else if (strcmp(pfield->contents,"DEBUG5")==0)
-					elevel = DEBUG5;
-				else
-					elevel = INFO;
-				break;
-			case PG_DIAG_SQLSTATE:
-				sqlstate = pfield->contents;
-				break;
-			case PG_DIAG_MESSAGE_PRIMARY:
-				strncpy(message, pfield->contents, 800);
-				message[800] = '\0';
-				if (segdbDesc && segdbDesc->whoami && strlen(segdbDesc->whoami) < 200)
-				{
-					strcat(message,"  (");
-					strcat(message, segdbDesc->whoami);
-					strcat(message,")");
-				}
-				break;
-			case PG_DIAG_MESSAGE_DETAIL:
-				detail = pfield->contents;
-				break;
-			case PG_DIAG_MESSAGE_HINT:
-				hint = pfield->contents;
-				break;
-			case PG_DIAG_STATEMENT_POSITION:
-			case PG_DIAG_INTERNAL_POSITION:
-			case PG_DIAG_INTERNAL_QUERY:
-				break;
-			case PG_DIAG_CONTEXT:
-				context = pfield->contents;
-				break;
-			case PG_DIAG_SOURCE_FILE:
-				file = pfield->contents;
-				break;
-			case PG_DIAG_SOURCE_LINE:
-				line = pfield->contents;
-				break;
-			case PG_DIAG_SOURCE_FUNCTION:
-				func = pfield->contents;
-				break;
-			case PG_DIAG_GP_PROCESS_TAG:
-				break;
-			default:
-				break;
-			
-		}
-	}
-	
-	if (elevel < client_min_messages &&  elevel  != INFO)
-		return;
-
-    /*
-     * We use PQExpBufferData instead of StringInfoData
-     * because the former uses malloc, the latter palloc.
-     * We are in a thread, and we CANNOT use palloc since it's not
-     * thread safe.  We cannot call elog or ereport either for the
-     * same reason.
-     */
-    initPQExpBuffer(&msgbuf);
-	
-
-	if (PG_PROTOCOL_MAJOR(FrontendProtocol) >= 3)
-	{
-		/* New style with separate fields */
-
-		appendPQExpBufferChar(&msgbuf, PG_DIAG_SEVERITY);
-		appendBinaryPQExpBuffer(&msgbuf, severity, strlen(severity)+1);
-
-		appendPQExpBufferChar(&msgbuf, PG_DIAG_SQLSTATE);
-		appendBinaryPQExpBuffer(&msgbuf, sqlstate, strlen(sqlstate)+1);
-
-		/* M field is required per protocol, so always send something */
-		appendPQExpBufferChar(&msgbuf, PG_DIAG_MESSAGE_PRIMARY);
-        appendBinaryPQExpBuffer(&msgbuf, message , strlen(message) + 1);
-
-		if (detail)
-		{
-			appendPQExpBufferChar(&msgbuf, PG_DIAG_MESSAGE_DETAIL);
-			appendBinaryPQExpBuffer(&msgbuf, detail, strlen(detail)+1);
-		}
-
-		if (hint)
-		{
-			appendPQExpBufferChar(&msgbuf, PG_DIAG_MESSAGE_HINT);
-			appendBinaryPQExpBuffer(&msgbuf, hint, strlen(hint)+1);
-		}
-
-		if (context)
-		{
-			appendPQExpBufferChar(&msgbuf, PG_DIAG_CONTEXT);
-			appendBinaryPQExpBuffer(&msgbuf, context, strlen(context)+1);
-		}
-
-		/*
-		  if (edata->cursorpos > 0)
-		  {
-		  snprintf(tbuf, sizeof(tbuf), "%d", edata->cursorpos);
-		  appendPQExpBufferChar(&msgbuf, PG_DIAG_STATEMENT_POSITION);
-		  appendBinaryPQExpBuffer(&msgbuf, tbuf);
-		  }
-
-		  if (edata->internalpos > 0)
-		  {
-		  snprintf(tbuf, sizeof(tbuf), "%d", edata->internalpos);
-		  appendPQExpBufferChar(&msgbuf, PG_DIAG_INTERNAL_POSITION);
-		  appendBinaryPQExpBuffer(&msgbuf, tbuf);
-		  }
-
-		  if (edata->internalquery)
-		  {
-		  appendPQExpBufferChar(&msgbuf, PG_DIAG_INTERNAL_QUERY);
-		  appendBinaryPQExpBuffer(&msgbuf, edata->internalquery);
-		  }
-		*/
-		if (file)
-		{
-			appendPQExpBufferChar(&msgbuf, PG_DIAG_SOURCE_FILE);
-			appendBinaryPQExpBuffer(&msgbuf, file, strlen(file)+1);
-		}
-
-		if (line)
-		{
-			appendPQExpBufferChar(&msgbuf, PG_DIAG_SOURCE_LINE);
-			appendBinaryPQExpBuffer(&msgbuf, line, strlen(line)+1);
-		}
-
-		if (func)
-		{
-			appendPQExpBufferChar(&msgbuf, PG_DIAG_SOURCE_FUNCTION);
-			appendBinaryPQExpBuffer(&msgbuf, func, strlen(func)+1);
-		}
-		
-	}
-	else
-	{
-			
-		appendPQExpBuffer(&msgbuf, "%s:  ", severity);
-	
-		appendBinaryPQExpBuffer(&msgbuf, message, strlen(message));
-	
-		appendPQExpBufferChar(&msgbuf, '\n');
-		appendPQExpBufferChar(&msgbuf, '\0');
-
-	}
-
-	appendPQExpBufferChar(&msgbuf, '\0');		/* terminator */
-
-	pq_putmessage('N', msgbuf.data, msgbuf.len);
-	
-	termPQExpBuffer(&msgbuf);
-	
-	pq_flush();	
+//	PQExpBufferData             msgbuf;
+//	PGMessageField *pfield;
+//	int elevel = INFO;
+//	char * sqlstate = "00000";
+//	char * severity = "WARNING";
+//	char * file = "";
+//	char * line = NULL;
+//	char * func = "";
+//	char  message[1024];
+//	char * detail = NULL;
+//	char * hint = NULL;
+//	char * context = NULL;
+//
+//	SegmentDatabaseDescriptor    *segdbDesc = (SegmentDatabaseDescriptor    *) arg;
+//	if (!res)
+//		return;
+//
+//
+//	strcpy(message,"missing error text");
+//
+//	for (pfield = res->errFields; pfield != NULL; pfield = pfield->next)
+//	{
+//		switch (pfield->code)
+//		{
+//			case PG_DIAG_SEVERITY:
+//				severity = pfield->contents;
+//				if (strcmp(pfield->contents,"WARNING")==0)
+//					elevel = WARNING;
+//				else if (strcmp(pfield->contents,"NOTICE")==0)
+//					elevel = NOTICE;
+//				else if (strcmp(pfield->contents,"DEBUG1")==0 ||
+//					     strcmp(pfield->contents,"DEBUG")==0)
+//					elevel = DEBUG1;
+//				else if (strcmp(pfield->contents,"DEBUG2")==0)
+//					elevel = DEBUG2;
+//				else if (strcmp(pfield->contents,"DEBUG3")==0)
+//					elevel = DEBUG3;
+//				else if (strcmp(pfield->contents,"DEBUG4")==0)
+//					elevel = DEBUG4;
+//				else if (strcmp(pfield->contents,"DEBUG5")==0)
+//					elevel = DEBUG5;
+//				else
+//					elevel = INFO;
+//				break;
+//			case PG_DIAG_SQLSTATE:
+//				sqlstate = pfield->contents;
+//				break;
+//			case PG_DIAG_MESSAGE_PRIMARY:
+//				strncpy(message, pfield->contents, 800);
+//				message[800] = '\0';
+//				if (segdbDesc && segdbDesc->whoami && strlen(segdbDesc->whoami) < 200)
+//				{
+//					strcat(message,"  (");
+//					strcat(message, segdbDesc->whoami);
+//					strcat(message,")");
+//				}
+//				break;
+//			case PG_DIAG_MESSAGE_DETAIL:
+//				detail = pfield->contents;
+//				break;
+//			case PG_DIAG_MESSAGE_HINT:
+//				hint = pfield->contents;
+//				break;
+//			case PG_DIAG_STATEMENT_POSITION:
+//			case PG_DIAG_INTERNAL_POSITION:
+//			case PG_DIAG_INTERNAL_QUERY:
+//				break;
+//			case PG_DIAG_CONTEXT:
+//				context = pfield->contents;
+//				break;
+//			case PG_DIAG_SOURCE_FILE:
+//				file = pfield->contents;
+//				break;
+//			case PG_DIAG_SOURCE_LINE:
+//				line = pfield->contents;
+//				break;
+//			case PG_DIAG_SOURCE_FUNCTION:
+//				func = pfield->contents;
+//				break;
+//			case PG_DIAG_GP_PROCESS_TAG:
+//				break;
+//			default:
+//				break;
+//
+//		}
+//	}
+//
+//	if (elevel < client_min_messages &&  elevel  != INFO)
+//		return;
+//
+//    /*
+//     * We use PQExpBufferData instead of StringInfoData
+//     * because the former uses malloc, the latter palloc.
+//     * We are in a thread, and we CANNOT use palloc since it's not
+//     * thread safe.  We cannot call elog or ereport either for the
+//     * same reason.
+//     */
+//    initPQExpBuffer(&msgbuf);
+//
+//
+//	if (PG_PROTOCOL_MAJOR(FrontendProtocol) >= 3)
+//	{
+//		/* New style with separate fields */
+//
+//		appendPQExpBufferChar(&msgbuf, PG_DIAG_SEVERITY);
+//		appendBinaryPQExpBuffer(&msgbuf, severity, strlen(severity)+1);
+//
+//		appendPQExpBufferChar(&msgbuf, PG_DIAG_SQLSTATE);
+//		appendBinaryPQExpBuffer(&msgbuf, sqlstate, strlen(sqlstate)+1);
+//
+//		/* M field is required per protocol, so always send something */
+//		appendPQExpBufferChar(&msgbuf, PG_DIAG_MESSAGE_PRIMARY);
+//        appendBinaryPQExpBuffer(&msgbuf, message , strlen(message) + 1);
+//
+//		if (detail)
+//		{
+//			appendPQExpBufferChar(&msgbuf, PG_DIAG_MESSAGE_DETAIL);
+//			appendBinaryPQExpBuffer(&msgbuf, detail, strlen(detail)+1);
+//		}
+//
+//		if (hint)
+//		{
+//			appendPQExpBufferChar(&msgbuf, PG_DIAG_MESSAGE_HINT);
+//			appendBinaryPQExpBuffer(&msgbuf, hint, strlen(hint)+1);
+//		}
+//
+//		if (context)
+//		{
+//			appendPQExpBufferChar(&msgbuf, PG_DIAG_CONTEXT);
+//			appendBinaryPQExpBuffer(&msgbuf, context, strlen(context)+1);
+//		}
+//
+//		/*
+//		  if (edata->cursorpos > 0)
+//		  {
+//		  snprintf(tbuf, sizeof(tbuf), "%d", edata->cursorpos);
+//		  appendPQExpBufferChar(&msgbuf, PG_DIAG_STATEMENT_POSITION);
+//		  appendBinaryPQExpBuffer(&msgbuf, tbuf);
+//		  }
+//
+//		  if (edata->internalpos > 0)
+//		  {
+//		  snprintf(tbuf, sizeof(tbuf), "%d", edata->internalpos);
+//		  appendPQExpBufferChar(&msgbuf, PG_DIAG_INTERNAL_POSITION);
+//		  appendBinaryPQExpBuffer(&msgbuf, tbuf);
+//		  }
+//
+//		  if (edata->internalquery)
+//		  {
+//		  appendPQExpBufferChar(&msgbuf, PG_DIAG_INTERNAL_QUERY);
+//		  appendBinaryPQExpBuffer(&msgbuf, edata->internalquery);
+//		  }
+//		*/
+//		if (file)
+//		{
+//			appendPQExpBufferChar(&msgbuf, PG_DIAG_SOURCE_FILE);
+//			appendBinaryPQExpBuffer(&msgbuf, file, strlen(file)+1);
+//		}
+//
+//		if (line)
+//		{
+//			appendPQExpBufferChar(&msgbuf, PG_DIAG_SOURCE_LINE);
+//			appendBinaryPQExpBuffer(&msgbuf, line, strlen(line)+1);
+//		}
+//
+//		if (func)
+//		{
+//			appendPQExpBufferChar(&msgbuf, PG_DIAG_SOURCE_FUNCTION);
+//			appendBinaryPQExpBuffer(&msgbuf, func, strlen(func)+1);
+//		}
+//
+//	}
+//	else
+//	{
+//
+//		appendPQExpBuffer(&msgbuf, "%s:  ", severity);
+//
+//		appendBinaryPQExpBuffer(&msgbuf, message, strlen(message));
+//
+//		appendPQExpBufferChar(&msgbuf, '\n');
+//		appendPQExpBufferChar(&msgbuf, '\0');
+//
+//	}
+//
+//	appendPQExpBufferChar(&msgbuf, '\0');		/* terminator */
+//
+//	pq_putmessage('N', msgbuf.data, msgbuf.len);
+//
+//	termPQExpBuffer(&msgbuf);
+//
+//	pq_flush();
 }
 
 

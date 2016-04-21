@@ -19,7 +19,7 @@
 #include <sys/poll.h>
 #endif
 
-//#define TEST_DISPATCHER
+#define TEST_DISPATCHER
 
 #include "catalog/catquery.h"
 #include "executor/execdesc.h"	/* QueryDesc */

@@ -356,12 +356,12 @@ void ReportSrehResults(CdbSreh *cdbsreh, int total_rejected)
 {
 }
 
-bool
-cdbconn_setSliceIndex(SegmentDatabaseDescriptor    *segdbDesc,
-                      int                           sliceIndex)
-{
-    return true;
-}
+//bool
+//cdbconn_setSliceIndex(SegmentDatabaseDescriptor    *segdbDesc,
+//                      int                           sliceIndex)
+//{
+//    return true;
+//}
 
 int GetDatabaseEncoding(void)
 {
@@ -425,15 +425,26 @@ TimestampDifference(TimestampTz start_time, TimestampTz stop_time,
 
 
 
+GpVars_Verbosity   gp_log_gang;
+int			client_min_messages = NOTICE;
+GpId GpIdentity = {UNINITIALIZED_GP_IDENTITY_VALUE, UNINITIALIZED_GP_IDENTITY_VALUE, UNINITIALIZED_GP_IDENTITY_VALUE};
+struct Port *MyProcPort;
 
 /* test */
 
-Gang *mockCreateGang()
+Gang *mockCreateGang(GangType type, int gangId, int size)
 {
-	Gang *mockGang = malloc(sizeof(Gang));
-	mockGang->type = GANGTYPE_PRIMARY_WRITER;
-	mockGang->size = 10;
-	return mockGang;
+	Gang *newGangDefinition = malloc(sizeof(Gang));
+	newGangDefinition->type = type,
+	newGangDefinition->size = size;
+	newGangDefinition->gang_id = gangId;
+	newGangDefinition->allocated = false;
+	newGangDefinition->active = false;
+	newGangDefinition->noReuse = false;
+	newGangDefinition->portal_name = NULL;
+
+
+	return newGangDefinition;
 }
 
 int main()
@@ -442,8 +453,11 @@ int main()
 
 	int i = 0;
 	struct CdbDispatcherState ds = {0};
+
 	Gang *mockGang = mockCreateGang();
+
 	makeDispatcherState(&ds, 10, 0, false);
+
 	CdbDispatchCmdThreads *dThreads = ds.dispatchThreads;
 	struct DispatchCommandParms *pParms;
 	char queryText[100];
