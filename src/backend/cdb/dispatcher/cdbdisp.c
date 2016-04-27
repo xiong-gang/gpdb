@@ -388,7 +388,7 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 	}
 
 	ds->dispatchThreads->threadCount += newThreads;
-	elog(DEBUG4, "dispatchToGang: Total threads now %d", ds->dispatchThreads->threadCount);
+	elog(DEBUG4, "dispatchToGang: Total threads now %d, %d", ds->dispatchThreads->threadCount, newThreads);
 }	/* cdbdisp_dispatchToGang */
 
 

@@ -14,7 +14,7 @@ extern void cdbdisp_fillParms(DispatchCommandParms *pParms);
 int			log_min_messages = WARNING;
 bool		log_dispatch_stats = false;
 bool		gp_use_dispatch_agent = false;
-int			gp_connections_per_thread = 64;
+int			gp_connections_per_thread = 2;
 bool		Debug_cancel_print = false;
 volatile bool InterruptPending = false;
 volatile int32 InterruptHoldoffCount = 0;
@@ -27,7 +27,7 @@ GpRoleValue Gp_role = GP_ROLE_DISPATCH;
 ErrorContextCallback *error_context_stack = NULL;
 sigjmp_buf *PG_exception_stack = NULL;
 
-Gang *mockCreateGang(void);
+Gang *mockCreateGang(GangType type, int gangId, int size, char *hostip, uint16 portStart);
 Oid GetUserId(void);
 Oid GetOuterUserId(void);
 Oid GetSessionUserId(void);
@@ -87,7 +87,7 @@ elog_start(const char *filename, int lineno, const char *funcname)
 void
 elog_finish(int elevel, const char *fmt,...)
 {
-	fprintf(stderr, "ERROR");
+//	fprintf(stderr, "ERROR");
     va_list args;
     va_start(args, fmt);
 	fprintf(stderr, fmt, args);
@@ -335,7 +335,7 @@ int getgpsegmentCount(void)
 
 int largestGangsize(void)
 {
-	return 20;
+	return 2000;
 }
 
 bool FtsTestConnection(CdbComponentDatabaseInfo *failedDBInfo, bool fullScan)
@@ -356,12 +356,12 @@ void ReportSrehResults(CdbSreh *cdbsreh, int total_rejected)
 {
 }
 
-//bool
-//cdbconn_setSliceIndex(SegmentDatabaseDescriptor    *segdbDesc,
-//                      int                           sliceIndex)
-//{
-//    return true;
-//}
+bool
+cdbconn_setSliceIndex(SegmentDatabaseDescriptor    *segdbDesc,
+                      int                           sliceIndex)
+{
+    return true;
+}
 
 int GetDatabaseEncoding(void)
 {
@@ -425,14 +425,14 @@ TimestampDifference(TimestampTz start_time, TimestampTz stop_time,
 
 
 
-GpVars_Verbosity   gp_log_gang;
-int			client_min_messages = NOTICE;
-GpId GpIdentity = {UNINITIALIZED_GP_IDENTITY_VALUE, UNINITIALIZED_GP_IDENTITY_VALUE, UNINITIALIZED_GP_IDENTITY_VALUE};
-struct Port *MyProcPort;
+//GpVars_Verbosity   gp_log_gang;
+//int			client_min_messages = NOTICE;
+//GpId GpIdentity = {UNINITIALIZED_GP_IDENTITY_VALUE, UNINITIALIZED_GP_IDENTITY_VALUE, UNINITIALIZED_GP_IDENTITY_VALUE};
+//struct Port *MyProcPort;
 
 /* test */
 
-Gang *mockCreateGang(GangType type, int gangId, int size)
+Gang *mockCreateGang(GangType type, int gangId, int size, char *hostip, uint16 portStart)
 {
 	Gang *newGangDefinition = malloc(sizeof(Gang));
 	newGangDefinition->type = type,
@@ -442,7 +442,55 @@ Gang *mockCreateGang(GangType type, int gangId, int size)
 	newGangDefinition->active = false;
 	newGangDefinition->noReuse = false;
 	newGangDefinition->portal_name = NULL;
+	newGangDefinition->segment_database_info = NULL;
+	newGangDefinition->db_descriptors = malloc(sizeof(SegmentDatabaseDescriptor) * size);
 
+	int i = 0;
+	for(i = 0; i < size; i++)
+	{
+#define MAX_KEYWORDS 10
+		const char *keywords[MAX_KEYWORDS];
+		const char *values[MAX_KEYWORDS];
+		char		portstr[20];
+		int		nkeywords = 0;
+
+
+		keywords[nkeywords] = "host";
+		values[nkeywords] = hostip;
+		nkeywords++;
+
+		snprintf(portstr, sizeof(portstr), "%u", portStart+i);
+		keywords[nkeywords] = "port";
+		values[nkeywords] = portstr;
+		nkeywords++;
+
+		keywords[nkeywords] = NULL;
+		values[nkeywords] = NULL;
+
+		SegmentDatabaseDescriptor *segdbDesc = &newGangDefinition->db_descriptors[i];
+		segdbDesc->conn = PQconnectdbParams(keywords, values, false);
+
+		/*
+		 * Check for connection failure.
+		 */
+		if (PQstatus(segdbDesc->conn) == CONNECTION_BAD)
+		{
+			if (!segdbDesc->errcode)
+				segdbDesc->errcode = ERRCODE_GP_INTERCONNECTION_ERROR;
+			fprintf(stderr,
+							  "Master unable to connect to %s with options %s\n",
+							  segdbDesc->whoami,
+							  PQerrorMessage(segdbDesc->conn));
+
+			/* Don't use elog, it's not thread-safe */
+
+			write_log("%s\n", segdbDesc->error_message.data);
+
+			PQfinish(segdbDesc->conn);
+			segdbDesc->conn = NULL;
+			return NULL;
+		}
+	}
 
 	return newGangDefinition;
 }
@@ -452,24 +500,56 @@ int main()
 	main_tid = pthread_self();
 
 	int i = 0;
+	int gangSize = 100;
 	struct CdbDispatcherState ds = {0};
 
-	Gang *mockGang = mockCreateGang();
 
-	makeDispatcherState(&ds, 10, 0, false);
+	Gang *mockGang = mockCreateGang(GANGTYPE_PRIMARY_WRITER, 0, gangSize, "localhost", 11000);
+	if (mockGang == NULL)
+	{
+		printf("create gang failed\n");
+		return -1;
+	}
+	makeDispatcherState(&ds, gangSize, 0, false);
 
 	CdbDispatchCmdThreads *dThreads = ds.dispatchThreads;
 	struct DispatchCommandParms *pParms;
 	char queryText[100];
+	memset(queryText, 'a', 100);
+	queryText[0] = 'M';
+
+	int tmp = htonl(20);
+	memcpy(queryText+1, &tmp, sizeof(tmp));
+
+
 	for (i = 0; i < dThreads->dispatchCommandParmsArSize; i++)
 	{
 		pParms = &dThreads->dispatchCommandParmsAr[i];
 		pParms->query_text = queryText;
-		pParms->query_text_len = 100;
+		pParms->query_text_len = 21;
 	}
 	ds.primaryResults->writer_gang = mockGang;
 
 
-	cdbdisp_dispatchToGang(&ds, mockGang, 0, NULL);
+	PG_TRY();
+	{
+		/* Launch the command.	Don't cancel on error. */
+		cdbdisp_dispatchToGang(&ds, mockGang, 0, DEFAULT_DISP_DIRECT);
 
+		/* Wait for all QEs to finish.	Don't cancel. */
+		cdbdisp_finishCommand(&ds, NULL, NULL);
+	}
+	PG_CATCH();
+	{
+		/* Something happend, clean up after ourselves */
+		CdbCheckDispatchResult((struct CdbDispatcherState *)&ds,
+							   DISPATCH_WAIT_CANCEL);
+
+		destroyDispatcherState((struct CdbDispatcherState *)&ds);
+		PG_RE_THROW();
+		/* not reached */
+	}
+	PG_END_TRY();
+
+	printf("end\n");
 }
