@@ -18,7 +18,7 @@ include $(top_srcdir)/src/backend/common.mk
 
 dispatcher: cdbdisp.o cdbdispatchresult.o cdbdisp_test.o \
 	    fe-connect.o fe-auth.o fe-exec.o fe-misc.o fe-protocol3.o pqexpbuffer.o ip.o md5.o wchar.o \
-	    stringinfo.o thread.o pgstrcasecmp.o noblock.o
+	    stringinfo.o thread.o pgstrcasecmp.o noblock.o strlcpy.o inet_net_ntop.o
 	gcc -o $@ $^ $(CFLAGS) 
 
 fe-connect.c: $(top_srcdir)/src/backend/gp_libpq_fe/fe-connect.c
@@ -46,6 +46,10 @@ thread.c: $(top_srcdir)/src/port/thread.c
 pgstrcasecmp.c: $(top_srcdir)/src/port/pgstrcasecmp.c
 	rm -f $@ && $(LN_S) $< .
 noblock.c: $(top_srcdir)/src/port/noblock.c
+	rm -f $@ && $(LN_S) $< .
+strlcpy.c: $(top_srcdir)/src/port/strlcpy.c
+	rm -f $@ && $(LN_S) $< .
+inet_net_ntop.c: $(top_srcdir)/src/port/inet_net_ntop.c
 	rm -f $@ && $(LN_S) $< .
 
 clean:
