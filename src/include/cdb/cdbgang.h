@@ -23,8 +23,9 @@ typedef enum GangType
 {
 	GANGTYPE_UNALLOCATED,       /* a root slice executed by the qDisp */
 	GANGTYPE_ENTRYDB_READER,    /* a 1-gang with read access to the entry db */
-	GANGTYPE_PRIMARY_READER,    /* a 1-gang or N-gang to read the segment dbs */
-	GANGTYPE_PRIMARY_WRITER    /* the N-gang that can update the segment dbs */
+	GANGTYPE_SINGLETON_READER,  /* a 1-gang to read the segment dbs */
+	GANGTYPE_PRIMARY_READER,    /* a N-gang to read the segment dbs */
+	GANGTYPE_PRIMARY_WRITER     /* the N-gang that can update the segment dbs */
 } GangType;
 
 /*
@@ -56,12 +57,9 @@ typedef struct Gang
 
 	/* should be destroyed in cleanupGang() if set*/
 	bool		noReuse;
-
-	/* MPP-24003: pointer to array of segment database info for each reader and writer gang. */
-	struct		CdbComponentDatabaseInfo *segment_database_info;
 } Gang;
 
-extern Gang *allocateGang(GangType type, int size, int content, char *portal_name);
+extern Gang *allocateReaderGang(GangType type, char *portal_name);
 extern Gang *allocateWriterGang(void);
 
 struct DirectDispatchInfo;
@@ -83,7 +81,6 @@ extern List * getAllIdleReaderGangs(void);
 
 extern List * getAllBusyReaderGangs(void);
 
-extern void detectFailedConnections(void);
 
 extern CdbComponentDatabases *getComponentDatabases(void);
 
@@ -291,7 +288,7 @@ extern bool sliceRunsOnQE(Slice *slice);
 extern int sliceCalculateNumSendingProcesses(Slice *slice, int numSegmentsInCluster);
 
 extern void InitRootSlices(QueryDesc *queryDesc);
-extern void AssignGangs(QueryDesc *queryDesc, int utility_segment_index);
+extern void AssignGangs(QueryDesc *queryDesc);
 extern void ReleaseGangs(QueryDesc *queryDesc);
 
 #ifdef USE_ASSERT_CHECKING
