@@ -63,7 +63,7 @@ static Gang *buildGangDefinition(GangType type, int gang_id, int size, int conte
 
 static bool isTargetPortal(const char *p1, const char *p2);
 
-static int	addOptions(PQExpBufferData *buffer, bool iswriter, bool i_am_superuser);
+static void	addOptions(StringInfo string, bool iswriter, bool i_am_superuser);
 
 static bool cleanupGang(Gang * gp);
 
@@ -107,6 +107,8 @@ typedef struct DoConnectParms
 	GangType	type;
 
 	bool		i_am_superuser;
+
+	StringInfo  connectOptions;
 
 	/*
 	 * The pthread_t thread handle.
@@ -186,7 +188,12 @@ static DoConnectParms* makeConnectParms(int parmsCount, GangType type)
 	DoConnectParms *doConnectParmsAr = (DoConnectParms*) palloc0(
 			parmsCount * sizeof(DoConnectParms));
 	DoConnectParms* pParms = NULL;
+	StringInfo pOptions = makeStringInfo();
+	bool i_am_superuser = superuser_arg(MyProc->roleId);
 	int i = 0;
+
+	addOptions(pOptions, type == GANGTYPE_PRIMARY_WRITER, i_am_superuser);
+
 	for (i = 0; i < parmsCount; i++)
 	{
 		pParms = &doConnectParmsAr[i];
@@ -197,7 +204,8 @@ static DoConnectParms* makeConnectParms(int parmsCount, GangType type)
 		MemSet(&pParms->thread, 0, sizeof(pthread_t));
 		pParms->db_count = 0;
 		pParms->type = type;
-		pParms->i_am_superuser = superuser_arg(MyProc->roleId);
+		pParms->i_am_superuser = i_am_superuser;
+		pParms->connectOptions = pOptions;
 	}
 	return doConnectParmsAr;
 }
@@ -210,10 +218,18 @@ static void destroyConnectParms(DoConnectParms *doConnectParmsAr, int count)
 		for (i = 0; i < count; i++)
 		{
 			DoConnectParms *pParms = &doConnectParmsAr[i];
+			StringInfo pOptions = pParms->connectOptions;
+			if(pOptions->data != NULL)
+			{
+				pfree(pOptions->data);
+				pOptions->data = NULL;
+			}
+			pParms->connectOptions = NULL;
 
 			pfree(pParms->segdbDescPtrArray);
 			pParms->segdbDescPtrArray = NULL;
 		}
+
 		pfree(doConnectParmsAr);
 	}
 }
@@ -617,7 +633,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content, char *por
 	 * anyone who has pointers into the free()ed space is going to
 	 * freak out)
 	 */
-	cdb_component_dbs = getCdbComponentDatabases();
+	cdb_component_dbs = getComponentDatabases();
 
 	if (cdb_component_dbs == NULL ||
 		cdb_component_dbs->total_segments <= 0 ||
@@ -663,8 +679,6 @@ buildGangDefinition(GangType type, int gang_id, int size, int content, char *por
 		cdbInfoCopy = copyCdbComponentDatabaseInfo(cdbinfo);
 		segdbDesc = &newGangDefinition->db_descriptors[0];
 		cdbconn_initSegmentDescriptor(segdbDesc, cdbInfoCopy);
-		freeCdbComponentDatabases(cdb_component_dbs);
-		cdb_component_dbs = NULL;
 		break;
 
 	case GANGTYPE_SINGLETON_READER:
@@ -672,8 +686,6 @@ buildGangDefinition(GangType type, int gang_id, int size, int content, char *por
 		cdbInfoCopy = copyCdbComponentDatabaseInfo(cdbinfo);
 		segdbDesc = &newGangDefinition->db_descriptors[0];
 		cdbconn_initSegmentDescriptor(segdbDesc, cdbInfoCopy);
-		freeCdbComponentDatabases(cdb_component_dbs);
-		cdb_component_dbs = NULL;
 		break;
 
 	case GANGTYPE_PRIMARY_READER:
@@ -694,9 +706,6 @@ buildGangDefinition(GangType type, int gang_id, int size, int content, char *por
 				segCount++;
 			}
 		}
-
-		freeCdbComponentDatabases(cdb_component_dbs);
-		cdb_component_dbs = NULL;
 
 		if (size != segCount)
 		{
@@ -768,8 +777,9 @@ gp_pthread_create(pthread_t * thread,
 	return pthread_err;
 }
 
-static bool
-addOneOption(PQExpBufferData *buffer, struct config_generic * guc)
+
+static void
+addOneOption(StringInfo string, struct config_generic * guc)
 {
 	Assert(guc && (guc->flags & GUC_GPDB_ADDOPT));
 	switch (guc->vartype)
@@ -778,24 +788,24 @@ addOneOption(PQExpBufferData *buffer, struct config_generic * guc)
 			{
 				struct config_bool *bguc = (struct config_bool *) guc;
 
-				appendPQExpBuffer(buffer, " -c %s=%s", guc->name,
+				appendStringInfo(string, " -c %s=%s", guc->name,
 								  *(bguc->variable) ? "true" : "false"
 					);
-				return true;
+				break;
 			}
 		case PGC_INT:
 			{
 				struct config_int *iguc = (struct config_int *) guc;
 
-				appendPQExpBuffer(buffer, " -c %s=%d", guc->name, *iguc->variable);
-				return true;
+				appendStringInfo(string, " -c %s=%d", guc->name, *iguc->variable);
+				break;
 			}
 		case PGC_REAL:
 			{
 				struct config_real *rguc = (struct config_real *) guc;
 
-				appendPQExpBuffer(buffer, " -c %s=%f", guc->name, *rguc->variable);
-				return true;
+				appendStringInfo(string, " -c %s=%f", guc->name, *rguc->variable);
+				break;
 			}
 		case PGC_STRING:
 			{
@@ -803,7 +813,7 @@ addOneOption(PQExpBufferData *buffer, struct config_generic * guc)
 				const char *str = *sguc->variable;
 				int			i;
 
-				appendPQExpBuffer(buffer, " -c %s=", guc->name);
+				appendStringInfo(string, " -c %s=", guc->name);
 				/*
 				 * All whitespace characters must be escaped. See
 				 * pg_split_opts() in the backend.
@@ -811,55 +821,52 @@ addOneOption(PQExpBufferData *buffer, struct config_generic * guc)
 				for (i = 0; str[i] != '\0'; i++)
 				{
 					if (isspace((unsigned char) str[i]))
-						appendPQExpBufferChar(buffer, '\\');
+						appendStringInfoChar(string, '\\');
 
-					appendPQExpBufferChar(buffer, str[i]);
+					appendStringInfoChar(string, str[i]);
 				}
-				return true;
+				break;
 			}
+		default:
+			Insist(false);
 	}
-
-	Assert(!"Invalid guc var type");
-	return false;
 }
+
 
 /*
  * Add GUCs to option string.
- *
- * Return 1 (>0) if success.
- * Return -index (<=0) into get_guc_variables on failure, so that caller
- * will be able to print a nice error message.
  */
-static int
-addOptions(PQExpBufferData *buffer, bool iswriter, bool i_am_superuser)
+
+static void
+addOptions(StringInfo string, bool iswriter, bool i_am_superuser)
 {
 	struct config_generic **gucs = get_guc_variables();
 	int			ngucs = get_num_guc_variables();
 	int			i;
 
-	if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
-		write_log("addOptions: iswriter %d", iswriter);
 
+	LOG_GANG_DEBUG(LOG, "addOptions: iswriter %d", iswriter);
 
 	/* GUCs need special handling */
+	/* TODO: gp_qd_hostname, gp_qd_port and gp_qd_callback_info are not actually used*/
 	if (Gp_role == GP_ROLE_DISPATCH)
 	{
 		CdbComponentDatabaseInfo *qdinfo;
 
 		qdinfo = &cdb_component_dbs->entry_db_info[0];
 		if (qdinfo->hostip != NULL)
-			appendPQExpBuffer(buffer, " -c gp_qd_hostname=%s", qdinfo->hostip);
+			appendStringInfo(string, " -c gp_qd_hostname=%s", qdinfo->hostip);
 		else
-			appendPQExpBuffer(buffer, " -c gp_qd_hostname=%s", qdinfo->hostname);
-		appendPQExpBuffer(buffer, " -c gp_qd_port=%d", qdinfo->port);
+			appendStringInfo(string, " -c gp_qd_hostname=%s", qdinfo->hostname);
+		appendStringInfo(string, " -c gp_qd_port=%d", qdinfo->port);
 	}
 	else
 	{
-		appendPQExpBuffer(buffer, " -c gp_qd_hostname=%s", qdHostname);
-		appendPQExpBuffer(buffer, " -c gp_qd_port=%d", qdPostmasterPort);
+		appendStringInfo(string, " -c gp_qd_hostname=%s", qdHostname);
+		appendStringInfo(string, " -c gp_qd_port=%d", qdPostmasterPort);
 	}
 
-	appendPQExpBuffer(buffer, " -c gp_qd_callback_info=port=%d", PostPortNumber);
+	appendStringInfo(string, " -c gp_qd_callback_info=port=%d", PostPortNumber);
 
 	/*
 	 * Transactions are tricky.
@@ -876,13 +883,13 @@ addOptions(PQExpBufferData *buffer, bool iswriter, bool i_am_superuser)
 	if (DefaultXactIsoLevel != XACT_READ_COMMITTED)
 	{
 		if (DefaultXactIsoLevel == XACT_SERIALIZABLE)
-			appendPQExpBuffer(buffer, " -c default_transaction_isolation=serializable");
+			appendStringInfo(string, " -c default_transaction_isolation=serializable");
 	}
 
 	if (XactIsoLevel != XACT_READ_COMMITTED)
 	{
 		if (XactIsoLevel == XACT_SERIALIZABLE)
-			appendPQExpBuffer(buffer, " -c transaction_isolation=serializable");
+			appendStringInfo(string, " -c transaction_isolation=serializable");
 	}
 
 	for (i = 0; i < ngucs; ++i)
@@ -891,14 +898,8 @@ addOptions(PQExpBufferData *buffer, bool iswriter, bool i_am_superuser)
 
 		if ((guc->flags & GUC_GPDB_ADDOPT) &&
 			(guc->context == PGC_USERSET || i_am_superuser))
-		{
-			bool		fOK = addOneOption(buffer, guc);
-
-			if (!fOK)
-				return -i;
-		}
+			addOneOption(string, guc);
 	}
-	return 1;
 }
 
 /*
@@ -912,10 +913,9 @@ thread_DoConnect(void *arg)
 
 	int			db_count;
 	int			i;
-	int			err;
 
 	SegmentDatabaseDescriptor *segdbDesc;
-	CdbComponentDatabaseInfo *q;
+	CdbComponentDatabaseInfo *cdbinfo;
 
 	gp_set_thread_sigmasks();
 
@@ -929,7 +929,6 @@ thread_DoConnect(void *arg)
 	 */
 	for (i = 0; i < db_count; i++)
 	{
-		PQExpBufferData buffer;
 		char		gpqeid[100];
 
 		segdbDesc = segdbDescPtrArray[i];
@@ -940,56 +939,28 @@ thread_DoConnect(void *arg)
 			continue;
 		}
 
-		q = segdbDesc->segment_database_info;
-
-		/*
-		 * We use PQExpBufferData instead of StringInfoData
-		 * because the former uses malloc, the latter palloc.
-		 * We are in a thread, and we CANNOT use palloc since it's not
-		 * thread safe.  We cannot call elog or ereport either for the
-		 * same reason.
-		 */
-		initPQExpBuffer(&buffer);
+		cdbinfo = segdbDesc->segment_database_info;
 
 		/*
 		 * Build the connection string.  Writer-ness needs to be processed
 		 * early enough now some locks are taken before command line options
 		 * are recognized.
 		 */
-		build_gpqeid_param(gpqeid, sizeof(gpqeid), q->segindex,
+		build_gpqeid_param(gpqeid, sizeof(gpqeid), cdbinfo->segindex,
 						   pParms->type == GANGTYPE_PRIMARY_WRITER);
-		err = addOptions(&buffer,
-						 (pParms->type == GANGTYPE_PRIMARY_WRITER),
-						 pParms->i_am_superuser);
 
-		if (err <= 0)
+		if (cdbconn_doConnect(segdbDesc, gpqeid, pParms->connectOptions->data))
 		{
-			struct config_generic **gucs = get_guc_variables();
-			struct config_generic *errguc = gucs[-err];
-
-			segdbDesc->errcode = ERRCODE_GP_INTERNAL_ERROR;
-			appendPQExpBuffer(&segdbDesc->error_message,
-					  "Internal error: AddOption %s failed\n", errguc->name);
-			PQfinish(segdbDesc->conn);
-			segdbDesc->conn = NULL;
-		}
-		else
-		{
-			if (cdbconn_doConnect(segdbDesc, gpqeid, buffer.data))
+			if (segdbDesc->motionListener == -1)
 			{
-				if (segdbDesc->motionListener == -1)
-				{
-					segdbDesc->errcode = ERRCODE_GP_INTERNAL_ERROR;
-					appendPQExpBuffer(&segdbDesc->error_message,
-						  "Internal error: No motion listener port for %s\n",
-									  segdbDesc->whoami);
-					PQfinish(segdbDesc->conn);
-					segdbDesc->conn = NULL;
-				}
+				segdbDesc->errcode = ERRCODE_GP_INTERNAL_ERROR;
+				appendPQExpBuffer(&segdbDesc->error_message,
+						"Internal error: No motion listener port for %s\n",
+						segdbDesc->whoami);
+				PQfinish(segdbDesc->conn);
+				segdbDesc->conn = NULL;
 			}
 		}
-
-		free(buffer.data);
 	}
 
 	return (NULL);
@@ -1017,7 +988,7 @@ build_gpqeid_param(char *buf, int bufsz, int segIndex, bool is_writer)
 #endif
 
 	snprintf(buf, bufsz,
-			"%d;%d" TIMESTAMP_FORMAT ";%s",
+			"%d;%d;" TIMESTAMP_FORMAT ";%s",
 			gp_session_id,
 			segIndex,
 			PgStartTime,
@@ -1067,6 +1038,7 @@ cdbgang_parse_gpqeid_params(struct Port * port __attribute__((unused)), const ch
 		SetConfigOption("gp_session_id", cp,
 						PGC_POSTMASTER, PGC_S_OVERRIDE);
 
+	/* gp_segment */
 	if (gpqeid_next_param(&cp, &np))
 		SetConfigOption("gp_segment", cp,
 						PGC_POSTMASTER, PGC_S_OVERRIDE);
@@ -1721,17 +1693,11 @@ getCdbProcessesForQD(int isPrimary)
 	CdbProcess *proc;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
+	Assert(cdb_component_dbs != NULL);
 
 	if (!isPrimary)
 	{
 		elog(FATAL, "getCdbProcessesForQD: unsupported request for master mirror process");
-	}
-
-	if (cdb_component_dbs == NULL)
-	{
-		cdb_component_dbs = getCdbComponentDatabases();
-		if (cdb_component_dbs == NULL)
-			elog(ERROR, PACKAGE_NAME " schema not populated");
 	}
 
 	qdinfo = &(cdb_component_dbs->entry_db_info[0]);
@@ -1752,9 +1718,6 @@ getCdbProcessesForQD(int isPrimary)
 	proc->pid = MyProcPid;
 	proc->contentid = -1;
 
-	/*
-	 * freeCdbComponentDatabases(cdb_component_dbs);
-	 */
 	list = lappend(list, proc);
 	return list;
 }
@@ -2634,7 +2597,20 @@ CdbComponentDatabases *
 getComponentDatabases(void)
 {
 	Assert(Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_UTILITY);
-	return (cdb_component_dbs == NULL) ? getCdbComponentDatabases() : cdb_component_dbs;
+	if(cdb_component_dbs == NULL)
+	{
+		cdb_component_dbs = getCdbComponentDatabases();
+		cdb_component_dbs->fts_version = ftsProbeInfo->fts_statusVersion;
+	}
+	else if(cdb_component_dbs->fts_version != ftsProbeInfo->fts_statusVersion)
+	{
+		LOG_GANG_DEBUG(LOG, "FTS rescanned, get new component databases info.");
+		freeCdbComponentDatabases(cdb_component_dbs);
+		cdb_component_dbs = getCdbComponentDatabases();
+		cdb_component_dbs->fts_version = ftsProbeInfo->fts_statusVersion;
+	}
+
+	return cdb_component_dbs;
 }
 
 bool
