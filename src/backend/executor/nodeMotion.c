@@ -989,7 +989,7 @@ ExecInitMotion(Motion * node, EState *estate, int eflags)
             sendFlow->segindex == -1)
             sendSlice->gangType = GANGTYPE_ENTRYDB_READER;
 
-        sendSlice->numGangMembersToBeActive = sliceCalculateNumSendingProcesses(sendSlice, getgpsegmentCount());
+        sendSlice->numGangMembersToBeActive = sliceCalculateNumSendingProcesses(sendSlice);
 
 		if (node->motionType == MOTIONTYPE_FIXED && node->numOutputSegs == 1)
 		{

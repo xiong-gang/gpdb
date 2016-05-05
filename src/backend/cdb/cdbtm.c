@@ -3162,7 +3162,6 @@ cdbtm_performDeferredRecovery(void)
 			*shmDtmRecoveryDeferred = false;
 			elog(NOTICE, "Releasing segworker groups for deferred recovery.");
 			disconnectAndDestroyAllGangs();
-			resetSessionForPrimaryGangLoss();
 		}
 		releaseTmLock();
 		CheckForResetSession();

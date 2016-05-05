@@ -228,33 +228,37 @@ FtsHandleNetFailure(SegmentDatabaseDescriptor ** segDB, int numOfFailed)
 			errSendAlert(true)));
 }
 
+/*
+ * Check if any segment DB is down.
+ *
+ * returns true if any segment DB is down.
+ */
 bool
 FtsTestSegmentDBIsDown(SegmentDatabaseDescriptor * segdbDesc, int size)
 {
-	int			i = 0;
-	bool		forceRescan = true;
+	int i = 0;
+	bool forceRescan = true;
 
 	Assert(isFTSEnabled());
 
-    for (i = 0; i < size; i++)
-    {
-        if (PQstatus(segdbDesc[i].conn) != CONNECTION_OK)
-        {
-			CdbComponentDatabaseInfo *segInfo = segdbDesc[i].segment_database_info;
+	for (i = 0; i < size; i++)
+	{
+		CdbComponentDatabaseInfo *segInfo = segdbDesc[i].segment_database_info;
 
-			elog(DEBUG2, "FtsTestGangConnection: looking for real fault on segment dbid %d", segInfo->dbid);
+		elog(
+				DEBUG2, "FtsTestGangConnection: looking for real fault on segment dbid %d", segInfo->dbid);
 
-			if (!FtsTestConnection(segInfo, forceRescan))
-			{
-				elog(DEBUG2, "found fault with segment dbid %d", segInfo->dbid);
-				ereport(LOG, (errmsg_internal("FTS: reconfiguration is in progress")));
-				return true;
-			}
-			forceRescan = false; /* only force the rescan on the first call. */
-        }
-    }
+		if (!FtsTestConnection(segInfo, forceRescan))
+		{
+			elog(DEBUG2, "found fault with segment dbid %d", segInfo->dbid);
+			ereport(LOG,
+					(errmsg_internal("FTS: reconfiguration is in progress")));
+			return true;
+		}
+		forceRescan = false; /* only force the rescan on the first call. */
+	}
 
-    return false;
+	return false;
 }
 
 
