@@ -28,7 +28,7 @@ int main(int argc, char *argv[])
 		printf("create gang failed\n");
 		return -1;
 	}
-	makeDispatcherState(&ds, gangSize, 0, false);
+	cdbdisp_makeDispatcherState(&ds, gangSize, 0, false);
 
 	CdbDispatchCmdThreads *dThreads = ds.dispatchThreads;
 	struct DispatchCommandParms *pParms;
@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
 		CdbCheckDispatchResult((struct CdbDispatcherState *)&ds,
 							   DISPATCH_WAIT_CANCEL);
 
-		destroyDispatcherState((struct CdbDispatcherState *)&ds);
+		cdbdisp_destroyDispatcherState((struct CdbDispatcherState *)&ds);
 		PG_RE_THROW();
 		/* not reached */
 	}

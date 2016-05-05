@@ -8,7 +8,6 @@
 extern void ShowUsage(const char *title);
 extern bool FtsTestConnection(CdbComponentDatabaseInfo *failedDBInfo, bool fullScan);
 extern int check_log_duration(char *msec_str, bool was_logged);
-extern void cdbdisp_fillParms(DispatchCommandParms *pParms);
 
 /* guc */
 int			log_min_messages = WARNING;
@@ -316,16 +315,6 @@ gp_set_thread_sigmasks(void)
 #endif
 
 	return;
-}
-
-void cdbdisp_fillParms(DispatchCommandParms *pParms)
-{
-        pParms->sessUserId = 0;
-        pParms->outerUserId = 0;
-        pParms->currUserId = 0;
-        pParms->sessUserId_is_super = false;
-        pParms->outerUserId_is_super = false;
-        pParms->cmdID = 0;
 }
 
 int getgpsegmentCount(void)
