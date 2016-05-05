@@ -137,10 +137,6 @@ cdbdisp_makeDispatchResults(int resultCapacity, int sliceCapacity,
 
 static char *dupQueryTextAndSetSliceId(MemoryContext cxt, char *queryText, int len,
 		int sliceId);
-static void cdbdisp_dtxParmsInit(struct CdbDispatcherState *ds,
-		DispatchCommandDtxProtocolParms *pDtxProtocolParms);
-static void cdbdisp_queryParmsInit(struct CdbDispatcherState *ds,
-		DispatchCommandQueryParms *pQueryParms);
 static void dispatchCommand(CdbDispatchResult *dispatchResult,
 		const char *query_text, int query_text_len);
 
@@ -2760,34 +2756,4 @@ static void cdbdisp_queryParmsInit(struct CdbDispatcherState *ds,
 
 
 
-/*
- * Initialize CdbDispatcherState using DispatchCommandDtxProtocolParms
- *
- * Allocate query text in memory context, initialize it and assign it to
- * all DispatchCommandQueryParms in this dispatcher state.
- */
-static void cdbdisp_dtxParmsInit(struct CdbDispatcherState *ds,
-		DispatchCommandDtxProtocolParms *pDtxProtocolParms)
-{
-	CdbDispatchCmdThreads *dThreads = ds->dispatchThreads;
-	int i = 0;
-	int len = 0;
-	DispatchCommandParms *pParms = NULL;
-	MemoryContext oldContext = NULL;
 
-	Assert(pDtxProtocolParms->dtxProtocolCommandLoggingStr != NULL);
-	Assert(pDtxProtocolParms->gid != NULL);
-
-	oldContext = MemoryContextSwitchTo(ds->dispatchStateContext);
-
-	char *queryText = PQbuildGpDtxProtocolCommand(ds->dispatchStateContext, pDtxProtocolParms, &len);
-
-	MemoryContextSwitchTo(oldContext);
-
-	for (i = 0; i < dThreads->dispatchCommandParmsArSize; i++)
-	{
-		pParms = &dThreads->dispatchCommandParmsAr[i];
-		pParms->query_text = queryText;
-		pParms->query_text_len = len;
-	}
-}
