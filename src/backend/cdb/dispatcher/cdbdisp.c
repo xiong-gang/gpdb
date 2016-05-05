@@ -88,7 +88,6 @@ CdbDispatchDirectDesc default_dispatch_direct_desc = {false, 0, {0}};
 /*
  * Static Helper functions
  */
-
 static void *thread_DispatchCommand(void *arg);
 static void thread_DispatchOut(DispatchCommandParms		*pParms);
 static void thread_DispatchWait(DispatchCommandParms	*pParms);
@@ -102,12 +101,10 @@ static void CdbCheckDispatchResultInt(struct CdbDispatcherState *ds,
 static bool
 shouldStillDispatchCommand(DispatchCommandParms *pParms, CdbDispatchResult * dispatchResult);
 
-							
 static void
 handlePollError(DispatchCommandParms *pParms,
                   int                   db_count,
                   int                   sock_errno);							
-
 static void
 handlePollTimeout(DispatchCommandParms   *pParms,
                     int                     db_count,
@@ -140,11 +137,9 @@ static char *dupQueryTextAndSetSliceId(MemoryContext cxt, char *queryText, int l
 static void dispatchCommand(CdbDispatchResult *dispatchResult,
 		const char *query_text, int query_text_len);
 
-
 #define GP_PARTITION_SELECTION_OID 6084
 #define GP_PARTITION_EXPANSION_OID 6085
 #define GP_PARTITION_INVERSE_OID 6086
-
  
 /*
  * Clear our "active" flags; so that we know that the writer gangs are busy -- and don't stomp on
@@ -233,7 +228,8 @@ static volatile int32 RunningThreadCount = 0;
  * It should not longjmp out via elog(ERROR, ...), ereport(ERROR, ...),
  * PG_THROW, CHECK_FOR_INTERRUPTS, etc.
  */
-void cdbdisp_dispatchToGang(struct CdbDispatcherState *ds, struct Gang *gp,
+void
+cdbdisp_dispatchToGang(struct CdbDispatcherState *ds, struct Gang *gp,
 		int sliceIndex, CdbDispatchDirectDesc *disp_direct)
 {
 	struct CdbDispatchResults	*dispatchResults = ds->primaryResults;
@@ -427,7 +423,6 @@ void cdbdisp_dispatchToGang(struct CdbDispatcherState *ds, struct Gang *gp,
 	elog(DEBUG4, "dispatchToGang: Total threads now %d", ds->dispatchThreads->threadCount);
 }	/* cdbdisp_dispatchToGang */
 
-
 /*
  * CdbCheckDispatchResult:
  *
@@ -617,7 +612,6 @@ CdbCheckDispatchResultInt(struct CdbDispatcherState *ds,
 		CHECK_FOR_INTERRUPTS();
 }	/* cdbdisp_checkDispatchResult */
 
-
 /*--------------------------------------------------------------------*/
 
 /*
@@ -683,13 +677,6 @@ cdbdisp_returnResults(CdbDispatchResults *primaryResults,
 
 	return resultSets;
 }
-
-
-
-/*--------------------------------------------------------------------*/
-
-
-
 
 /* Wait for all QEs to finish, then report any errors from the given
  * CdbDispatchResults objects and free them.  If not all QEs in the
@@ -873,10 +860,6 @@ cdbdisp_check_estate_for_cancel(struct EState *estate)
 
 	return false;
 }
-
-
-/*--------------------------------------------------------------------*/
-
 
 static void
 thread_DispatchOut(DispatchCommandParms *pParms)
@@ -1421,7 +1404,6 @@ thread_DispatchCommand(void *arg)
 	return (NULL);
 }	/* thread_DispatchCommand */
 
-
 /* Helper function to thread_DispatchCommand that decides if we should dispatch
  * to this segment database.
  *
@@ -1502,7 +1484,6 @@ shouldStillDispatchCommand(DispatchCommandParms *pParms, CdbDispatchResult * dis
 	return true;
 }	/* shouldStillDispatchCommand */
 
-
 /* Helper function to thread_DispatchCommand that actually kicks off the
  * command on the libpq connection.
  *
@@ -1559,7 +1540,6 @@ static void dispatchCommand(CdbDispatchResult *dispatchResult,
 	 * or any other errors that libpq might have in store for us.
 	 */
 }	/* dispatchCommand */
-
 
 /* Helper function to thread_DispatchCommand that handles errors that occur
  * during the poll() call.
@@ -2006,18 +1986,6 @@ connection_error:
 	return true; /* connection is gone! */	
 }	/* processResults */
 
-
-/*--------------------------------------------------------------------*/
-
-
-
-
-	
-
-/*--------------------------------------------------------------------*/
-
-
-
 /*
  * Let's evaluate all STABLE functions that have constant args before dispatch, so we get a consistent
  * view across QEs
@@ -2025,7 +1993,6 @@ connection_error:
  * Also, if this is a single_row insert, let's evaluate nextval() and currval() before dispatching
  *
  */
-
 static Node *
 pre_dispatch_function_evaluation_mutator(Node *node,
 										 pre_dispatch_function_evaluation_context * context)
@@ -2441,7 +2408,6 @@ bindCurrentOfParams(char *cursor_name, Oid target_relid, ItemPointer ctid, int *
 	pfree(table_name);
 }
 
-
 /*
  * Evaluate functions to constants.
  */
@@ -2467,11 +2433,6 @@ planner_make_plan_constant(struct PlannerInfo *root, Node *n, bool is_SRI)
 
 	return plan_tree_mutator(n, pre_dispatch_function_evaluation_mutator, &pcontext);
 }
-
-
-
-
-
 
 /*
  * Synchronize threads to finish for this process to die.  Dispatching
@@ -2505,7 +2466,6 @@ cdbdisp_waitThreads(void)
 		pg_usleep(interval);
 	}
 }
-
 
 static int getMaxThreadsPerGang()
 {
@@ -2586,7 +2546,6 @@ cdbdisp_makeDispatchResults(int resultCapacity, int sliceCapacity,
 
 	return results;
 } /* cdbdisp_makeDispatchResults */
-
 
 /*
  * Allocate memory and initialize CdbDispatcherState.
@@ -2682,8 +2641,6 @@ static char *dupQueryTextAndSetSliceId(MemoryContext cxt, char *queryText, int l
 	return newQuery;
 }
 
-
-
 /*
  * Initialize CdbDispatcherState using DispatchCommandQueryParms
  *
@@ -2752,8 +2709,3 @@ static void cdbdisp_queryParmsInit(struct CdbDispatcherState *ds,
 		pParms->query_text_len = len;
 	}
 }
-
-
-
-
-

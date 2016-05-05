@@ -26,21 +26,8 @@
 #include "utils/memutils.h"
 #include "miscadmin.h"
 
+extern bool Test_print_direct_dispatch_info;
 
-/* determines which dispatchOptions need to be set. */
-static int generateTxnOptions(bool needTwoPhase);
-static void remove_subquery_in_RTEs(Node *node);
-static void
-CdbDispatchUtilityStatement_Internal(struct Node *stmt, bool needTwoPhase, char* debugCaller);
-static void
-cdbdisp_dispatchSetCommandToAllGangs(const char	*strCommand,
-						char					*serializedQuerytree,
-						int						serializedQuerytreelen,
-						char					*serializedPlantree,
-						int						serializedPlantreelen,
-                        bool					cancelOnError,
-                        bool					needTwoPhase,
-                        struct CdbDispatcherState *ds);
 /*
  * We need an array describing the relationship between a slice and
  * the number of "child" slices which depend on it.
@@ -51,17 +38,26 @@ typedef struct {
 	Slice *slice;
 } sliceVec;
 
+/* determines which dispatchOptions need to be set. */
+static int generateTxnOptions(bool needTwoPhase);
+static void remove_subquery_in_RTEs(Node *node);
+static void CdbDispatchUtilityStatement_Internal(struct Node *stmt, bool needTwoPhase, char* debugCaller);
+static void cdbdisp_dispatchSetCommandToAllGangs(const char	*strCommand,
+						char					*serializedQuerytree,
+						int						serializedQuerytreelen,
+						char					*serializedPlantree,
+						int						serializedPlantreelen,
+                        bool					cancelOnError,
+                        bool					needTwoPhase,
+                        struct CdbDispatcherState *ds);
+
 static int fillSliceVector(SliceTable * sliceTable, int sliceIndex, sliceVec *sliceVector, int len);
 
-extern bool Test_print_direct_dispatch_info;
-
-static char *
-PQbuildGpQueryString(MemoryContext cxt, DispatchCommandParms *pParms,
+static char * PQbuildGpQueryString(MemoryContext cxt, DispatchCommandParms *pParms,
 		DispatchCommandQueryParms *pQueryParms, int *finalLen);
 
 static void cdbdisp_queryParmsInit(struct CdbDispatcherState *ds,
 		DispatchCommandQueryParms *pQueryParms);
-
 
 /* Special Greenplum-only method for executing SQL statements.  Specifies a global
  * transaction context that the statement should be executed within.
@@ -293,7 +289,6 @@ PQbuildGpQueryString(MemoryContext cxt, DispatchCommandParms *pParms,
 
 	return shared_query;
 }
-
 
 /*
  * This code was refactored out of cdbdisp_dispatchPlan.  It's
@@ -592,6 +587,7 @@ mark_bit(char *bits, int nth)
 	char nthbit  = 1 << (nth & 7);
 	bits[nthbyte] |= nthbit;
 }
+
 static void
 or_bits(char* dest, char* src, int n)
 {
@@ -623,7 +619,8 @@ count_bits(char* bits, int nbyte)
  * Because of input sharing, the slices now are DAG.  We cannot simply go down the 
  * tree and add up number of children, which will return too big number.
  */
-static int markbit_dep_children(SliceTable *sliceTable, int sliceIdx, sliceVec *sliceVec, int bitmasklen, char* bits)
+static int
+markbit_dep_children(SliceTable *sliceTable, int sliceIdx, sliceVec *sliceVec, int bitmasklen, char* bits)
 {
 	ListCell *sublist;
 	Slice *slice = (Slice *) list_nth(sliceTable->slices, sliceIdx);
@@ -765,7 +762,6 @@ cdbdisp_dispatchPlan(struct QueryDesc *queryDesc,
 	stmt = queryDesc->plannedstmt;
 	Assert(stmt);
 
-
 	/*
 	 * Let's evaluate STABLE functions now, so we get consistent values on the QEs
 	 *
@@ -774,7 +770,6 @@ cdbdisp_dispatchPlan(struct QueryDesc *queryDesc,
 	 * consistent value for everyone
 	 *
 	 */
-
 	is_SRI = false;
 
 	if (queryDesc->operation == CMD_INSERT)
@@ -867,64 +862,64 @@ cdbdisp_dispatchPlan(struct QueryDesc *queryDesc,
 	Assert(splan != NULL && splan_len > 0 && splan_len_uncompressed > 0);
 	
 	if (queryDesc->params != NULL && queryDesc->params->numParams > 0)
-	{		
-        ParamListInfoData  *pli;
-        ParamExternData    *pxd;
-        StringInfoData      parambuf;
-		Size                length;
-        int                 plioff;
-		int32               iparam;
+	{
+		ParamListInfoData *pli;
+		ParamExternData *pxd;
+		StringInfoData parambuf;
+		Size length;
+		int plioff;
+		int32 iparam;
 
-        /* Allocate buffer for params */
-        initStringInfo(&parambuf);
+		/* Allocate buffer for params */
+		initStringInfo(&parambuf);
 
-        /* Copy ParamListInfoData header and ParamExternData array */
-        pli = queryDesc->params;
-        length = (char *)&pli->params[pli->numParams] - (char *)pli;
-        plioff = parambuf.len;
-        Assert(plioff == MAXALIGN(plioff));
-        appendBinaryStringInfo(&parambuf, pli, length);
+		/* Copy ParamListInfoData header and ParamExternData array */
+		pli = queryDesc->params;
+		length = (char *)&pli->params[pli->numParams] - (char *)pli;
+		plioff = parambuf.len;
+		Assert(plioff == MAXALIGN(plioff));
+		appendBinaryStringInfo(&parambuf, pli, length);
 
-        /* Copy pass-by-reference param values. */
-        for (iparam = 0; iparam < queryDesc->params->numParams; iparam++)
+		/* Copy pass-by-reference param values. */
+		for (iparam = 0; iparam < queryDesc->params->numParams; iparam++)
 		{
 			int16   typlen;
 			bool    typbyval;
 
-            /* Recompute pli each time in case parambuf.data is repalloc'ed */
-            pli = (ParamListInfoData *)(parambuf.data + plioff);
+			/* Recompute pli each time in case parambuf.data is repalloc'ed */
+			pli = (ParamListInfoData *)(parambuf.data + plioff);
 			pxd = &pli->params[iparam];
 
-            /* Does pxd->value contain the value itself, or a pointer? */
+			/* Does pxd->value contain the value itself, or a pointer? */
 			get_typlenbyval(pxd->ptype, &typlen, &typbyval);
-            if (!typbyval)
-            {
+			if (!typbyval)
+			{
 				char   *s = DatumGetPointer(pxd->value);
 
 				if (pxd->isnull ||
-                    !PointerIsValid(s))
-                {
-                    pxd->isnull = true;
-                    pxd->value = 0;
-                }
+						!PointerIsValid(s))
+				{
+					pxd->isnull = true;
+					pxd->value = 0;
+				}
 				else
 				{
-			        length = datumGetSize(pxd->value, typbyval, typlen);
+					length = datumGetSize(pxd->value, typbyval, typlen);
 
 					/* MPP-1637: we *must* set this before we
 					 * append. Appending may realloc, which will
 					 * invalidate our pxd ptr. (obviously we could
 					 * append first if we recalculate pxd from the new
 					 * base address) */
-                    pxd->value = Int32GetDatum(length);
+					pxd->value = Int32GetDatum(length);
 
-                    appendBinaryStringInfo(&parambuf, &iparam, sizeof(iparam));
-                    appendBinaryStringInfo(&parambuf, s, length);
+					appendBinaryStringInfo(&parambuf, &iparam, sizeof(iparam));
+					appendBinaryStringInfo(&parambuf, s, length);
 				}
-            }
+			}
 		}
-        sparams = parambuf.data;
-        sparams_len = parambuf.len;
+		sparams = parambuf.data;
+		sparams_len = parambuf.len;
 	}
 	else
 	{
