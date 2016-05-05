@@ -1464,7 +1464,6 @@ cdbdisp_queryParmsInit(struct CdbDispatcherState *ds,
 {
 	int i = 0;
 	int len = 0;
-	MemoryContext oldContext = NULL;
 
 	CdbDispatchCmdThreads *dThreads = ds->dispatchThreads;
 	DispatchCommandParms *pParms = &dThreads->dispatchCommandParmsAr[0];

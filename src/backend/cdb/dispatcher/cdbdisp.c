@@ -125,7 +125,7 @@ bindCurrentOfParams(char *cursor_name,
 					int *gp_segment_id, 
 					Oid *tableoid);
 
-static int getMaxThreadsPerGang();
+static int getMaxThreadsPerGang(void);
 static CdbDispatchCmdThreads *
 cdbdisp_makeDispatchThreads(int maxThreads);
 static CdbDispatchResults *
@@ -164,11 +164,6 @@ typedef struct {
 	Slice *slice;
 } sliceVec;
 
-static int fillSliceVector(SliceTable * sliceTable, int sliceIndex, sliceVec *sliceVector, int len);
-
-/* determines which dispatchOptions need to be set. */
-static int generateTxnOptions(bool needTwoPhase);
-
 typedef struct
 {
 	plan_tree_base_prefix base; /* Required prefix for plan_tree_walker/mutator */
@@ -177,20 +172,6 @@ typedef struct
 
 static Node *pre_dispatch_function_evaluation_mutator(Node *node,
 						 pre_dispatch_function_evaluation_context * context);
-
-static void
-CdbDispatchUtilityStatement_Internal(struct Node *stmt, bool needTwoPhase, char* debugCaller);
-
-/* 
- * ====================================================
- * STATIC STATE VARIABLES should not be declared!
- * global state will break the ability to run cursors.
- * only globals with a higher granularity than a running
- * command (i.e: transaction, session) are ok.
- * ====================================================
- */
-
-static DtxContextInfo TempQDDtxContextInfo = DtxContextInfo_StaticInit;
 
 /*
  * Counter to indicate there are some dispatch threads running.  This will
@@ -2467,7 +2448,8 @@ cdbdisp_waitThreads(void)
 	}
 }
 
-static int getMaxThreadsPerGang()
+static int
+getMaxThreadsPerGang(void)
 {
 	int maxThreads = 0;
 	if (gp_connections_per_thread == 0)
@@ -2592,7 +2574,8 @@ cdbdisp_makeDispatcherState(CdbDispatcherState *ds, int maxResults,
  * Free the PQExpBufferData allocated in libpq.
  * Free dispatcher memory context.
  */
-void cdbdisp_destroyDispatcherState(CdbDispatcherState *ds)
+void
+cdbdisp_destroyDispatcherState(CdbDispatcherState *ds)
 {
 	CdbDispatchResults * results = ds->primaryResults;
     if (results != NULL && results->resultArray != NULL)
@@ -2622,7 +2605,8 @@ void cdbdisp_destroyDispatcherState(CdbDispatcherState *ds)
  * Make a new copy of query text and set the slice id in the right place.
  *
  */
-static char *dupQueryTextAndSetSliceId(MemoryContext cxt, char *queryText, int len,
+static char *
+dupQueryTextAndSetSliceId(MemoryContext cxt, char *queryText, int len,
 		int sliceId)
 {
 	/* DTX command and RM command don't need slice id */
@@ -2639,73 +2623,4 @@ static char *dupQueryTextAndSetSliceId(MemoryContext cxt, char *queryText, int l
 	 */
 	memcpy(newQuery + 1 + sizeof(int), &tmp, sizeof(tmp));
 	return newQuery;
-}
-
-/*
- * Initialize CdbDispatcherState using DispatchCommandQueryParms
- *
- * Allocate query text in memory context, initialize it and assign it to
- * all DispatchCommandQueryParms in this dispatcher state.
- *
- * For now, there's only one field (localSlice) which is different to each
- * dispatcher thread, we set it it later.
- *
- * Also, we free the DispatchCommandQueryParms memory.
- */
-static void cdbdisp_queryParmsInit(struct CdbDispatcherState *ds,
-		DispatchCommandQueryParms *pQueryParms)
-{
-	int i = 0;
-	int len = 0;
-	MemoryContext oldContext = NULL;
-
-	CdbDispatchCmdThreads *dThreads = ds->dispatchThreads;
-	DispatchCommandParms *pParms = &dThreads->dispatchCommandParmsAr[0];
-
-	Assert(pQueryParms->strCommand != NULL);
-
-	char *queryText = PQbuildGpQueryString(ds->dispatchStateContext, pParms, pQueryParms, &len);
-
-	if (pQueryParms->serializedQuerytree != NULL)
-	{
-		pfree(pQueryParms->serializedQuerytree);
-		pQueryParms->serializedQuerytree = NULL;
-	}
-
-	if (pQueryParms->serializedPlantree != NULL)
-	{
-		pfree(pQueryParms->serializedPlantree);
-		pQueryParms->serializedPlantree = NULL;
-	}
-
-	if (pQueryParms->serializedParams != NULL)
-	{
-		pfree(pQueryParms->serializedParams);
-		pQueryParms->serializedParams = NULL;
-	}
-
-	if (pQueryParms->serializedSliceInfo != NULL)
-	{
-		pfree(pQueryParms->serializedSliceInfo);
-		pQueryParms->serializedSliceInfo = NULL;
-	}
-
-	if (pQueryParms->serializedDtxContextInfo != NULL)
-	{
-		pfree(pQueryParms->serializedDtxContextInfo);
-		pQueryParms->serializedDtxContextInfo = NULL;
-	}
-
-	if (pQueryParms->seqServerHost != NULL)
-	{
-		pfree(pQueryParms->seqServerHost);
-		pQueryParms->seqServerHost = NULL;
-	}
-
-	for (i = 0; i < dThreads->dispatchCommandParmsArSize; i++)
-	{
-		pParms = &dThreads->dispatchCommandParmsAr[i];
-		pParms->query_text = queryText;
-		pParms->query_text_len = len;
-	}
 }

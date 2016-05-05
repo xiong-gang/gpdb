@@ -25,6 +25,14 @@
 
 #include "gp-libpq-fe.h"
 
+/* 
+ * ====================================================
+ * STATIC STATE VARIABLES should not be declared!
+ * global state will break the ability to run cursors.
+ * only globals with a higher granularity than a running
+ * command (i.e: transaction, session) are ok.
+ * ====================================================
+ */
 static DtxContextInfo TempQDDtxContextInfo = DtxContextInfo_StaticInit;
 
 static void cdbdisp_dtxParmsInit(struct CdbDispatcherState *ds,
