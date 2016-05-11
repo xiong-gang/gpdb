@@ -11,12 +11,11 @@ established a basic trust in the small units themselves, c) it serves as
 documentation about the expected behavior, d) enables easier code reuse because 
 code is already tested via two different code paths [Wikipedia].
 
-The unit test code is stored in cdb-pg/src/test/unit. The directory contains the 
-modified cmockery library, all mock source files currently in use (mock) and a 
-directory test, which contains all test code.
+The unit test code is stored in src/test/unit. The directory contains the
+modified cmockery library, all mock source files currently in use (mock). The
+test code is under src/backend/cdb/test directory.
 
-The different test executables can be found in the subdirectories of the 
-directory test. By the design the used test library cmockery works, a test 
+By the design the used test library cmockery works, a test
 executable can only focus on a set of source files. We call this portion the 
 System Under Test (SUT). We will talk more about the System Under Test later. 
 For now, it is important to know that the SUT is the port of code tested in a 
@@ -40,22 +39,9 @@ The development of a new test consists of multiple steps:
 	  for the Makefile and the README file.
 	  
 	  > TARGETS=SOMETHING_test
-	  > include ../Makefile.all
-      > include ${CMOCKERY_DIR}/Makefile
-      > include ${MOCK_DIR}/Makefile
+	  > include ${top_builddir}/src/Makefile.global
+	  > include ${top_builddir}/src/backend/mock.mk
 
-      > MOCK_OBJS=
-	
-      > include ../Makefile.all2
-	  
-	- Change the TARGETS, and <testname>_REAL_OBJS variables in the
-	  Makefile. TARGETS is usually straightforward to set.
-	  
-	  By default, the test program is linked with mock versions of most
-	  backend files. The <testname>_REAL_OBJS needs to list any files
-	  that should *not* be mocked, for which the real file should linked
-	  in instead.
-	  
 	- Create a new test source file, also usually named after the SUT. An 
 	  example is heapam_test.c in the heapam SUT directory. In the beginning 
 	  the test source file consists only of the main function.
@@ -84,10 +70,9 @@ The development of a new test consists of multiple steps:
       > 	return run_tests(tests);
       > }
 
-	  
 3.	Insert new test case functions and register them in the main function. A 
 	test function usually consists of three steps:
-    
+
 	- Describe the interaction of the called functions from the SUT with the 
 	  environment. This is only via expect_- and will_-functions from the 
 	  cmockery library. Will_ functions are used to define which mocked 
@@ -127,7 +112,7 @@ int main(int argc, char* argv[]) {
 The test framework accepts command line arguments:
 
 - --cmockery_abort_at_missing_check
-  In certain situations, is helpful to call the test executable with 
+  In certain situations, it is helpful to call the test executable with
   --cmockery_abort_at_missing_check. When this option is activated or if the 
   cmockery_abort_at_missing_check() function is called, cmockery aborts instead 
   of failing a test when a check is missing. 
@@ -249,7 +234,7 @@ a SUT with its environment:
 - expect_memory(function_name, parameter, memory, size): Adds an expectation 
   that the memory a pointer parameter points is equal to the memory parameter 
   for the next size bytes. The data behind the memory parameter is copied and 
-  can be safely modified or freed with out changing the expectation.
+  can be safely modified or freed without changing the expectation.
   
 - expect_not_memory(function_name, parameter, memory, size): 
   Similar to expect_memory, but negated. 
