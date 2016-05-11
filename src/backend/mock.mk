@@ -58,9 +58,15 @@ ALL_OBJS=$(addprefix $(top_srcdir)/, \
 # The argument is a list of backend object files that should *not* be included
 BACKEND_OBJS=$(filter-out $(1), $(ALL_OBJS))
 
+# If we add suffix like _mock_xxx to the name of unit test file, we should
+# compute the tested object file name and exclude it in link stage
+TEST_SUBST_OBJ=$(addprefix $(top_srcdir)/$(subdir)/, \
+				$(addsuffix .o, \
+					$(shell echo $* | sed 's/_mock_.*//')))
+
 # The test target depends on $(OBJFILES) which would update files including mocks.
 %.t: $(OBJFILES) $(CMOCKERY_OBJS) $(MOCK_OBJS) %_test.o
-	$(CC) $(CFLAGS) $(LDFLAGS) $(call BACKEND_OBJS, $(top_srcdir)/$(subdir)/$*.o $(patsubst $(MOCK_DIR)/%_mock.o,$(top_builddir)/src/%.o, $^)) $(filter-out %/objfiles.txt, $^) $(MOCK_LIBS) -o $@
+	$(CC) $(CFLAGS) $(LDFLAGS) $(call BACKEND_OBJS, $(TEST_SUBST_OBJ) $(patsubst $(MOCK_DIR)/%_mock.o,$(top_builddir)/src/%.o, $^)) $(filter-out %/objfiles.txt, $^) $(MOCK_LIBS) -o $@
 
 # We'd like to call only src/backend, but it seems we should build src/port and
 # src/timezone before src/backend.  This is not the case when main build has finished,
