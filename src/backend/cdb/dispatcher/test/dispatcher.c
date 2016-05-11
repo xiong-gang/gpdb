@@ -5,7 +5,7 @@
 #include "cdb/cdbsreh.h"
 #include "cdb/cdbconn.h"
 
-extern Gang *mockCreateGang(GangType type, int gangId, int size, char *hostip, uint16 portStart);
+extern Gang *allocateWriterGang();
 
 int main(int argc, char *argv[])
 {
@@ -22,7 +22,7 @@ int main(int argc, char *argv[])
 	struct CdbDispatcherState ds = {0};
 
 
-	Gang *mockGang = mockCreateGang(GANGTYPE_PRIMARY_WRITER, 0, gangSize, "localhost", 11000);
+	Gang *mockGang = allocateWriterGang();
 	if (mockGang == NULL)
 	{
 		printf("create gang failed\n");
