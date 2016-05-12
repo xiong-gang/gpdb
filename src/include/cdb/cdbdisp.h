@@ -446,4 +446,10 @@ extern Node *planner_make_plan_constant(struct PlannerInfo *root, Node *n, bool 
 void cdbdisp_waitThreads(void);
 /*--------------------------------------------------------------------*/
 
+void
+cdbdisp_makeDispatcherState(CdbDispatcherState *ds, int maxResults,
+                int maxSlices, bool cancelOnError);
+
+void cdbdisp_destroyDispatcherState(CdbDispatcherState *ds);
+
 #endif   /* CDBDISP_H */
