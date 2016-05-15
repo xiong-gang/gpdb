@@ -106,6 +106,11 @@
  * default method.	We assume that fsync() is always available, and that
  * configure determined whether fdatasync() is.
  */
+
+//debug
+#define PG_O_DIRECT 0
+
+
 #if defined(O_SYNC)
 #define BARE_OPEN_SYNC_FLAG		O_SYNC
 #elif defined(O_FSYNC)
