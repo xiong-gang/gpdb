@@ -294,3 +294,8 @@ isFtsReadOnlySet(void)
 {
 	return *ftsReadOnlyFlag;
 }
+
+uint64 getFtsVersion(void)
+{
+	return ftsProbeInfo->fts_statusVersion;
+}

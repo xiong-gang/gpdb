@@ -96,8 +96,6 @@ typedef struct DoConnectParms
 	/* type of gang. */
 	GangType type;
 
-	bool i_am_superuser;
-
 	/* connect options. GUC etc. */
 	StringInfo connectOptions;
 
@@ -120,7 +118,7 @@ static void disconnectAndDestroyGang(Gang *gp);
 static void disconnectAndDestroyAllReaderGangs(bool destroyAllocated);
 
 static bool isTargetPortal(const char *p1, const char *p2);
-static void addOptions(StringInfo string, bool iswriter, bool i_am_superuser);
+static void addOptions(StringInfo string, bool iswriter);
 static bool cleanupGang(Gang * gp);
 extern void resetSessionForPrimaryGangLoss(void);
 static const char* gangTypeToString(GangType);
@@ -563,28 +561,8 @@ static bool isPrimaryWriterGangAlive(void)
 	for (i = 0; i < size; i++)
 	{
 		SegmentDatabaseDescriptor *segdb = &primaryWriterGang->db_descriptors[i];
-		int ret = 0;
-		char buf;
-
-#ifndef WIN32
-		ret = recv(segdb->conn->sock, &buf, 1, MSG_PEEK | MSG_DONTWAIT);
-#else
-		ret = recv(segdb->conn->sock, &buf, 1, MSG_PEEK | MSG_PARTIAL);
-#endif
-
-		if (ret == 0) /* socket has been closed. EOF */
+		if (!isSockAlive(segdb->conn->sock))
 			return false;
-
-		if (ret > 0) /* data waiting on socket, it must be OK. */
-			continue;
-
-		if (ret == -1) /* error, or would be block. */
-		{
-			if (errno == EAGAIN || errno == EINPROGRESS)
-				continue; /* connection intact, no data available */
-			else
-				return false;
-		}
 	}
 
 	return true;
@@ -717,17 +695,18 @@ CdbComponentDatabases *
 getComponentDatabases(void)
 {
 	Assert(Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_UTILITY);
+	uint64 ftsVersion = getFtsVersion();
 	if (cdb_component_dbs == NULL)
 	{
 		cdb_component_dbs = getCdbComponentDatabases();
-		cdb_component_dbs->fts_version = ftsProbeInfo->fts_statusVersion;
+		cdb_component_dbs->fts_version = ftsVersion;
 	}
-	else if (cdb_component_dbs->fts_version != ftsProbeInfo->fts_statusVersion)
+	else if (cdb_component_dbs->fts_version != ftsVersion)
 	{
 		LOG_GANG_DEBUG(LOG, "FTS rescanned, get new component databases info.");
 		freeCdbComponentDatabases(cdb_component_dbs);
 		cdb_component_dbs = getCdbComponentDatabases();
-		cdb_component_dbs->fts_version = ftsProbeInfo->fts_statusVersion;
+		cdb_component_dbs->fts_version = ftsVersion;
 	}
 
 	return cdb_component_dbs;
@@ -944,7 +923,7 @@ static void addOneOption(StringInfo string, struct config_generic * guc)
 /*
  * Add GUCs to option string.
  */
-static void addOptions(StringInfo string, bool iswriter, bool i_am_superuser)
+static void addOptions(StringInfo string, bool iswriter)
 {
 	struct config_generic **gucs = get_guc_variables();
 	int ngucs = get_num_guc_variables();
@@ -998,7 +977,7 @@ static void addOptions(StringInfo string, bool iswriter, bool i_am_superuser)
 	{
 		struct config_generic *guc = gucs[i];
 
-		if ((guc->flags & GUC_GPDB_ADDOPT) && (guc->context == PGC_USERSET || i_am_superuser))
+		if ((guc->flags & GUC_GPDB_ADDOPT) && (guc->context == PGC_USERSET || procRoleIsSuperuser()))
 			addOneOption(string, guc);
 	}
 }
@@ -1014,11 +993,10 @@ static DoConnectParms* makeConnectParms(int parmsCount, GangType type)
 			parmsCount * sizeof(DoConnectParms));
 	DoConnectParms* pParms = NULL;
 	StringInfo pOptions = makeStringInfo();
-	bool i_am_superuser = superuser_arg(MyProc->roleId);
 	int segdbPerThread = gp_connections_per_thread == 0 ? getgpsegmentCount() : gp_connections_per_thread;
 	int i = 0;
 
-	addOptions(pOptions, type == GANGTYPE_PRIMARY_WRITER, i_am_superuser);
+	addOptions(pOptions, type == GANGTYPE_PRIMARY_WRITER);
 
 	for (i = 0; i < parmsCount; i++)
 	{
@@ -1028,7 +1006,6 @@ static DoConnectParms* makeConnectParms(int parmsCount, GangType type)
 		MemSet(&pParms->thread, 0, sizeof(pthread_t));
 		pParms->db_count = 0;
 		pParms->type = type;
-		pParms->i_am_superuser = i_am_superuser;
 		pParms->connectOptions = pOptions;
 	}
 	return doConnectParmsAr;
@@ -1298,9 +1275,6 @@ static Gang *getAvailableGang(GangType type, int size, int content)
 	default:
 		Assert(false);
 	}
-
-	if (retGang == NULL)
-		return NULL;
 
 	return retGang;
 }

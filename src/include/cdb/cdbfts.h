@@ -84,6 +84,7 @@ extern void ftsUnlock(void);
 void FtsNotifyProber(void);
 
 extern bool isFtsReadOnlySet(void);
+extern uint64 getFtsVersion(void);
 
 /* markStandbyStatus forces persistent state change ?! */
 #define markStandbyStatus(dbid, state) (markSegDBPersistentState((dbid), (state)))

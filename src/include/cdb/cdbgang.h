@@ -35,7 +35,7 @@ typedef enum GangType
 
 typedef struct Gang
 {
-	GangType	type;
+	GangType	 	type;
 	int			gang_id;
 	int			size;			/* segment_count or segdb_count ? */
 

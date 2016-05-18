@@ -326,6 +326,7 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc, const char *gpqeid,
 		nkeywords++;
 	}
 
+	Assert(MyProcPort->user_name);
 	keywords[nkeywords] = "user";
 	values[nkeywords] = MyProcPort->user_name;
 	nkeywords++;
@@ -437,11 +438,7 @@ void cdbconn_setSliceIndex(SegmentDatabaseDescriptor *segdbDesc, int sliceIndex,
 	if (segdbDesc->whoami != NULL)
 		pfree(segdbDesc->whoami);
 
-	segdbDesc->whoami = pstrdup(string->data);
-	if (string->data != NULL)
-	{
-		pfree(string->data);
-		string->data = NULL;
-	}
+	segdbDesc->whoami = string->data;
+
 	MemoryContextSwitchTo(oldContext);
 }

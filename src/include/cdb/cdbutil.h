@@ -173,4 +173,6 @@ extern int16 my_mirror_dbid(void);
  */
 extern int	getgpsegmentCount(void);
 
+extern bool isSockAlive(int sock);
+
 #endif   /* CDBUTIL_H */
