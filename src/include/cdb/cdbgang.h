@@ -72,7 +72,7 @@ extern List *getCdbProcessesForQD(int isPrimary);
 
 extern void freeGangsForPortal(char *portal_name);
 
-extern void disconnectAndDestroyAllGangs(void);
+extern void disconnectAndDestroyAllGangs(bool resetSession);
 
 extern void CheckForResetSession(void);
 
@@ -91,16 +91,25 @@ extern Gang *findGangById(int gang_id);
 
 
 /*
- * disconnectAndDestroyIdleReaderGangs() and disconnectAndDestroyAllIdleGangs().
+ * disconnectAndDestroyIdleReaderGangs()
  *
- * These two routines are used when a session has been idle for a while (waiting for the
+ * This routine is used when a session has been idle for a while (waiting for the
  * client to send us SQL to execute).  The idea is to consume less resources while sitting idle.
  *
- * Only call these from an idle session.
+ * The expectation is that if the session is logged on, but nobody is sending us work to do,
+ * we want to free up whatever resources we can.  Usually it means there is a human being at the
+ * other end of the connection, and that person has walked away from their terminal, or just hasn't
+ * decided what to do next.  We could be idle for a very long time (many hours).
+ *
+ * Of course, freeing gangs means that the next time the user does send in an SQL statement,
+ * we need to allocate gangs (at least the writer gang) to do anything.  This entails extra work,
+ * so we don't want to do this if we don't think the session has gone idle.
+ *
+ * Only call these routines from an idle session.
+ *
+ * This routine is called from the sigalarm signal handler (hopefully that is safe to do).
  */
 extern void disconnectAndDestroyIdleReaderGangs(void);
-
-extern void disconnectAndDestroyAllIdleGangs(void);
 
 extern void cleanupPortalGangs(Portal portal);
 
