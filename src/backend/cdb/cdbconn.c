@@ -237,26 +237,18 @@ void cdbconn_initSegmentDescriptor(SegmentDatabaseDescriptor *segdbDesc,
 
 	/*whoami*/
 	segdbDesc->whoami = NULL;
-	cdbconn_setSliceIndex(segdbDesc, -1, CurrentMemoryContext);
 
 	/* Connection error info */
 	segdbDesc->errcode = 0;
 	initPQExpBuffer(&segdbDesc->error_message);
 }
 
-/* Free all memory owned by this segment descriptor. */
+/* Free memory of segment descriptor which is not in memory context. */
 void cdbconn_termSegmentDescriptor(SegmentDatabaseDescriptor *segdbDesc)
 {
 	/* Free the error message buffer. */
 	segdbDesc->errcode = 0;
 	termPQExpBuffer(&segdbDesc->error_message);
-
-	/* Free connection info. */
-	if (segdbDesc->whoami)
-	{
-		pfree(segdbDesc->whoami);
-		segdbDesc->whoami = NULL;
-	}
 } /* cdbconn_termSegmentDescriptor */
 
 /*
@@ -402,12 +394,12 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc, const char *gpqeid,
  * Build text to identify this QE in error messages.
  * Don't call this function in threads.
  */
-void cdbconn_setSliceIndex(SegmentDatabaseDescriptor *segdbDesc, int sliceIndex,
-		MemoryContext mcxt)
+void setSegmentDBIdentifier(SegmentDatabaseDescriptor *segdbDesc,
+		int sliceIndex, MemoryContext mcxt)
 {
 	CdbComponentDatabaseInfo *cdbinfo = segdbDesc->segment_database_info;
-	MemoryContext oldContext = MemoryContextSwitchTo(mcxt);
 	StringInfo string = makeStringInfo();
+	MemoryContext oldContext = MemoryContextSwitchTo(mcxt);
 
 	/* Format the identity of the segment db. */
 	if (cdbinfo->segindex >= 0)
@@ -419,9 +411,7 @@ void cdbconn_setSliceIndex(SegmentDatabaseDescriptor *segdbDesc, int sliceIndex,
 			appendStringInfo(string, " slice%d", sliceIndex);
 	}
 	else
-		appendStringInfo(string,
-				SEGMENT_IS_ACTIVE_PRIMARY(cdbinfo) ?
-						"entry db" : "mirror entry db");
+		appendStringInfo(string, SEGMENT_IS_ACTIVE_PRIMARY(cdbinfo) ? "entry db" : "mirror entry db");
 
 	/* Format the connection info. */
 	appendStringInfo(string, " %s:%d", cdbinfo->hostip, cdbinfo->port);
@@ -433,12 +423,6 @@ void cdbconn_setSliceIndex(SegmentDatabaseDescriptor *segdbDesc, int sliceIndex,
 		if (pid)
 			appendStringInfo(string, " pid=%d", pid);
 	}
-
-	/* Store updated whoami text. */
-	if (segdbDesc->whoami != NULL)
-		pfree(segdbDesc->whoami);
-
 	segdbDesc->whoami = string->data;
-
 	MemoryContextSwitchTo(oldContext);
 }

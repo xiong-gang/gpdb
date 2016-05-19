@@ -81,8 +81,6 @@ cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc,
 		  const char *options);
 
 /* Set the slice index for error messages related to this QE. */
-void
-cdbconn_setSliceIndex(SegmentDatabaseDescriptor *segdbDesc, int sliceIndex,
-		MemoryContext mcxt);
-
+void setSegmentDBIdentifier(SegmentDatabaseDescriptor *segdbDesc,
+		int sliceIndex, MemoryContext mcxt);
 #endif   /* CDBCONN_H */

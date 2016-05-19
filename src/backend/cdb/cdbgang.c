@@ -277,10 +277,10 @@ allocateWriterGang()
 
 		/*
 		 * set "whoami" for utility statement.
-		 * non-utility statement will override it in function getCdbProcessList.
+		 * non-utility statement will overwrite it in function getCdbProcessList.
 		 */
 		for(i = 0; i < writerGang->size; i++)
-			cdbconn_setSliceIndex(&writerGang->db_descriptors[i], -1, GangContext);
+			setSegmentDBIdentifier(&writerGang->db_descriptors[i], -1, writerGang->perGangContext);
 
 		MemoryContextSwitchTo(oldContext);
 	}
@@ -350,6 +350,8 @@ create_gang_retry:
 	newGangDefinition = buildGangDefinition(type, gang_id, size, content);
 	Assert(newGangDefinition != NULL);
 	Assert(newGangDefinition->size == size);
+	Assert(newGangDefinition->perGangContext != NULL);
+	MemoryContextSwitchTo(newGangDefinition->perGangContext);
 
 	/*
 	 * The most threads we could have is segdb_count / gp_connections_per_thread, rounded up.
@@ -435,6 +437,7 @@ create_gang_retry:
 	if (size == successful_connections)
 	{
 		largest_gangsize = Max(largest_gangsize, size);
+		MemoryContextSwitchTo(GangContext);
 		return newGangDefinition;
 	}
 
@@ -484,11 +487,14 @@ create_gang_retry:
 		pg_usleep(gp_gang_creation_retry_timer * 1000);
 		CHECK_FOR_INTERRUPTS();
 
+		MemoryContextSwitchTo(GangContext);
 		goto create_gang_retry;
 	}
 
 exit:
-	disconnectAndDestroyGang(newGangDefinition);
+	if(newGangDefinition != NULL)
+		disconnectAndDestroyGang(newGangDefinition);
+
 	disconnectAndDestroyAllGangs(true);
 	CheckForResetSession();
 	ereport(ERROR,
@@ -689,12 +695,19 @@ static void checkConnectionStatus(Gang* gp, int* countInRecovery,
  * Read gp_segment_configuration catalog table and build a CdbComponentDatabases.
  *
  * Read the catalog if FTS is reconfigured.
+ *
+ * We don't want to destroy cdb_component_dbs when one gang get destroyed, so allocate
+ * it in GangContext instead of perGangContext.
  */
 CdbComponentDatabases *
 getComponentDatabases(void)
 {
 	Assert(Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_UTILITY);
+	Assert(GangContext != NULL);
+
 	uint64 ftsVersion = getFtsVersion();
+	MemoryContext oldContext = MemoryContextSwitchTo(GangContext);
+
 	if (cdb_component_dbs == NULL)
 	{
 		cdb_component_dbs = getCdbComponentDatabases();
@@ -707,6 +720,8 @@ getComponentDatabases(void)
 		cdb_component_dbs = getCdbComponentDatabases();
 		cdb_component_dbs->fts_version = ftsVersion;
 	}
+
+	MemoryContextSwitchTo(oldContext);
 
 	return cdb_component_dbs;
 }
@@ -777,6 +792,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 	CdbComponentDatabaseInfo *cdbinfo = NULL;
 	CdbComponentDatabaseInfo *cdbInfoCopy = NULL;
 	SegmentDatabaseDescriptor *segdbDesc = NULL;
+	MemoryContext perGangContext = NULL;
 
 	int segCount = 0;
 	int i = 0;
@@ -802,6 +818,13 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 		disableFTS();
 	}
 
+	perGangContext = AllocSetContextCreate(GangContext, "Per Gang Context",
+					ALLOCSET_DEFAULT_MINSIZE,
+					ALLOCSET_DEFAULT_INITSIZE,
+					ALLOCSET_DEFAULT_MAXSIZE);
+	Assert(perGangContext != NULL);
+	MemoryContextSwitchTo(perGangContext);
+
 	/* allocate a gang */
 	newGangDefinition = (Gang *) palloc0(sizeof(Gang));
 	newGangDefinition->type = type;
@@ -811,6 +834,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 	newGangDefinition->noReuse = false;
 	newGangDefinition->dispatcherActive = false;
 	newGangDefinition->portal_name = NULL;
+	newGangDefinition->perGangContext = perGangContext;
 	newGangDefinition->db_descriptors =
 			(SegmentDatabaseDescriptor *) palloc0(size * sizeof(SegmentDatabaseDescriptor));
 
@@ -822,6 +846,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 		cdbInfoCopy = copyCdbComponentDatabaseInfo(cdbinfo);
 		segdbDesc = &newGangDefinition->db_descriptors[0];
 		cdbconn_initSegmentDescriptor(segdbDesc, cdbInfoCopy);
+		setSegmentDBIdentifier(segdbDesc, -1, perGangContext);
 		break;
 
 	case GANGTYPE_SINGLETON_READER:
@@ -829,6 +854,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 		cdbInfoCopy = copyCdbComponentDatabaseInfo(cdbinfo);
 		segdbDesc = &newGangDefinition->db_descriptors[0];
 		cdbconn_initSegmentDescriptor(segdbDesc, cdbInfoCopy);
+		setSegmentDBIdentifier(segdbDesc, -1, perGangContext);
 		break;
 
 	case GANGTYPE_PRIMARY_READER:
@@ -846,6 +872,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 				segdbDesc = &newGangDefinition->db_descriptors[segCount];
 				cdbInfoCopy = copyCdbComponentDatabaseInfo(cdbinfo);
 				cdbconn_initSegmentDescriptor(segdbDesc, cdbInfoCopy);
+				setSegmentDBIdentifier(segdbDesc, -1, perGangContext);
 				segCount++;
 			}
 		}
@@ -862,6 +889,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 	}
 
 	LOG_GANG_DEBUG(LOG, "buildGangDefinition done");
+	MemoryContextSwitchTo(GangContext);
 	return newGangDefinition;
 }
 
@@ -1461,7 +1489,7 @@ getCdbProcessList(Gang *gang, int sliceIndex, DirectDispatchInfo *directDispatch
 
 		list_nth_replace(list, gang->size == 1 ? 0 : segdbDesc->segindex, process);
 
-		cdbconn_setSliceIndex(segdbDesc, sliceIndex, GangContext);
+		setSegmentDBIdentifier(segdbDesc, sliceIndex, gang->perGangContext);
 
 		LOG_GANG_DEBUG(LOG,
 				"Gang assignment (gang_id %d): slice%d seg%d %s:%d pid=%d",
@@ -1584,30 +1612,10 @@ static disconnectAndDestroyGang(Gang *gp)
 			segdbDesc->conn = NULL;
 		}
 
-		/* Free memory owned by the segdbDesc. */
-		if (segdbDesc->segment_database_info != NULL)
-		{
-			pfree(segdbDesc->segment_database_info);
-			segdbDesc->segment_database_info = NULL;
-		}
-
 		cdbconn_termSegmentDescriptor(segdbDesc);
 	}
 
-	if (gp->db_descriptors != NULL)
-	{
-		pfree(gp->db_descriptors);
-		gp->db_descriptors = NULL;
-	}
-
-	if (gp->portal_name != NULL)
-	{
-		pfree(gp->portal_name);
-		gp->portal_name = NULL;
-	}
-
-	gp->size = 0;
-	pfree(gp);
+	MemoryContextDelete(gp->perGangContext);
 
 	LOG_GANG_DEBUG(LOG, "disconnectAndDestroyGang done");
 }
@@ -1770,7 +1778,7 @@ static bool cleanupGang(Gang *gp)
 		}
 
 		/* QE is no longer associated with a slice. */
-		cdbconn_setSliceIndex(segdbDesc, -1, GangContext);
+		setSegmentDBIdentifier(segdbDesc, /* slice index */-1, gp->perGangContext);
 	}
 
 	/* disassociate this gang with any portal that it may have belonged to */

@@ -58,6 +58,9 @@ typedef struct Gang
 
 	/* should be destroyed in cleanupGang() if set*/
 	bool		noReuse;
+
+	/* memory context */
+	MemoryContext perGangContext;
 } Gang;
 
 extern Gang *allocateReaderGang(GangType type, char *portal_name);
