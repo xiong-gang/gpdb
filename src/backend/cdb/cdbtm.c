@@ -1028,9 +1028,7 @@ doDtxPhase2Retry(void)
 				}
 
 				/*
-				 * KLUDGE: FtsHandleGangConnectionFailure will need a special
-				 * transaction context to tell it not to raise an ERROR...
-				 * todo: really?
+				 * Todo: Maybe we don't need DTX_CONTEXT_QD_RETRY_PHASE_2 anymore.
 				 */
 				setDistributedTransactionContext(DTX_CONTEXT_QD_RETRY_PHASE_2);
 				elog(DTM_DEBUG5,
@@ -1041,17 +1039,35 @@ doDtxPhase2Retry(void)
 
 				currentGxact->retryPhase2RecursionStop = true;
 
-				succeeded = doDispatchDtxProtocolCommand(dtxProtocolCommand, /* flags */ 0,
-														 currentGxact->gid, currentGxact->gxid,
-														 &badGangs, /* raiseError */ false,
-														 &direct, NULL, 0);
+				/*
+				 * We don't want doDispatchDtxProtocolCommand to raise error. But it will call
+				 * createGang to allocate a writer gang, which could fail and error out.
+				 *
+				 * We catch the error and log a FATAL error instead of a PANIC.
+				 */
+				PG_TRY();
+				{
+					succeeded = doDispatchDtxProtocolCommand(dtxProtocolCommand, /* flags */ 0,
+															 currentGxact->gid, currentGxact->gxid,
+															 &badGangs, /* raiseError */ false,
+															 &direct, NULL, 0);
+				}
+				PG_CATCH();
+				{
+					succeeded = false;
+				}
+				PG_END_TRY();
+
 				if (!succeeded)
 				{
 					elog(FATAL, "A retry of the distributed transaction '%s Prepared' broadcast failed to one or more segments for gid = %s.",
 						 prepareKind, currentGxact->gid);
 				}
-				elog(NOTICE, "Retry of the distributed transaction '%s Prepared' broadcast succeeded to the segments for gid = %s.",
-					 prepareKind, currentGxact->gid);
+				else
+				{
+					elog(NOTICE, "Retry of the distributed transaction '%s Prepared' broadcast succeeded to the segments for gid = %s.",
+							prepareKind, currentGxact->gid);
+				}
 
 				/*
 				 * Global locking order: ProcArrayLock then DTM lock since

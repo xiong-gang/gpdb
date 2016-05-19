@@ -1303,7 +1303,10 @@ bool isSockAlive(int sock)
 {
 	int ret;
 	char buf;
+	int i = 0;
 
+	for(i = 0; i < 10; i++)
+	{
 #ifndef WIN32
 		ret = recv(sock, &buf, 1, MSG_PEEK | MSG_DONTWAIT);
 #else
@@ -1320,9 +1323,12 @@ bool isSockAlive(int sock)
 		{
 			if (errno == EAGAIN || errno == EINPROGRESS)
 				return true; /* connection intact, no data available */
+			else if (errno == EINTR)
+				continue; /* interrupted by signal, retry at most 10 times */
 			else
 				return false;
 		}
+	}
 
-		return false;
+	return true;
 }

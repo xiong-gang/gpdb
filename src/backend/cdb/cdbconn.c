@@ -25,7 +25,31 @@ extern int	pq_putmessage(char msgtype, const char *s, size_t len);
 
 int		gp_segment_connect_timeout = 180;
 
-static const char* transStatusToString(PGTransactionStatusType status);
+static const char* transStatusToString(PGTransactionStatusType status)
+{
+	const char *ret = "";
+	switch (status)
+	{
+	case PQTRANS_IDLE:
+		ret = "idle";
+		break;
+	case PQTRANS_ACTIVE:
+		ret = "active";
+		break;
+	case PQTRANS_INTRANS:
+		ret = "idle, within transaction";
+		break;
+	case PQTRANS_INERROR:
+		ret = "idle, within failed transaction";
+		break;
+	case PQTRANS_UNKNOWN:
+		ret = "unknown transaction status";
+		break;
+	default:
+		Assert(false);
+	}
+	return ret;
+}
 
 static void MPPnoticeReceiver(void * arg, const PGresult * res)
 {
@@ -267,12 +291,13 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc, const char *gpqeid,
 		const char *options)
 {
 #define MAX_KEYWORDS 10
+#define MAX_INT_STRING_LEN 20
 	CdbComponentDatabaseInfo *cdbinfo = segdbDesc->segment_database_info;
 	const char *keywords[MAX_KEYWORDS];
 	const char *values[MAX_KEYWORDS];
+	char portstr[MAX_INT_STRING_LEN];
+	char timeoutstr[MAX_INT_STRING_LEN];
 	int nkeywords = 0;
-	char portstr[20];
-	char timeoutstr[20];
 
 	keywords[nkeywords] = "gpqeid";
 	values[nkeywords] = gpqeid;
@@ -295,8 +320,8 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc, const char *gpqeid,
 	 *
 	 * For other QE connections, we set "hostaddr". "host" is not used.
 	 */
-	if (cdbinfo->segindex == MASTER_CONTENT_ID
-			&& GpIdentity.segindex == MASTER_CONTENT_ID)
+	if (segdbDesc->segindex == MASTER_CONTENT_ID &&
+		GpIdentity.segindex == MASTER_CONTENT_ID)
 	{
 		keywords[nkeywords] = "hostaddr";
 		values[nkeywords] = "";
@@ -433,6 +458,13 @@ void cdbconn_disconnect(SegmentDatabaseDescriptor *segdbDesc)
 	}
 }
 
+/*
+ * Read result from connection and discard it.
+ *
+ * Retry at most N times.
+ *
+ * Return false if there'er still leftovers.
+ */
 bool cdbconn_discardResults(SegmentDatabaseDescriptor *segdbDesc,
 		int retryCount)
 {
@@ -460,11 +492,13 @@ bool cdbconn_discardResults(SegmentDatabaseDescriptor *segdbDesc,
 	return true;
 }
 
+/* Return if it's a bad connection */
 bool cdbconn_isBadConnection(SegmentDatabaseDescriptor *segdbDesc)
 {
 	return PQstatus(segdbDesc->conn) == CONNECTION_BAD;
 }
 
+/* Reset error message buffer */
 void cdbconn_resetQEErrorMessage(SegmentDatabaseDescriptor *segdbDesc)
 {
 	segdbDesc->errcode = 0;
@@ -479,13 +513,13 @@ void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc,
 		int sliceIndex, MemoryContext mcxt)
 {
 	CdbComponentDatabaseInfo *cdbinfo = segdbDesc->segment_database_info;
-	StringInfo string = makeStringInfo();
 	MemoryContext oldContext = MemoryContextSwitchTo(mcxt);
+	StringInfo string = makeStringInfo();
 
 	/* Format the identity of the segment db. */
-	if (cdbinfo->segindex >= 0)
+	if (segdbDesc->segindex >= 0)
 	{
-		appendStringInfo(string, "seg%d", cdbinfo->segindex);
+		appendStringInfo(string, "seg%d", segdbDesc->segindex);
 
 		/* Format the slice index. */
 		if (sliceIndex > 0)
@@ -498,38 +532,11 @@ void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc,
 	appendStringInfo(string, " %s:%d", cdbinfo->hostip, cdbinfo->port);
 
 	/* If connected, format the QE's process id. */
-	if (segdbDesc->conn)
-	{
-		int pid = PQbackendPID(segdbDesc->conn);
-		if (pid)
-			appendStringInfo(string, " pid=%d", pid);
-	}
+	if (segdbDesc->backendPid != 0)
+		appendStringInfo(string, " pid=%d", segdbDesc->backendPid);
+
 	segdbDesc->whoami = string->data;
+	pfree(string);
 	MemoryContextSwitchTo(oldContext);
 }
 
-static const char* transStatusToString(PGTransactionStatusType status)
-{
-	const char *ret = "";
-	switch (status)
-	{
-	case PQTRANS_IDLE:
-		ret = "idle";
-		break;
-	case PQTRANS_ACTIVE:
-		ret = "active";
-		break;
-	case PQTRANS_INTRANS:
-		ret = "idle, within transaction";
-		break;
-	case PQTRANS_INERROR:
-		ret = "idle, within failed transaction";
-		break;
-	case PQTRANS_UNKNOWN:
-		ret = "unknown transaction status";
-		break;
-	default:
-		Assert(false);
-	}
-	return ret;
-}

@@ -245,17 +245,17 @@ FtsTestSegmentDBIsDown(SegmentDatabaseDescriptor * segdbDesc, int size)
 	{
 		CdbComponentDatabaseInfo *segInfo = segdbDesc[i].segment_database_info;
 
-		elog(
-				DEBUG2, "FtsTestGangConnection: looking for real fault on segment dbid %d", segInfo->dbid);
+		elog(DEBUG2, "FtsTestSegmentDBIsDown: looking for real fault on segment dbid %d", segInfo->dbid);
 
 		if (!FtsTestConnection(segInfo, forceRescan))
 		{
-			elog(DEBUG2, "found fault with segment dbid %d", segInfo->dbid);
-			ereport(LOG,
-					(errmsg_internal("FTS: reconfiguration is in progress")));
+			ereport(LOG, (errmsg_internal("FTS: found fault with segment dbid %d. "
+					"Reconfiguration is in progress", segInfo->dbid)));
 			return true;
 		}
-		forceRescan = false; /* only force the rescan on the first call. */
+
+		/* only force the rescan on the first call. */
+		forceRescan = false;
 	}
 
 	return false;

@@ -2053,7 +2053,6 @@ AssociateSlicesToProcesses(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 			slice->primaryProcesses = getCdbProcessList(slice->primaryGang,
                                                         slice->sliceIndex,
 														NULL);
-
 			Assert(sliceCalculateNumSendingProcesses(slice) == countNonNullValues(slice->primaryProcesses));
 			break;
 

@@ -344,7 +344,7 @@ void cdbdisp_dispatchToGang(struct CdbDispatcherState *ds, struct Gang *gp,
 		{
 			Assert (disp_direct->count == 1); /* currently we allow direct-to-one dispatch, only */
 
-			if (disp_direct->content[0] != segdbDesc->segment_database_info->segindex)
+			if (disp_direct->content[0] != segdbDesc->segindex)
 				continue;
 		}
 

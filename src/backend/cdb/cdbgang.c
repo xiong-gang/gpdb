@@ -433,10 +433,11 @@ create_gang_retry:
 	LOG_GANG_DEBUG(LOG,"createGang: %d processes requested; %d successful connections %d in recovery",
 			size, successful_connections, in_recovery_mode_count);
 
+	MemoryContextSwitchTo(GangContext);
+
 	if (size == successful_connections)
 	{
 		largest_gangsize = Max(largest_gangsize, size);
-		MemoryContextSwitchTo(GangContext);
 		return newGangDefinition;
 	}
 
@@ -486,7 +487,6 @@ create_gang_retry:
 		pg_usleep(gp_gang_creation_retry_timer * 1000);
 		CHECK_FOR_INTERRUPTS();
 
-		MemoryContextSwitchTo(GangContext);
 		goto create_gang_retry;
 	}
 
@@ -513,7 +513,6 @@ thread_DoConnect(void *arg)
 	int db_count = pParms->db_count;
 
 	SegmentDatabaseDescriptor *segdbDesc = NULL;
-	CdbComponentDatabaseInfo *cdbinfo = NULL;
 	int i = 0;
 
 	gp_set_thread_sigmasks();
@@ -534,13 +533,12 @@ thread_DoConnect(void *arg)
 			continue;
 		}
 
-		cdbinfo = segdbDesc->segment_database_info;
 		/*
 		 * Build the connection string.  Writer-ness needs to be processed
 		 * early enough now some locks are taken before command line options
 		 * are recognized.
 		 */
-		build_gpqeid_param(gpqeid, sizeof(gpqeid), cdbinfo->segindex, pParms->type == GANGTYPE_PRIMARY_WRITER);
+		build_gpqeid_param(gpqeid, sizeof(gpqeid), segdbDesc->segindex, pParms->type == GANGTYPE_PRIMARY_WRITER);
 
 		/* check the result in createGang */
 		cdbconn_doConnect(segdbDesc, gpqeid, pParms->connectOptions->data);
@@ -630,7 +628,6 @@ static void checkConnectionStatus(Gang* gp, int* countInRecovery,
 		int* countSuccessful)
 {
 	SegmentDatabaseDescriptor* segdbDesc = NULL;
-	CdbComponentDatabaseInfo* cdbInfo = NULL;
 	int size = gp->size;
 	int i = 0;
 
@@ -641,7 +638,6 @@ static void checkConnectionStatus(Gang* gp, int* countInRecovery,
 	for (i = 0; i < size; i++)
 	{
 		segdbDesc = &gp->db_descriptors[i];
-		cdbInfo = segdbDesc->segment_database_info;
 		/*
 		 * check connection established or not, if not, we may have to
 		 * re-build this gang.
@@ -669,14 +665,7 @@ static void checkConnectionStatus(Gang* gp, int* countInRecovery,
 		{
 			Assert(segdbDesc->errcode == 0 && segdbDesc->error_message.len == 0);
 
-			/*
-			 * We should have retrieved the IP from our cache
-			 */
-			Assert(cdbInfo->hostip != NULL);
-
-			/*
-			 * We have a live connection!
-			 */
+			/* We have a live connection! */
 			(*countSuccessful)++;
 		}
 	}
@@ -730,22 +719,14 @@ static CdbComponentDatabaseInfo *copyCdbComponentDatabaseInfo(
 	CdbComponentDatabaseInfo *newInfo = palloc0(size);
 	memcpy(newInfo, dbInfo, size);
 
-	if (dbInfo->address)
-		newInfo->address = pstrdup(dbInfo->address);
-
-	if (dbInfo->hostname)
-		newInfo->hostname = pstrdup(dbInfo->hostname);
-
 	if (dbInfo->hostip)
 		newInfo->hostip = pstrdup(dbInfo->hostip);
 
+	/* So far, we don't need them. */
+	newInfo->address = NULL;
+	newInfo->hostname = NULL;
 	for (i = 0; i < COMPONENT_DBS_MAX_ADDRS; i++)
-	{
-		if (dbInfo->hostaddrs[i] != NULL)
-		{
-			newInfo->hostaddrs[i] = pstrdup(dbInfo->hostaddrs[i]);
-		}
-	}
+		newInfo->hostaddrs[i] = NULL;
 
 	return newInfo;
 }
@@ -945,25 +926,15 @@ static void addOptions(StringInfo string, bool iswriter)
 {
 	struct config_generic **gucs = get_guc_variables();
 	int ngucs = get_num_guc_variables();
+	CdbComponentDatabaseInfo *qdinfo = NULL;
 	int i;
 
+	Assert (Gp_role == GP_ROLE_DISPATCH);
 	LOG_GANG_DEBUG(LOG, "addOptions: iswriter %d", iswriter);
 
-	/* GUCs need special handling */
-	/* TODO: gp_qd_hostname, gp_qd_port and gp_qd_callback_info are not actually used*/
-	if (Gp_role == GP_ROLE_DISPATCH)
-	{
-		CdbComponentDatabaseInfo *qdinfo;
-
-		qdinfo = &cdb_component_dbs->entry_db_info[0];
-		appendStringInfo(string, " -c gp_qd_hostname=%s", qdinfo->hostip);
-		appendStringInfo(string, " -c gp_qd_port=%d", qdinfo->port);
-	}
-	else
-	{
-		appendStringInfo(string, " -c gp_qd_hostname=%s", qdHostname);
-		appendStringInfo(string, " -c gp_qd_port=%d", qdPostmasterPort);
-	}
+	qdinfo = &cdb_component_dbs->entry_db_info[0];
+	appendStringInfo(string, " -c gp_qd_hostname=%s", qdinfo->hostip);
+	appendStringInfo(string, " -c gp_qd_port=%d", qdinfo->port);
 
 	appendStringInfo(string, " -c gp_qd_callback_info=port=%d", PostPortNumber);
 
@@ -1299,6 +1270,8 @@ static Gang *getAvailableGang(GangType type, int size, int content)
 
 static void addGangToAllocated(Gang *gp)
 {
+	Assert(CurrentMemoryContext == GangContext);
+
 	switch (gp->type)
 	{
 	case GANGTYPE_SINGLETON_READER:
@@ -1400,27 +1373,45 @@ getSegmentDescriptorFromGang(const Gang *gp, int seg)
 	for (i = 0; i < gp->size; i++)
 	{
 		if (gp->db_descriptors[i].segindex == seg)
-		{
 			return &(gp->db_descriptors[i]);
-		}
 	}
 
 	return NULL;
 }
 
+static CdbProcess *makeCdbProcess(SegmentDatabaseDescriptor *segdbDesc)
+{
+	CdbProcess *process = (CdbProcess *) makeNode(CdbProcess);
+	CdbComponentDatabaseInfo *qeinfo = segdbDesc->segment_database_info;
+
+	if (qeinfo == NULL)
+	{
+		elog(ERROR, "required segment is unavailable");
+	}
+	else if (qeinfo->hostip == NULL)
+	{
+		elog(ERROR, "required segment IP is unavailable");
+	}
+
+	process->listenerAddr = pstrdup(qeinfo->hostip);
+	process->listenerPort = segdbDesc->motionListener;
+	process->pid = segdbDesc->backendPid;
+	process->contentid = segdbDesc->segindex;
+	return process;
+}
 /*
  * Create a list of CdbProcess and initialize with Gang information.
+ *
  * 1) For primary reader gang and primary writer gang, the elements
  * in this list is order by segment index.
  * 2) For entry DB gang and singleton gang, the list length is 1.
  *
- * @param directDispatch may be null
+ * @directDispatch: might be null
  */
 List *
 getCdbProcessList(Gang *gang, int sliceIndex, DirectDispatchInfo *directDispatch)
 {
 	List *list = NULL;
-	CdbComponentDatabaseInfo *qeinfo = NULL;
 	int i = 0;
 
 	LOG_GANG_DEBUG(LOG, "getCdbProcessList slice%d gangtype=%d gangsize=%d",
@@ -1433,59 +1424,37 @@ getCdbProcessList(Gang *gang, int sliceIndex, DirectDispatchInfo *directDispatch
 			(gang->type == GANGTYPE_ENTRYDB_READER && gang->size == 1) ||
 			(gang->type == GANGTYPE_SINGLETON_READER && gang->size == 1));
 
-	/* initialize a list of NULL */
-	for (i = 0; i < gang->size; i++)
-		list = lappend(list, NULL);
 
-	for (i = 0; i < gang->size; i++)
+	if (directDispatch != NULL && directDispatch->isDirectDispatch)
 	{
-		CdbProcess *process = NULL;
-		SegmentDatabaseDescriptor *segdbDesc = &gang->db_descriptors[i];
-		bool includeThisProcess = true;
+		/* Currently, direct dispatch is to one segment db. */
+		Assert(list_length(directDispatch->contentIds) == 1);
 
-		if (directDispatch != NULL && directDispatch->isDirectDispatch)
-		{
-			ListCell *cell;
+		/* initialize a list of NULL */
+		for (i = 0; i < gang->size; i++)
+			list = lappend(list, NULL);
 
-			includeThisProcess = false;
-			foreach(cell, directDispatch->contentIds)
-			{
-				if (lfirst_int(cell) == segdbDesc->segindex)
-				{
-					includeThisProcess = true;
-					break;
-				}
-			}
-		}
-
-		if (!includeThisProcess)
-			continue;
-
-		process = (CdbProcess *) makeNode(CdbProcess);
-		qeinfo = segdbDesc->segment_database_info;
-
-		if (qeinfo == NULL)
-		{
-			elog(ERROR, "required segment is unavailable");
-		}
-		else if (qeinfo->hostip == NULL)
-		{
-			elog(ERROR, "required segment IP is unavailable");
-		}
-
-		process->listenerAddr = pstrdup(qeinfo->hostip);
-		process->listenerPort = segdbDesc->motionListener;
-		process->pid = segdbDesc->backendPid;
-		process->contentid = segdbDesc->segindex;
-
-		list_nth_replace(list, gang->size == 1 ? 0 : segdbDesc->segindex, process);
-
+		int directDispatchContentId = linitial_int(directDispatch->contentIds);
+		SegmentDatabaseDescriptor *segdbDesc = &gang->db_descriptors[directDispatchContentId];
+		CdbProcess *process = makeCdbProcess(segdbDesc);
 		setQEIdentifier(segdbDesc, sliceIndex, gang->perGangContext);
+		list_nth_replace(list, directDispatchContentId, process);
+	}
+	else
+	{
+		for (i = 0; i < gang->size; i++)
+		{
+			SegmentDatabaseDescriptor *segdbDesc = &gang->db_descriptors[i];
+			CdbProcess *process = makeCdbProcess(segdbDesc);
 
-		LOG_GANG_DEBUG(LOG,
-				"Gang assignment (gang_id %d): slice%d seg%d %s:%d pid=%d",
-				gang->gang_id, sliceIndex, process->contentid,
-				process->listenerAddr, process->listenerPort, process->pid);
+			setQEIdentifier(segdbDesc, sliceIndex, gang->perGangContext);
+			list = lappend(list, process);
+
+			LOG_GANG_DEBUG(LOG,
+					"Gang assignment (gang_id %d): slice%d seg%d %s:%d pid=%d",
+					gang->gang_id, sliceIndex, process->contentid,
+					process->listenerAddr, process->listenerPort, process->pid);
+		}
 	}
 
 	return list;
@@ -1663,15 +1632,13 @@ void disconnectAndDestroyIdleReaderGangs(void)
 }
 
 /*
- * cleanupGang():
- *
  * Cleanup a Gang, make it recyclable.
  *
  * A return value of "true" means that the gang was intact (or NULL).
  *
  * A return value of false, means that a problem was detected and the
  * gang has been disconnected (and so should not be put back onto the
- * available list).
+ * available list). Caller should call disconnectAndDestroyGang on it.
  */
 static bool cleanupGang(Gang *gp)
 {
@@ -1879,6 +1846,30 @@ void freeGangsForPortal(char *portal_name)
 	if (Gp_role != GP_ROLE_DISPATCH)
 		return;
 
+	/*
+	 * the primary writer gangs "belong" to the unnamed portal --
+	 * if we have multiple active portals trying to release, we can't just
+	 * release and re-release the writers each time !
+	 */
+	if (portal_name == NULL &&
+		primaryWriterGang != NULL &&
+		!cleanupGang(primaryWriterGang))
+	{
+		primaryWriterGang = NULL;
+		disconnectAndDestroyAllGangs(true);
+
+		elog(ERROR, "could not temporarily connect to one or more segments");
+		return;
+	}
+
+	if(allocatedReaderGangsN == NULL && allocatedReaderGangs1 == NULL)
+		return;
+
+	/*
+	 * Now we iterate through the list of allocated reader gangs
+	 * and we free all the gangs that belong to the portal that
+	 * was specified by our caller.
+	 */
 	LOG_GANG_DEBUG(LOG, "freeGangsForPortal '%s'. Reader gang inventory: "
 			"allocatedN=%d availableN=%d allocated1=%d available1=%d",
 			(portal_name ? portal_name : "unnamed portal"),
@@ -1887,33 +1878,9 @@ void freeGangsForPortal(char *portal_name)
 			list_length(allocatedReaderGangs1),
 			list_length(availableReaderGangs1));
 
-	/*
-	 * the primary and mirror writer gangs "belong" to the unnamed portal --
-	 * if we have multiple active portals trying to release, we can't just
-	 * release and re-release the writers each time !
-	 */
-	if (!portal_name)
-	{
-		if (!cleanupGang(primaryWriterGang))
-		{
-			primaryWriterGang = NULL;
-			disconnectAndDestroyAllGangs(true);
+	Assert (GangContext != NULL);
+	oldContext = MemoryContextSwitchTo(GangContext);
 
-			elog(ERROR, "could not temporarily connect to one or more segments");
-			return;
-		}
-	}
-
-	if (GangContext)
-		oldContext = MemoryContextSwitchTo(GangContext);
-	else
-		oldContext = MemoryContextSwitchTo(TopMemoryContext);
-
-	/*
-	 * Now we iterate through the list of allocated reader gangs
-	 * and we free all the gangs that belong to the portal that
-	 * was specified by our caller.
-	 */
 	cur_item = list_head(allocatedReaderGangsN);
 	while (cur_item != NULL)
 	{
@@ -1928,10 +1895,10 @@ void freeGangsForPortal(char *portal_name)
 					cur_item, prev_item);
 
 			/* we only return the gang to the available list if it is good */
-			if (!cleanupGang(gp))
-				disconnectAndDestroyGang(gp);
-			else
+			if (cleanupGang(gp))
 				availableReaderGangsN = lappend(availableReaderGangsN, gp);
+			else
+				disconnectAndDestroyGang(gp);
 
 			if (prev_item)
 				cur_item = lnext(prev_item);
@@ -1962,10 +1929,10 @@ void freeGangsForPortal(char *portal_name)
 					cur_item, prev_item);
 
 			/* we only return the gang to the available list if it is good */
-			if (!cleanupGang(gp))
-				disconnectAndDestroyGang(gp);
-			else
+			if (cleanupGang(gp))
 				availableReaderGangs1 = lappend(availableReaderGangs1, gp);
+			else
+				disconnectAndDestroyGang(gp);
 
 			if (prev_item)
 				cur_item = lnext(prev_item);
