@@ -121,7 +121,6 @@ static void addOptions(StringInfo string, bool iswriter);
 static bool cleanupGang(Gang * gp);
 static void resetSessionForPrimaryGangLoss(void);
 static const char* gangTypeToString(GangType);
-static const char* transStatusToString(PGTransactionStatusType status);
 static CdbComponentDatabaseInfo *copyCdbComponentDatabaseInfo(
 		CdbComponentDatabaseInfo *dbInfo);
 static CdbComponentDatabaseInfo *findDatabaseInfoBySegIndex(
@@ -280,7 +279,7 @@ allocateWriterGang()
 		 * non-utility statement will overwrite it in function getCdbProcessList.
 		 */
 		for(i = 0; i < writerGang->size; i++)
-			setSegmentDBIdentifier(&writerGang->db_descriptors[i], -1, writerGang->perGangContext);
+			setQEIdentifier(&writerGang->db_descriptors[i], -1, writerGang->perGangContext);
 
 		MemoryContextSwitchTo(oldContext);
 	}
@@ -647,7 +646,7 @@ static void checkConnectionStatus(Gang* gp, int* countInRecovery,
 		 * check connection established or not, if not, we may have to
 		 * re-build this gang.
 		 */
-		if (PQstatus(segdbDesc->conn) == CONNECTION_BAD)
+		if (cdbconn_isBadConnection(segdbDesc))
 		{
 			/*
 			 * Log failed connections.	Complete failures
@@ -658,26 +657,18 @@ static void checkConnectionStatus(Gang* gp, int* countInRecovery,
 
 			insist_log(segdbDesc->errcode != 0 && segdbDesc->error_message.len != 0,
 					"connection is null, but no error code or error message, for segDB %d", i);
-			ereport(LOG,
-					(errcode(segdbDesc->errcode), errmsg("%s",segdbDesc->error_message.data)));
+
+			ereport(LOG, (errcode(segdbDesc->errcode), errmsg("%s",segdbDesc->error_message.data)));
+			cdbconn_resetQEErrorMessage(segdbDesc);
 
 			/* this connect failed -- but why ? */
 			if (segment_failure_due_to_recovery(segdbDesc))
-			{
 				(*countInRecovery)++;
-			}
-
-			segdbDesc->errcode = 0;
-			resetPQExpBuffer(&segdbDesc->error_message);
 		}
 		else
 		{
 			Assert(segdbDesc->errcode == 0 && segdbDesc->error_message.len == 0);
 
-			LOG_GANG_DEBUG(LOG,
-					"Connected to %s motionListenerPorts=%d with options %s",
-					segdbDesc->whoami, segdbDesc->motionListener,
-					PQoptions(segdbDesc->conn));
 			/*
 			 * We should have retrieved the IP from our cache
 			 */
@@ -846,7 +837,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 		cdbInfoCopy = copyCdbComponentDatabaseInfo(cdbinfo);
 		segdbDesc = &newGangDefinition->db_descriptors[0];
 		cdbconn_initSegmentDescriptor(segdbDesc, cdbInfoCopy);
-		setSegmentDBIdentifier(segdbDesc, -1, perGangContext);
+		setQEIdentifier(segdbDesc, -1, perGangContext);
 		break;
 
 	case GANGTYPE_SINGLETON_READER:
@@ -854,7 +845,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 		cdbInfoCopy = copyCdbComponentDatabaseInfo(cdbinfo);
 		segdbDesc = &newGangDefinition->db_descriptors[0];
 		cdbconn_initSegmentDescriptor(segdbDesc, cdbInfoCopy);
-		setSegmentDBIdentifier(segdbDesc, -1, perGangContext);
+		setQEIdentifier(segdbDesc, -1, perGangContext);
 		break;
 
 	case GANGTYPE_PRIMARY_READER:
@@ -872,7 +863,7 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 				segdbDesc = &newGangDefinition->db_descriptors[segCount];
 				cdbInfoCopy = copyCdbComponentDatabaseInfo(cdbinfo);
 				cdbconn_initSegmentDescriptor(segdbDesc, cdbInfoCopy);
-				setSegmentDBIdentifier(segdbDesc, -1, perGangContext);
+				setQEIdentifier(segdbDesc, -1, perGangContext);
 				segCount++;
 			}
 		}
@@ -1489,7 +1480,7 @@ getCdbProcessList(Gang *gang, int sliceIndex, DirectDispatchInfo *directDispatch
 
 		list_nth_replace(list, gang->size == 1 ? 0 : segdbDesc->segindex, process);
 
-		setSegmentDBIdentifier(segdbDesc, sliceIndex, gang->perGangContext);
+		setQEIdentifier(segdbDesc, sliceIndex, gang->perGangContext);
 
 		LOG_GANG_DEBUG(LOG,
 				"Gang assignment (gang_id %d): slice%d seg%d %s:%d pid=%d",
@@ -1580,38 +1571,7 @@ static disconnectAndDestroyGang(Gang *gp)
 	{
 		SegmentDatabaseDescriptor *segdbDesc = &(gp->db_descriptors[i]);
 		Assert(segdbDesc != NULL);
-
-		if (PQstatus(segdbDesc->conn) != CONNECTION_BAD)
-		{
-			PGTransactionStatusType status = PQtransactionStatus(segdbDesc->conn);
-
-			LOG_GANG_DEBUG(LOG, "Finishing connection with %s; %s",
-					segdbDesc->whoami, transStatusToString(status));
-
-			elog((Debug_print_full_dtm ? LOG : (gp_log_gang >= GPVARS_VERBOSITY_DEBUG ? LOG : DEBUG5)),
-				"disconnectAndDestroyGang: got QEDistributedTransactionId = %u, QECommandId = %u, and QEDirty = %s",
-				segdbDesc->conn->QEWriter_DistributedTransactionId,
-				segdbDesc->conn->QEWriter_CommandId,
-				(segdbDesc->conn->QEWriter_Dirty ? "true" : "false"));
-
-			if (status == PQTRANS_ACTIVE)
-			{
-				char errbuf[256];
-				PGcancel *cn = PQgetCancel(segdbDesc->conn);
-
-				if (Debug_cancel_print || gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
-					elog(LOG, "Calling PQcancel for %s", segdbDesc->whoami);
-
-				if (PQcancel(cn, errbuf, 256) == 0)
-					elog(LOG, "Unable to cancel %s: %s", segdbDesc->whoami, errbuf);
-
-				PQfreeCancel(cn);
-			}
-
-			PQfinish(segdbDesc->conn);
-			segdbDesc->conn = NULL;
-		}
-
+		cdbconn_disconnect(segdbDesc);
 		cdbconn_termSegmentDescriptor(segdbDesc);
 	}
 
@@ -1746,39 +1706,18 @@ static bool cleanupGang(Gang *gp)
 	 */
 	for (i = 0; i < gp->size; i++)
 	{
-		PGresult *pRes = NULL;
-		int retry = 0;
-		ExecStatusType stat;
-
 		SegmentDatabaseDescriptor *segdbDesc = &(gp->db_descriptors[i]);
 		Assert(segdbDesc != NULL);
 
-		if (PQstatus(segdbDesc->conn) != CONNECTION_OK)
+		if (cdbconn_isBadConnection(segdbDesc))
 			return false;
 
-		/*
-		 * Note, we cancel all "still running" queries
-		 */
-		/* PQstatus() is smart enough to handle NULL */
-
-		while (NULL != (pRes = PQgetResult(segdbDesc->conn)))
-		{
-			stat = PQresultStatus(pRes);
-			PQclear(pRes);
-
-			elog(LOG, "(%s) Leftover result at freeGang time: %s %s", segdbDesc->whoami,
-					PQresStatus(stat),
-					PQerrorMessage(segdbDesc->conn));
-
-			if (stat == PGRES_FATAL_ERROR || stat == PGRES_BAD_RESPONSE)
-				break;
-
-			if (retry++ > 20)
-				elog(FATAL, "cleanup called when a segworker is still busy");
-		}
+		/* Note, we cancel all "still running" queries */
+		if (!cdbconn_discardResults(segdbDesc, 20))
+			elog(FATAL, "cleanup called when a segworker is still busy");
 
 		/* QE is no longer associated with a slice. */
-		setSegmentDBIdentifier(segdbDesc, /* slice index */-1, gp->perGangContext);
+		setQEIdentifier(segdbDesc, /* slice index */-1, gp->perGangContext);
 	}
 
 	/* disassociate this gang with any portal that it may have belonged to */
@@ -1795,24 +1734,22 @@ static bool cleanupGang(Gang *gp)
 }
 
 /*
- * return the max high water mark for mop of this Gang.
+ * Get max maxVmemChunksTracked of a gang.
+ *
  * return in MB.
  */
-static int getMaxGangMop(Gang *g)
+static int getGangMaxVmem(Gang *gp)
 {
 	int64 maxmop = 0;
 	int i = 0;
 
-	for (i = 0; i < g->size; ++i)
+	for (i = 0; i < gp->size; ++i)
 	{
-		SegmentDatabaseDescriptor *segdbDesc = &(g->db_descriptors[i]);
+		SegmentDatabaseDescriptor *segdbDesc = &(gp->db_descriptors[i]);
 		Assert(segdbDesc != NULL);
 
-		if (segdbDesc->conn && PQstatus(segdbDesc->conn) != CONNECTION_BAD)
-		{
-			if (segdbDesc->conn->mop_high_watermark > maxmop)
-				maxmop = segdbDesc->conn->mop_high_watermark;
-		}
+		if (!cdbconn_isBadConnection(segdbDesc))
+			maxmop = Max(maxmop, segdbDesc->conn->mop_high_watermark);
 	}
 
 	return (maxmop >> 20);
@@ -1863,7 +1800,7 @@ cleanupPortalGangList(List *gplist, int cachelimit)
 		Assert(gang->type != GANGTYPE_PRIMARY_WRITER);
 
 		if (nLeft > cachelimit ||
-			getMaxGangMop(gang) > gp_vmem_protect_gang_cache_limit)
+			getGangMaxVmem(gang) > gp_vmem_protect_gang_cache_limit)
 		{
 			disconnectAndDestroyGang(gang);
 			gplist = list_delete_cell(gplist, cell, prevcell);
@@ -2243,32 +2180,6 @@ static const char* gangTypeToString(GangType type)
 	return ret;
 }
 
-static const char* transStatusToString(PGTransactionStatusType status)
-{
-	const char *ret = "";
-	switch (status)
-	{
-	case PQTRANS_IDLE:
-		ret = "idle";
-		break;
-	case PQTRANS_ACTIVE:
-		ret = "active";
-		break;
-	case PQTRANS_INTRANS:
-		ret = "idle, within transaction";
-		break;
-	case PQTRANS_INERROR:
-		ret = "idle, within failed transaction";
-		break;
-	case PQTRANS_UNKNOWN:
-		ret = "unknown transaction status";
-		break;
-	default:
-		Assert(false);
-	}
-	return ret;
-}
-
 bool gangOK(Gang *gp)
 {
 	int i;
@@ -2290,7 +2201,7 @@ bool gangOK(Gang *gp)
 	{
 		SegmentDatabaseDescriptor *segdbDesc = &(gp->db_descriptors[i]);
 
-		if (PQstatus(segdbDesc->conn) == CONNECTION_BAD)
+		if (cdbconn_isBadConnection(segdbDesc))
 			return false;
 	}
 

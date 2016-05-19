@@ -80,7 +80,12 @@ cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc,
 		  const char *gpqeid,
 		  const char *options);
 
+void cdbconn_disconnect(SegmentDatabaseDescriptor *segdbDesc);
+bool cdbconn_discardResults(SegmentDatabaseDescriptor *segdbDesc,
+		int retryCount);
+bool cdbconn_isBadConnection(SegmentDatabaseDescriptor *segdbDesc);
+void cdbconn_resetQEErrorMessage(SegmentDatabaseDescriptor *segdbDesc);
 /* Set the slice index for error messages related to this QE. */
-void setSegmentDBIdentifier(SegmentDatabaseDescriptor *segdbDesc,
+void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc,
 		int sliceIndex, MemoryContext mcxt);
 #endif   /* CDBCONN_H */

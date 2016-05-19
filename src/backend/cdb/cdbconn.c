@@ -25,6 +25,8 @@ extern int	pq_putmessage(char msgtype, const char *s, size_t len);
 
 int		gp_segment_connect_timeout = 180;
 
+static const char* transStatusToString(PGTransactionStatusType status);
+
 static void MPPnoticeReceiver(void * arg, const PGresult * res)
 {
 	PQExpBufferData msgbuf;
@@ -243,12 +245,18 @@ void cdbconn_initSegmentDescriptor(SegmentDatabaseDescriptor *segdbDesc,
 	initPQExpBuffer(&segdbDesc->error_message);
 }
 
-/* Free memory of segment descriptor which is not in memory context. */
+/* Free memory of segment descriptor. */
 void cdbconn_termSegmentDescriptor(SegmentDatabaseDescriptor *segdbDesc)
 {
 	/* Free the error message buffer. */
 	segdbDesc->errcode = 0;
 	termPQExpBuffer(&segdbDesc->error_message);
+
+	if(segdbDesc->whoami != NULL)
+	{
+		pfree(segdbDesc->whoami);
+		segdbDesc->whoami = NULL;
+	}
 } /* cdbconn_termSegmentDescriptor */
 
 /*
@@ -384,17 +392,90 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc, const char *gpqeid,
 		else
 		{
 			if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
-				write_log("Connected to %s motionListener=%d\n",
-						segdbDesc->whoami, segdbDesc->motionListener);
+				write_log("Connected to %s motionListener=%d with options: %s\n",
+						segdbDesc->whoami, segdbDesc->motionListener, options);
 		}
 	}
+}
+
+/* Disconnect from QE */
+void cdbconn_disconnect(SegmentDatabaseDescriptor *segdbDesc)
+{
+	if (PQstatus(segdbDesc->conn) != CONNECTION_BAD)
+	{
+		PGTransactionStatusType status = PQtransactionStatus(segdbDesc->conn);
+
+		if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
+			elog(LOG, "Finishing connection with %s; %s", segdbDesc->whoami, transStatusToString(status));
+
+		elog((Debug_print_full_dtm ? LOG : (gp_log_gang >= GPVARS_VERBOSITY_DEBUG ? LOG : DEBUG5)),
+			"disconnectAndDestroyGang: got QEDistributedTransactionId = %u, QECommandId = %u, and QEDirty = %s",
+			segdbDesc->conn->QEWriter_DistributedTransactionId,
+			segdbDesc->conn->QEWriter_CommandId,
+			(segdbDesc->conn->QEWriter_Dirty ? "true" : "false"));
+
+		if (status == PQTRANS_ACTIVE)
+		{
+			char errbuf[256];
+			PGcancel *cn = PQgetCancel(segdbDesc->conn);
+
+			if (Debug_cancel_print || gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
+				elog(LOG, "Calling PQcancel for %s", segdbDesc->whoami);
+
+			if (PQcancel(cn, errbuf, 256) == 0)
+				elog(LOG, "Unable to cancel %s: %s", segdbDesc->whoami, errbuf);
+
+			PQfreeCancel(cn);
+		}
+
+		PQfinish(segdbDesc->conn);
+		segdbDesc->conn = NULL;
+	}
+}
+
+bool cdbconn_discardResults(SegmentDatabaseDescriptor *segdbDesc,
+		int retryCount)
+{
+	PGresult *pRes = NULL;
+	ExecStatusType stat;
+	int i = 0;
+
+	/* PQstatus() is smart enough to handle NULL */
+	while (NULL != (pRes = PQgetResult(segdbDesc->conn)))
+	{
+		stat = PQresultStatus(pRes);
+		PQclear(pRes);
+
+		elog(LOG, "(%s) Leftover result at freeGang time: %s %s", segdbDesc->whoami,
+				PQresStatus(stat),
+				PQerrorMessage(segdbDesc->conn));
+
+		if (stat == PGRES_FATAL_ERROR || stat == PGRES_BAD_RESPONSE)
+			return true;
+
+		if (i++ > retryCount)
+			return false;
+	}
+
+	return true;
+}
+
+bool cdbconn_isBadConnection(SegmentDatabaseDescriptor *segdbDesc)
+{
+	return PQstatus(segdbDesc->conn) == CONNECTION_BAD;
+}
+
+void cdbconn_resetQEErrorMessage(SegmentDatabaseDescriptor *segdbDesc)
+{
+	segdbDesc->errcode = 0;
+	resetPQExpBuffer(&segdbDesc->error_message);
 }
 
 /*
  * Build text to identify this QE in error messages.
  * Don't call this function in threads.
  */
-void setSegmentDBIdentifier(SegmentDatabaseDescriptor *segdbDesc,
+void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc,
 		int sliceIndex, MemoryContext mcxt)
 {
 	CdbComponentDatabaseInfo *cdbinfo = segdbDesc->segment_database_info;
@@ -425,4 +506,30 @@ void setSegmentDBIdentifier(SegmentDatabaseDescriptor *segdbDesc,
 	}
 	segdbDesc->whoami = string->data;
 	MemoryContextSwitchTo(oldContext);
+}
+
+static const char* transStatusToString(PGTransactionStatusType status)
+{
+	const char *ret = "";
+	switch (status)
+	{
+	case PQTRANS_IDLE:
+		ret = "idle";
+		break;
+	case PQTRANS_ACTIVE:
+		ret = "active";
+		break;
+	case PQTRANS_INTRANS:
+		ret = "idle, within transaction";
+		break;
+	case PQTRANS_INERROR:
+		ret = "idle, within failed transaction";
+		break;
+	case PQTRANS_UNKNOWN:
+		ret = "unknown transaction status";
+		break;
+	default:
+		Assert(false);
+	}
+	return ret;
 }
