@@ -1925,6 +1925,7 @@ void freeGangsForPortal(char *portal_name)
 		}
 	}
 
+	prev_item = NULL;
 	cur_item = list_head(allocatedReaderGangs1);
 	while (cur_item != NULL)
 	{

@@ -56,6 +56,7 @@
 #include "cdb/cdblocaldistribxact.h"
 #include "cdb/cdbgang.h"
 #include "cdb/cdbvars.h"  /*Gp_is_writer*/
+#include "catalog/namespace.h"
 #include "utils/gp_atomic.h"
 #include "utils/session_state.h"
 
