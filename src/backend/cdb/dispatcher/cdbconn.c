@@ -495,7 +495,8 @@ bool cdbconn_discardResults(SegmentDatabaseDescriptor *segdbDesc,
 /* Return if it's a bad connection */
 bool cdbconn_isBadConnection(SegmentDatabaseDescriptor *segdbDesc)
 {
-	return PQstatus(segdbDesc->conn) == CONNECTION_BAD;
+	return (PQsocket(segdbDesc->conn) < 0 ||
+		    PQstatus(segdbDesc->conn) == CONNECTION_BAD);
 }
 
 /* Reset error message buffer */
