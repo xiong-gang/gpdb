@@ -727,17 +727,13 @@ dispatchCommand(CdbDispatchResult * dispatchResult,
 	 */
 	if (PQsendGpQuery_shared(conn, (char *) query_text, query_text_len) == 0)
 	{
-		char	   *msg = PQerrorMessage(segdbDesc->conn);
-
-		LOG_DISPATCHER_DEBUG(DEBUG3, "PQsendMPPQuery_shared error %s %s",
-							 segdbDesc->whoami, msg ? msg : "");
 		/*
 		 * Note the error.
 		 */
 		cdbdisp_appendMessage(dispatchResult, LOG,
 							  ERRCODE_GP_INTERCONNECTION_ERROR,
-							  "Command could not be sent to segment db %s;  %s",
-							  segdbDesc->whoami, msg ? msg : "");
+							  "Command could not be sent to segment db %s",
+							  segdbDesc->whoami);
 		PQfinish(conn);
 		segdbDesc->conn = NULL;
 		dispatchResult->stillRunning = false;
@@ -799,18 +795,10 @@ cdbdisp_checkConnection(DispatchCommandParms * pParms)
 		 */
 		if (cdbconn_isBadConnection(dispatchResult->segdbDesc))
 		{
-			char *msg;
-
-			msg = PQerrorMessage(dispatchResult->segdbDesc->conn);
-
-			write_log("Dispatcher noticed bad connection (%s) in handlePollError(): %s",
-					  dispatchResult->segdbDesc->whoami, msg ? msg : "unknow error");
-
 			cdbdisp_appendMessage(dispatchResult, LOG,
 								  ERRCODE_GP_INTERCONNECTION_ERROR,
-								  "Error after dispatch from %s: %s",
-								  dispatchResult->segdbDesc->whoami,
-								  msg ? msg : "unknown error");
+								  "Error after dispatch from %s.",
+								  dispatchResult->segdbDesc->whoami);
 
 			PQfinish(dispatchResult->segdbDesc->conn);
 			dispatchResult->segdbDesc->conn = NULL;
@@ -917,11 +905,9 @@ cdbdisp_checkSegmentDB(DispatchCommandParms * pParms)
 
 		if (!FtsTestConnection(segdbDesc->segment_database_info, false))
 		{
-			/*
-			 * Note the error.
-			 */
-			cdbdisp_appendMessage(dispatchResult, DEBUG1, ERRCODE_GP_INTERCONNECTION_ERROR,
-					"Lost connection to one or more segments - fault detector checking for segment failures. (%s)",
+			cdbdisp_appendMessage(dispatchResult, DEBUG1,
+					ERRCODE_GP_INTERCONNECTION_ERROR,
+					"Lost connection to %s. FTS detected segment failures.",
 					segdbDesc->whoami);
 
 			/*
@@ -969,18 +955,10 @@ shouldStillDispatchCommand(DispatchCommandParms * pParms,
 	 */
 	if (cdbconn_isBadConnection(segdbDesc))
 	{
-		char *msg = PQerrorMessage(segdbDesc->conn);
-
-		/*
-		 * Save error info for later.
-		 */
 		cdbdisp_appendMessage(dispatchResult, LOG,
 							  ERRCODE_GP_INTERCONNECTION_ERROR,
-							  "Lost connection to %s.  %s",
-							  segdbDesc->whoami, msg ? msg : "");
-
-		LOG_DISPATCHER_DEBUG(DEBUG4, "Lost connection: %s", segdbDesc->whoami);
-
+							  "Lost connection to %s.",
+							  segdbDesc->whoami);
 		/*
 		 * Free the PGconn object at once whenever we notice it's gone bad. 
 		 */
@@ -1154,19 +1132,10 @@ processResults(CdbDispatchResult * dispatchResult)
 	return false; /* we must keep on monitoring this socket */
 
 connection_error:
-	msg = PQerrorMessage(segdbDesc->conn);
-
-	if (msg)
-		write_log("Dispatcher encountered connection error on %s: %s",
-				  segdbDesc->whoami, msg);
-
-	/*
-	 * Save error info for later.
-	 */
 	cdbdisp_appendMessage(dispatchResult, LOG,
 						  ERRCODE_GP_INTERCONNECTION_ERROR,
-						  "Error on receive from %s: %s",
-						  segdbDesc->whoami, msg ? msg : "unknown error");
+						  "Error on receive from %s",
+						  segdbDesc->whoami);
 
 	/*
 	 * Can't recover, so drop the connection. 
@@ -1278,11 +1247,10 @@ cdbdisp_isConnectionLost(SegmentDatabaseDescriptor *segdbDesc,
 	if (dispatchResult->stillRunning &&
 		cdbconn_isBadConnection(segdbDesc))
 	{
-		char *msg = PQerrorMessage(segdbDesc->conn);
-		cdbdisp_appendMessage(dispatchResult, DEBUG1, ERRCODE_GP_INTERCONNECTION_ERROR,
-				"Lost connection to %s.  %s", segdbDesc->whoami, msg ? msg : "");
-		if(msg != NULL)
-			free(msg);
+		cdbdisp_appendMessage(dispatchResult, LOG,
+							  ERRCODE_GP_INTERCONNECTION_ERROR,
+							  "Lost connection to %s.",
+							  segdbDesc->whoami);
 		PQfinish(segdbDesc->conn);
 		segdbDesc->conn = NULL;
 		dispatchResult->stillRunning = false;

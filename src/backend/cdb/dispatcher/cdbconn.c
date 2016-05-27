@@ -541,3 +541,11 @@ void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc,
 	MemoryContextSwitchTo(oldContext);
 }
 
+void cdbconn_appendConnectionErrorMessage(SegmentDatabaseDescriptor *segdbDesc,
+										  PQExpBufferData *buf)
+{
+	char *msg = PQerrorMessage(segdbDesc->conn);
+	if(msg != NULL)
+		appendPQExpBuffer(buf, " Connection error message:%s", msg);
+}
+

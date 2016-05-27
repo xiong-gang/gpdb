@@ -102,13 +102,17 @@ cdbdisp_makeResult(struct CdbDispatchResults *meleeResults,
 	dispatchResult->meleeIndex = meleeIndex;
 	dispatchResult->segdbDesc = segdbDesc;
 	dispatchResult->resultbuf = createPQExpBuffer();
-	dispatchResult->error_message = NULL;
+	dispatchResult->error_message = createPQExpBuffer();;
 	dispatchResult->numrowsrejected = 0;
 
-	if (PQExpBufferBroken(dispatchResult->resultbuf))
+	if (PQExpBufferBroken(dispatchResult->resultbuf) ||
+		PQExpBufferBroken(dispatchResult->error_message))
 	{
 		destroyPQExpBuffer(dispatchResult->resultbuf);
 		dispatchResult->resultbuf = NULL;
+		destroyPQExpBuffer(dispatchResult->error_message);
+		dispatchResult->error_message = NULL;
+
 		/*
 		 * caller is responsible for cleanup -- can't elog(ERROR, ...) from here. 
 		 */
@@ -225,19 +229,13 @@ cdbdisp_seterrcode(int errcode, /* ERRCODE_xxx or 0 */
 				   CdbDispatchResult * dispatchResult)
 {
 	CdbDispatchResults *meleeResults = dispatchResult->meleeResults;
+	Assert(meleeResults != NULL);
 
 	/*
 	 * We must ensure a nonzero errcode.
 	 */
 	if (!errcode)
 		errcode = ERRCODE_INTERNAL_ERROR;
-
-	/*
-	 * Was the command canceled?
-	 */
-	if (errcode == ERRCODE_GP_OPERATION_CANCELED ||
-		errcode == ERRCODE_QUERY_CANCELED)
-		dispatchResult->wasCanceled = true;
 
 	/*
 	 * If this is the first error from this QE, save the error code
@@ -251,25 +249,28 @@ cdbdisp_seterrcode(int errcode, /* ERRCODE_xxx or 0 */
 			dispatchResult->errindex = resultIndex;
 	}
 
-	if (!meleeResults)
-		return;
+	/* Was the command canceled? */
+	if (errcode == ERRCODE_GP_OPERATION_CANCELED)
+	{
+		dispatchResult->wasCanceled = true;
+
+		/*
+		 * It's the response from QE to our signal (see cdbdisp_signalQE_internal).
+		 * No need to remember the error code.
+		 */
+		if (dispatchResult->sentSignal == DISPATCH_WAIT_CANCEL)
+			return;
+	}
 
 	/*
-	 * Remember which QE reported an error first among the gangs,
-	 * but keep quiet about cancellation done at our request.
+	 * Remember which QE reported an error first among the gangs.
 	 *
 	 * Interconnection errors are given lower precedence because often
 	 * they are secondary to an earlier and more interesting error.
 	 */
-	if (errcode == ERRCODE_GP_OPERATION_CANCELED &&
-		dispatchResult->sentSignal == DISPATCH_WAIT_CANCEL)
-	{
-		/* nop */
-	}
-
-	else if (meleeResults->errcode == 0 ||
-			 (meleeResults->errcode == ERRCODE_GP_INTERCONNECTION_ERROR &&
-			  errcode != ERRCODE_GP_INTERCONNECTION_ERROR))
+	if (meleeResults->errcode == 0 ||
+		(meleeResults->errcode == ERRCODE_GP_INTERCONNECTION_ERROR &&
+		errcode != ERRCODE_GP_INTERCONNECTION_ERROR))
 	{
 		pthread_mutex_lock(&setErrcodeMutex);
 		if (meleeResults->errcode == 0 ||
@@ -281,40 +282,6 @@ cdbdisp_seterrcode(int errcode, /* ERRCODE_xxx or 0 */
 		}
 		pthread_mutex_unlock(&setErrcodeMutex);
 	}
-}
-
-/*
- * Transfer connection error messages to dispatchResult from segdbDesc.
- * returns true if segdbDesc had err info
- */
-bool
-cdbdisp_mergeConnectionErrors(CdbDispatchResult * dispatchResult,
-							  struct SegmentDatabaseDescriptor *segdbDesc)
-{
-	if (!segdbDesc)
-		return false;
-	if (segdbDesc->errcode == 0 && segdbDesc->error_message.len == 0)
-		return false;
-
-	/*
-	 * Error code should always be accompanied by text and vice-versa.
-	 */
-	Assert(segdbDesc->errcode != 0 && segdbDesc->error_message.len > 0);
-
-	/*
-	 * Append error message text and save error code.
-	 */
-	cdbdisp_appendMessage(dispatchResult, 0, segdbDesc->errcode, "%s",
-						  segdbDesc->error_message.data);
-
-	/*
-	 * Reset connection object's error info. 
-	 */
-	segdbDesc->errcode = 0;
-	segdbDesc->error_message.len = 0;
-	segdbDesc->error_message.data[0] = '\0';
-
-	return true;
 }
 
 /*
@@ -338,24 +305,10 @@ cdbdisp_appendMessage(CdbDispatchResult * dispatchResult,
 	cdbdisp_seterrcode(errcode, -1, dispatchResult);
 
 	/*
-	 * Allocate buffer if first message.
 	 * Insert newline between previous message and new one.
 	 */
-	if (!dispatchResult->error_message)
-	{
-		dispatchResult->error_message = createPQExpBuffer();
-
-		if (PQExpBufferBroken(dispatchResult->error_message))
-		{
-			destroyPQExpBuffer(dispatchResult->error_message);
-			dispatchResult->error_message = NULL;
-
-			write_log ("cdbdisp_appendMessage: allocation failed, can't save error-message.");
-			return;
-		}
-	}
-	else
-		oneTrailingNewlinePQ(dispatchResult->error_message);
+	Assert(dispatchResult->error_message != NULL);
+	oneTrailingNewlinePQ(dispatchResult->error_message);
 
 	msgoff = dispatchResult->error_message->len;
 
@@ -365,6 +318,9 @@ cdbdisp_appendMessage(CdbDispatchResult * dispatchResult,
 	va_start(args, fmt);
 	appendPQExpBufferVA(dispatchResult->error_message, fmt, args);
 	va_end(args);
+
+	cdbconn_appendConnectionErrorMessage(dispatchResult->segdbDesc,
+										 dispatchResult->error_message);
 
 	/*
 	 * Display the message on stderr for debugging, if requested.
@@ -550,13 +506,10 @@ void
 cdbdisp_dumpDispatchResult(CdbDispatchResult *dispatchResult,
 						   bool verbose, struct StringInfoData *buf)
 {
-	SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
 	int ires;
 	int nres;
 
-	if (!dispatchResult || !buf)
-		return;
-
+	Assert(dispatchResult != NULL && buf != NULL);
 	/*
 	 * Format PGresult messages
 	 */
@@ -631,14 +584,6 @@ cdbdisp_dumpDispatchResult(CdbDispatchResult *dispatchResult,
 	}
 
 	/*
-	 * segdbDesc error message shouldn't be possible here, but check anyway.
-	 * Ordinarily dispatchResult->segdbDesc is NULL here because we are
-	 * called after it has been cleared by CdbCheckDispatchResult().
-	 */
-	if (dispatchResult->segdbDesc)
-		cdbdisp_mergeConnectionErrors(dispatchResult, segdbDesc);
-
-	/*
 	 * Error found on our side of the libpq interface?
 	 */
 	if (dispatchResult->error_message &&
@@ -646,8 +591,6 @@ cdbdisp_dumpDispatchResult(CdbDispatchResult *dispatchResult,
 	{
 		oneTrailingNewline(buf);
 		appendStringInfoString(buf, dispatchResult->error_message->data);
-		if (!verbose)
-			goto done;
 	}
 
 done:
