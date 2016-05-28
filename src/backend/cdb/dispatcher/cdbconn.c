@@ -541,11 +541,22 @@ void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc,
 	MemoryContextSwitchTo(oldContext);
 }
 
-void cdbconn_appendConnectionErrorMessage(SegmentDatabaseDescriptor *segdbDesc,
-										  PQExpBufferData *buf)
+void
+cdbconn_appendConnectionErrorMessage(SegmentDatabaseDescriptor *segdbDesc,
+									 PQExpBufferData *buf)
 {
 	char *msg = PQerrorMessage(segdbDesc->conn);
 	if(msg != NULL)
 		appendPQExpBuffer(buf, " Connection error message:%s", msg);
 }
 
+bool
+cdbconn_sendGpQuery(SegmentDatabaseDescriptor *segdbDesc,
+					const char *query_text,
+					int query_text_len)
+{
+	if(PQsendGpQuery_shared(segdbDesc->conn, (char *) query_text, query_text_len) == 0)
+		return false;
+	else
+		return true;
+}

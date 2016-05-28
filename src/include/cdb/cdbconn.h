@@ -102,6 +102,11 @@ void cdbconn_resetQEErrorMessage(SegmentDatabaseDescriptor *segdbDesc);
 /* Set the slice index for error messages related to this QE. */
 void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc, int sliceIndex, MemoryContext mcxt);
 
-void cdbconn_appendConnectionErrorMessage(SegmentDatabaseDescriptor *segdbDesc,
-										  PQExpBufferData *buf);
+void
+cdbconn_appendConnectionErrorMessage(SegmentDatabaseDescriptor *segdbDesc,
+									 PQExpBufferData *buf);
+bool
+cdbconn_sendGpQuery(SegmentDatabaseDescriptor *segdbDesc,
+					const char *query_text,
+					int query_text_len);
 #endif   /* CDBCONN_H */
