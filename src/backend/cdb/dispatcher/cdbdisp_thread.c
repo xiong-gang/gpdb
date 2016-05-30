@@ -1181,39 +1181,15 @@ static DispatchWaitMode
 cdbdisp_signalQE(SegmentDatabaseDescriptor * segdbDesc,
 				 DispatchWaitMode waitMode)
 {
-	char errbuf[256];
-	PGcancel *cn = NULL;
-	int	ret = 0;
+	bool ret;
 
 	Assert(waitMode == DISPATCH_WAIT_CANCEL || waitMode == DISPATCH_WAIT_FINISH);
 
-	cn = PQgetCancel(segdbDesc->conn);
-	if (cn == NULL)
-		return DISPATCH_WAIT_NONE;
-
-	if (Debug_cancel_print || DEBUG4 >= log_min_messages)
-		write_log("Calling PQcancel for %s", segdbDesc->whoami);
-
-	/*
-	 * PQcancel uses some strcpy/strcat functions; let's
-	 * clear this for safety.
-	 */
-	MemSet(errbuf, 0, sizeof(errbuf));
-
-	/*
-	 * Send query-finish, unless the client really wants to cancel the
-	 * query.  This could happen if cancel comes after we sent finish.
-	 */
 	if (waitMode == DISPATCH_WAIT_CANCEL)
-		ret = PQcancel(cn, errbuf, 256);
+		ret = cdbconn_signalQE(segdbDesc, true);
 	else
-		ret = PQrequestFinish(cn, errbuf, 256);
+		ret = cdbconn_signalQE(segdbDesc, false);
 
-	if (ret == 0 && (Debug_cancel_print || LOG >= log_min_messages))
-		write_log("Unable to cancel: %s", errbuf);
-
-	PQfreeCancel(cn);
-
-	return (ret != 0 ? waitMode : DISPATCH_WAIT_NONE);
+	return (ret ? waitMode : DISPATCH_WAIT_NONE);
 }
 

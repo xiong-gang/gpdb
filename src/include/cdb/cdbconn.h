@@ -109,4 +109,7 @@ bool
 cdbconn_sendGpQuery(SegmentDatabaseDescriptor *segdbDesc,
 					const char *query_text,
 					int query_text_len);
+bool
+cdbconn_signalQE(SegmentDatabaseDescriptor *segdbDesc,
+				 bool isCancel);
 #endif   /* CDBCONN_H */
