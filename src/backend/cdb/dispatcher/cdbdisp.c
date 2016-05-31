@@ -30,6 +30,7 @@ CdbDispatchDirectDesc default_dispatch_direct_desc = { false, 0, {0}};
 
 static void cdbdisp_clearGangActiveFlag(CdbDispatcherState * ds);
 
+DispatcherInternalFuncs *pDispatchFuncs = &ThreadedFuncs;
 /*
  * cdbdisp_dispatchToGang:
  * Send the strCommand SQL statement to the subset of all segdbs in the cluster
@@ -94,7 +95,7 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 	 * WIP: will use a function pointer for implementation later, currently just use an internal function to move dispatch
 	 * thread related code into a separate file.
 	 */
-	cdbdisp_dispatchToGang_internal(ds, gp, sliceIndex, disp_direct);
+	(pDispatchFuncs->dispatchToGang)(ds, gp, sliceIndex, disp_direct);
 }
 
 /*
@@ -111,7 +112,7 @@ CdbCheckDispatchResult(struct CdbDispatcherState *ds,
 {
 	PG_TRY();
 	{
-		CdbCheckDispatchResult_internal(ds, waitMode);
+		(pDispatchFuncs->checkResults)(ds, waitMode);
 	}
 	PG_CATCH();
 	{
@@ -322,27 +323,29 @@ cdbdisp_handleError(struct CdbDispatcherState *ds)
  *	 maxSlices: max number of slices of the query/command.
  */
 void
-cdbdisp_makeDispatcherState(CdbDispatcherState * ds, int maxResults,
-							int maxSlices, bool cancelOnError)
+cdbdisp_makeDispatcherState(CdbDispatcherState * ds,
+							int sliceCount,
+							bool cancelOnError,
+							char *queryText,
+							int len)
 {
 	MemoryContext oldContext = NULL;
 
 	Assert(ds != NULL);
-	Assert(ds->dispatchStateContext == NULL);
-	Assert(ds->dispatchThreads == NULL);
+	Assert(ds->dispatchParams == NULL);
 	Assert(ds->primaryResults == NULL);
 
-	ds->dispatchStateContext = AllocSetContextCreate(TopMemoryContext,
-													 "Dispatch Context",
-													 ALLOCSET_DEFAULT_MINSIZE,
-													 ALLOCSET_DEFAULT_INITSIZE,
-													 ALLOCSET_DEFAULT_MAXSIZE);
+	if (ds->dispatchStateContext == NULL)
+		ds->dispatchStateContext = AllocSetContextCreate(TopMemoryContext,
+														 "Dispatch Context",
+														 ALLOCSET_DEFAULT_MINSIZE,
+														 ALLOCSET_DEFAULT_INITSIZE,
+														 ALLOCSET_DEFAULT_MAXSIZE);
 
 	oldContext = MemoryContextSwitchTo(ds->dispatchStateContext);
-	ds->primaryResults = cdbdisp_makeDispatchResults(maxResults,
-													 maxSlices,
+	ds->primaryResults = cdbdisp_makeDispatchResults(sliceCount,
 													 cancelOnError);
-	ds->dispatchThreads = cdbdisp_makeDispatchThreads(maxSlices);
+	ds->dispatchParams = (pDispatchFuncs->makeDispatchParams)(sliceCount, queryText, len);
 	MemoryContextSwitchTo(oldContext);
 }
 
@@ -375,7 +378,7 @@ cdbdisp_destroyDispatcherState(CdbDispatcherState * ds)
 	}
 
 	ds->dispatchStateContext = NULL;
-	ds->dispatchThreads = NULL;
+	ds->dispatchParams = NULL;
 	ds->primaryResults = NULL;
 }
 

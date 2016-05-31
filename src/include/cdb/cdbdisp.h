@@ -43,9 +43,17 @@ extern CdbDispatchDirectDesc default_dispatch_direct_desc;
 typedef struct CdbDispatcherState
 {
 	struct CdbDispatchResults *primaryResults;
-	struct CdbDispatchCmdThreads *dispatchThreads;
+	void *dispatchParams;
 	MemoryContext dispatchStateContext;
 } CdbDispatcherState;
+
+typedef struct DispatcherInternalFuncs
+{
+	void* (*makeDispatchParams)(int maxSlices, char *queryText, int len);
+	void (*checkResults)(struct CdbDispatcherState *ds, DispatchWaitMode waitMode);
+	void (*dispatchToGang)(struct CdbDispatcherState *ds, struct Gang *gp,
+			int sliceIndex, CdbDispatchDirectDesc *direct);
+}DispatcherInternalFuncs;
 
 /*--------------------------------------------------------------------*/
 /*
@@ -129,14 +137,14 @@ cdbdisp_handleError(struct CdbDispatcherState *ds);
  *
  * Call cdbdisp_destroyDispatcherState to free it.
  *
- *   maxResults: max number of results, normally equals to max number of QEs.
- *   maxSlices: max number of slices of the query/command.
+ *   sliceCount: max number of slices of the query/command.
  */
 void
 cdbdisp_makeDispatcherState(CdbDispatcherState *ds,
-							int maxResults,
-							int maxSlices,
-							bool cancelOnError);
+							int sliceCount,
+							bool cancelOnError,
+							char *queryText,
+							int len);
 
 /*
  * Free memory in CdbDispatcherState
