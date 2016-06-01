@@ -18,7 +18,10 @@
 #define CDB_MOTION_LOST_CONTACT_STRING "Interconnect error master lost contact with segment."
 
 struct CdbDispatchResults; /* #include "cdb/cdbdispatchresult.h" */
+struct CdbDispatchResult; /* #include "cdb/cdbdispatchresult.h" */
 struct Gang; /* #include "cdb/cdbgang.h" */
+struct SegmentDatabaseDescriptor; /* #include "cdb/cdbconn.h" */
+
 
 /*
  * Types of message to QE when we wait for it.
@@ -49,6 +52,8 @@ typedef struct CdbDispatcherState
 
 typedef struct DispatcherInternalFuncs
 {
+	void (*procExitCallBack)(void);
+	bool (*checkForCancel)(struct CdbDispatcherState *ds);
 	void* (*makeDispatchParams)(int maxSlices, char *queryText, int len);
 	void (*checkResults)(struct CdbDispatcherState *ds, DispatchWaitMode waitMode);
 	void (*dispatchToGang)(struct CdbDispatcherState *ds, struct Gang *gp,
@@ -153,5 +158,28 @@ cdbdisp_makeDispatcherState(CdbDispatcherState *ds,
  * Free dispatcher memory context.
  */
 void cdbdisp_destroyDispatcherState(CdbDispatcherState *ds);
+
+void
+CollectQEWriterTransactionInformation(struct SegmentDatabaseDescriptor * segdbDesc,
+		struct CdbDispatchResult * dispatchResult);
+/*
+ * Set slice in query text
+ *
+ * Make a new copy of query text and set the slice id in the right place.
+ *
+ */
+char *
+dupQueryTextAndSetSliceId(MemoryContext cxt, char *queryText,
+						  int len, int sliceId);
+/*
+ * Send cancel/finish signal to still-running QE through libpq.
+ * waitMode is either CANCEL or FINISH.  Returns true if we successfully
+ * sent a signal (not necessarily received by the target process).
+ */
+DispatchWaitMode
+cdbdisp_signalQE(struct SegmentDatabaseDescriptor * segdbDesc,
+				 DispatchWaitMode waitMode);
+
+extern DispatcherInternalFuncs *pDispatchFuncs;
 
 #endif   /* CDBDISP_H */

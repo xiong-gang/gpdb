@@ -17,6 +17,7 @@
 #include "tcop/tcopprot.h"
 #include "cdb/cdbdisp.h"
 #include "cdb/cdbdisp_thread.h"
+#include "cdb/cdbdisp_non_thread.h"
 #include "cdb/cdbdispatchresult.h"
 #include "cdb/cdbfts.h"
 #include "cdb/cdbgang.h"
@@ -30,7 +31,7 @@ CdbDispatchDirectDesc default_dispatch_direct_desc = { false, 0, {0}};
 
 static void cdbdisp_clearGangActiveFlag(CdbDispatcherState * ds);
 
-DispatcherInternalFuncs *pDispatchFuncs = &ThreadedFuncs;
+DispatcherInternalFuncs *pDispatchFuncs = &NonThreadedFuncs;
 /*
  * cdbdisp_dispatchToGang:
  * Send the strCommand SQL statement to the subset of all segdbs in the cluster
@@ -393,4 +394,73 @@ cdbdisp_clearGangActiveFlag(CdbDispatcherState * ds)
 	{
 		ds->primaryResults->writer_gang->dispatcherActive = false;
 	}
+}
+
+void
+CollectQEWriterTransactionInformation(SegmentDatabaseDescriptor * segdbDesc,
+									  CdbDispatchResult * dispatchResult)
+{
+	PGconn *conn = segdbDesc->conn;
+
+	if (conn && conn->QEWriter_HaveInfo)
+	{
+		dispatchResult->QEIsPrimary = true;
+		dispatchResult->QEWriter_HaveInfo = true;
+		dispatchResult->QEWriter_DistributedTransactionId = conn->QEWriter_DistributedTransactionId;
+		dispatchResult->QEWriter_CommandId = conn->QEWriter_CommandId;
+		if (conn && conn->QEWriter_Dirty)
+		{
+			dispatchResult->QEWriter_Dirty = true;
+		}
+	}
+}
+
+/*
+ * Set slice in query text
+ *
+ * Make a new copy of query text and set the slice id in the right place.
+ *
+ */
+char *
+dupQueryTextAndSetSliceId(MemoryContext cxt, char *queryText,
+						  int len, int sliceId)
+{
+	/*
+	 * DTX command and RM command don't need slice id
+	 */
+	if (sliceId < 0)
+		return NULL;
+
+	int	tmp = htonl(sliceId);
+	char *newQuery = MemoryContextAlloc(cxt, len);
+
+	memcpy(newQuery, queryText, len);
+
+	/*
+	 * the first byte is 'M' and followed by the length, which is an integer.
+	 * see function PQbuildGpQueryString.
+	 */
+	memcpy(newQuery + 1 + sizeof(int), &tmp, sizeof(tmp));
+	return newQuery;
+}
+
+/*
+ * Send cancel/finish signal to still-running QE through libpq.
+ * waitMode is either CANCEL or FINISH.  Returns true if we successfully
+ * sent a signal (not necessarily received by the target process).
+ */
+DispatchWaitMode
+cdbdisp_signalQE(SegmentDatabaseDescriptor * segdbDesc,
+				 DispatchWaitMode waitMode)
+{
+	bool ret;
+
+	Assert(waitMode == DISPATCH_WAIT_CANCEL || waitMode == DISPATCH_WAIT_FINISH);
+
+	if (waitMode == DISPATCH_WAIT_CANCEL)
+		ret = cdbconn_signalQE(segdbDesc, true);
+	else
+		ret = cdbconn_signalQE(segdbDesc, false);
+
+	return (ret ? waitMode : DISPATCH_WAIT_NONE);
 }

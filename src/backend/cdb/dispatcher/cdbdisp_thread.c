@@ -111,9 +111,6 @@ static bool
 shouldStillDispatchCommand(DispatchCommandParms * pParms,
 						   CdbDispatchResult * dispatchResult);
 
-static void
-CollectQEWriterTransactionInformation(SegmentDatabaseDescriptor * segdbDesc,
-									  CdbDispatchResult * dispatchResult);
 
 static bool
 dispatchCommand(CdbDispatchResult * dispatchResult,
@@ -123,17 +120,8 @@ dispatchCommand(CdbDispatchResult * dispatchResult,
 /* returns true if command complete */
 static bool processResults(CdbDispatchResult * dispatchResult);
 
-static char *
-dupQueryTextAndSetSliceId(MemoryContext cxt,
-						  char *queryText,
-						  int len, int sliceId);
-
 static void
 cdbdisp_checkCancel(DispatchCommandParms* pParms);
-
-static DispatchWaitMode
-cdbdisp_signalQE(SegmentDatabaseDescriptor * segdbDesc,
-				 DispatchWaitMode waitMode);
 
 static void *thread_DispatchCommand(void *arg);
 static void thread_DispatchOut(DispatchCommandParms * pParms);
@@ -162,8 +150,16 @@ cdbdisp_dispatchToGang_internal(struct CdbDispatcherState *ds,
 								int sliceIndex,
 								CdbDispatchDirectDesc * dispDirect);
 
+static void
+cdbdisp_waitThreads(void);
+
+static bool
+cdbdisp_shouldCancel(struct CdbDispatcherState *ds);
+
 DispatcherInternalFuncs ThreadedFuncs =
 {
+    cdbdisp_waitThreads,
+	cdbdisp_shouldCancel,
 	cdbdisp_makeDispatchThreads,
 	CdbCheckDispatchResult_internal,
 	cdbdisp_dispatchToGang_internal
@@ -351,13 +347,9 @@ CdbCheckDispatchResult_internal(struct CdbDispatcherState *ds,
 		pParms = &pThreads->dispatchCommandParmsAr[i];
 		Assert(pParms != NULL);
 
-		/*
-		 * Does caller want to stop short?
-		 */
-		Assert(!(waitMode = DISPATCH_WAIT_NONE &&
-				(pParms->waitMode  == DISPATCH_WAIT_CANCEL || pParms->waitMode  == DISPATCH_WAIT_CANCEL)));
-
-		pParms->waitMode = waitMode;
+		/* Don't overwrite DISPATCH_WAIT_CANCEL or DISPATCH_WAIT_FINISH with DISPATCH_WAIT_NONE */
+		if (waitMode != DISPATCH_WAIT_NONE)
+			pParms->waitMode = waitMode;
 
 		elog(DEBUG5, "CheckDispatchResult: Joining to thread %d of %d", i + 1, threadCount);
 
@@ -418,7 +410,7 @@ CdbCheckDispatchResult_internal(struct CdbDispatcherState *ds,
  * while the threads are touching stale pointers.  Threads will check
  * proc_exit_inprogress and immediately stops once it's found to be true.
  */
-void
+static void
 cdbdisp_waitThreads(void)
 {
 	int	i,
@@ -1195,72 +1187,9 @@ connection_error:
 	return true; /* connection is gone! */
 }
 
-static void
-CollectQEWriterTransactionInformation(SegmentDatabaseDescriptor * segdbDesc,
-									  CdbDispatchResult * dispatchResult)
+static bool
+cdbdisp_shouldCancel(struct CdbDispatcherState *ds)
 {
-	PGconn *conn = segdbDesc->conn;
-
-	if (conn && conn->QEWriter_HaveInfo)
-	{
-		dispatchResult->QEIsPrimary = true;
-		dispatchResult->QEWriter_HaveInfo = true;
-		dispatchResult->QEWriter_DistributedTransactionId = conn->QEWriter_DistributedTransactionId;
-		dispatchResult->QEWriter_CommandId = conn->QEWriter_CommandId;
-		if (conn && conn->QEWriter_Dirty)
-		{
-			dispatchResult->QEWriter_Dirty = true;
-		}
-	}
+	Assert(ds);
+	return cdbdisp_checkResultsErrcode(ds->primaryResults);
 }
-
-/*
- * Set slice in query text
- *
- * Make a new copy of query text and set the slice id in the right place.
- *
- */
-static char *
-dupQueryTextAndSetSliceId(MemoryContext cxt, char *queryText,
-						  int len, int sliceId)
-{
-	/*
-	 * DTX command and RM command don't need slice id 
-	 */
-	if (sliceId < 0)
-		return NULL;
-
-	int	tmp = htonl(sliceId);
-	char *newQuery = MemoryContextAlloc(cxt, len);
-
-	memcpy(newQuery, queryText, len);
-
-	/*
-	 * the first byte is 'M' and followed by the length, which is an integer.
-	 * see function PQbuildGpQueryString.
-	 */
-	memcpy(newQuery + 1 + sizeof(int), &tmp, sizeof(tmp));
-	return newQuery;
-}
-
-/*
- * Send cancel/finish signal to still-running QE through libpq.
- * waitMode is either CANCEL or FINISH.  Returns true if we successfully
- * sent a signal (not necessarily received by the target process).
- */
-static DispatchWaitMode
-cdbdisp_signalQE(SegmentDatabaseDescriptor * segdbDesc,
-				 DispatchWaitMode waitMode)
-{
-	bool ret;
-
-	Assert(waitMode == DISPATCH_WAIT_CANCEL || waitMode == DISPATCH_WAIT_FINISH);
-
-	if (waitMode == DISPATCH_WAIT_CANCEL)
-		ret = cdbconn_signalQE(segdbDesc, true);
-	else
-		ret = cdbconn_signalQE(segdbDesc, false);
-
-	return (ret ? waitMode : DISPATCH_WAIT_NONE);
-}
-

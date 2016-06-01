@@ -1,20 +1,19 @@
 /*-------------------------------------------------------------------------
  *
- * cdbdisp_thread.h
- * routines for multi-thread implementation of dispatching commands 
+ * cdbdisp_non_thread.h
+ * routines for non-threaded implementation of dispatching commands
  * to the qExec processes.
  *
  * Copyright (c) 2005-2008, Greenplum inc
  *
  *-------------------------------------------------------------------------
  */
-#ifndef CDBDISP_THREAD_H
-#define CDBDISP_THREAD_H
+#ifndef CDBDISP_NON_THREAD_H
+#define CDBDISP_NON_THREAD_H
 
 #include "lib/stringinfo.h"         /* StringInfo */
-#include <pthread.h>
 #include "cdb/cdbdisp.h"
 
-extern DispatcherInternalFuncs ThreadedFuncs;
+extern DispatcherInternalFuncs NonThreadedFuncs;
 
 #endif

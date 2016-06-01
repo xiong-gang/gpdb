@@ -23,7 +23,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include "cdb/cdbdisp_thread.h"
+#include "cdb/cdbdisp.h"
 #include "miscadmin.h"
 #ifdef PROFILE_PID_DIR
 #include "postmaster/autovacuum.h"
@@ -197,7 +197,8 @@ proc_exit_prepare(int code)
 	 * something.  Actually, I cannot find any better option to do the
 	 * correct work.
 	 */
-	cdbdisp_waitThreads();
+	if(pDispatchFuncs != NULL && pDispatchFuncs->procExitCallBack != NULL)
+		(pDispatchFuncs->procExitCallBack)();
 
 	/*
 	* Make sure interconnect thread quit before shmem_exit() in FATAL case.
