@@ -11,7 +11,6 @@
 
 #include "cdb/cdbutil.h"
 #include "executor/execdesc.h"
-#include <pthread.h>
 
 struct Port;                    /* #include "libpq/libpq-be.h" */
 struct QueryDesc;               /* #include "executor/execdesc.h" */
@@ -117,6 +116,7 @@ extern void disconnectAndDestroyIdleReaderGangs(void);
 extern void cleanupPortalGangs(Portal portal);
 
 extern int largestGangsize(void);
+extern void setLargestGangsize(int size);
 
 extern int gp_pthread_create(pthread_t *thread, void *(*start_routine)(void *), void *arg, const char *caller);
 /*
@@ -301,6 +301,29 @@ extern int sliceCalculateNumSendingProcesses(Slice *slice);
 extern void InitRootSlices(QueryDesc *queryDesc);
 extern void AssignGangs(QueryDesc *queryDesc);
 extern void ReleaseGangs(QueryDesc *queryDesc);
+
+
+extern Gang *
+buildGangDefinition(GangType type, int gang_id, int size, int content);
+
+extern void
+checkConnectionStatus(Gang* gp, int* countInRecovery, int* countSuccessful);
+
+extern bool
+isPrimaryWriterGangAlive(void);
+
+extern void
+build_gpqeid_param(char *buf, int bufsz, int segIndex, bool is_writer);
+
+extern void
+addOptions(StringInfo string, bool iswriter);
+
+extern void
+disconnectAndDestroyGang(Gang *gp);
+
+extern MemoryContext GangContext;
+
+
 
 #ifdef USE_ASSERT_CHECKING
 struct PlannedStmt;

@@ -8,40 +8,21 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
-
-#include <unistd.h>				/* getpid() */
-#include <pthread.h>
-#include <limits.h>
-
-#include "gp-libpq-fe.h"
 #include "miscadmin.h"			/* MyDatabaseId */
-#include "storage/proc.h"		/* MyProc */
-#include "storage/ipc.h"
-#include "utils/memutils.h"
-
 #include "catalog/namespace.h"
-#include "commands/variable.h"
-#include "nodes/execnodes.h"	/* CdbProcess, Slice, SliceTable */
-#include "postmaster/postmaster.h"
-#include "tcop/tcopprot.h"
-#include "utils/portal.h"
-#include "utils/sharedsnapshot.h"
-#include "tcop/pquery.h"
-
 #include "cdb/cdbconn.h"		/* SegmentDatabaseDescriptor */
 #include "cdb/cdbfts.h"
-#include "cdb/cdbdisp_query.h"
 #include "cdb/cdbgang.h"		/* me */
-#include "cdb/cdbtm.h"			/* discardDtxTransaction() */
-#include "cdb/cdbutil.h"		/* CdbComponentDatabaseInfo */
+#include "cdb/cdbgang_thread.h"
 #include "cdb/cdbvars.h"		/* Gp_role, etc. */
-#include "storage/bfz.h"
-#include "gp-libpq-fe.h"
-#include "gp-libpq-int.h"
-#include "libpq/libpq-be.h"
-#include "libpq/ip.h"
-
+#include "postmaster/postmaster.h"
+#include "storage/proc.h"		/* MyProc */
+#include "storage/ipc.h"
 #include "utils/guc_tables.h"
+#include "utils/memutils.h"
+#include "utils/portal.h"
+#include "utils/sharedsnapshot.h"
+
 
 #define LOG_GANG_DEBUG(...) do { \
 	if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG) elog(__VA_ARGS__); \
@@ -56,8 +37,6 @@ static CdbComponentDatabases *cdb_component_dbs = NULL;
 
 static int largest_gangsize = 0;
 
-static MemoryContext GangContext = NULL;
-
 static bool NeedResetSession = false;
 static Oid OldTempNamespace = InvalidOid;
 
@@ -66,6 +45,8 @@ static List *availableReaderGangsN = NIL;
 static List *allocatedReaderGangs1 = NIL;
 static List *availableReaderGangs1 = NIL;
 static Gang *primaryWriterGang = NULL;
+
+MemoryContext GangContext = NULL;
 
 /*
  * Every gang created must have a unique identifier, so the QD and Dispatch Agents can agree
@@ -102,22 +83,10 @@ typedef struct DoConnectParms
 	pthread_t thread;
 } DoConnectParms;
 
-static Gang *buildGangDefinition(GangType type, int gang_id, int size,
-		int content);
-static DoConnectParms* makeConnectParms(int parmsCount, GangType type);
-static void destroyConnectParms(DoConnectParms *doConnectParmsAr, int count);
-static void checkConnectionStatus(Gang* gp, int* countInRecovery,
-		int* countSuccessful);
-static bool isPrimaryWriterGangAlive(void);
-static void *thread_DoConnect(void *arg);
-static void build_gpqeid_param(char *buf, int bufsz, int segIndex,
-		bool is_writer);
 static Gang *createGang(GangType type, int gang_id, int size, int content);
-static void disconnectAndDestroyGang(Gang *gp);
 static void disconnectAndDestroyAllReaderGangs(bool destroyAllocated);
 
 static bool isTargetPortal(const char *p1, const char *p2);
-static void addOptions(StringInfo string, bool iswriter);
 static bool cleanupGang(Gang * gp);
 static void resetSessionForPrimaryGangLoss(void);
 static const char* gangTypeToString(GangType);
@@ -308,247 +277,14 @@ allocateWriterGang()
 static Gang *
 createGang(GangType type, int gang_id, int size, int content)
 {
-	Gang *newGangDefinition;
-	SegmentDatabaseDescriptor *segdbDesc = NULL;
-	DoConnectParms *doConnectParmsAr = NULL;
-	DoConnectParms *pParms = NULL;
-	int parmIndex = 0;
-	int threadCount = 0;
-	int i = 0;
-	int create_gang_retry_counter = 0;
-	int in_recovery_mode_count = 0;
-	int successful_connections = 0;
-
-	LOG_GANG_DEBUG(LOG, "createGang type = %d, gang_id = %d, size = %d, content = %d",
-			type, gang_id, size, content);
-
-	/* check arguments */
-	Assert(size == 1 || size == getgpsegmentCount());
-	Assert(CurrentResourceOwner != NULL);
-	Assert(CurrentMemoryContext == GangContext);
-	if (type == GANGTYPE_PRIMARY_WRITER)
-		Assert(gang_id == PRIMARY_WRITER_GANG_ID);
-	Assert(gp_connections_per_thread > 0);
-
-create_gang_retry:
-	/* If we're in a retry, we may need to reset our initial state, a bit */
-	newGangDefinition = NULL;
-	doConnectParmsAr = NULL;
-	successful_connections = 0;
-	in_recovery_mode_count = 0;
-	threadCount = 0;
-
-	/* Check the writer gang first. */
-	if (type != GANGTYPE_PRIMARY_WRITER && !isPrimaryWriterGangAlive())
-	{
-		elog(LOG, "primary writer gang is broken");
-		goto exit;
-	}
-
-	/* allocate and initialize a gang structure */
-	newGangDefinition = buildGangDefinition(type, gang_id, size, content);
-	Assert(newGangDefinition != NULL);
-	Assert(newGangDefinition->size == size);
-	Assert(newGangDefinition->perGangContext != NULL);
-	MemoryContextSwitchTo(newGangDefinition->perGangContext);
-
-	/*
-	 * The most threads we could have is segdb_count / gp_connections_per_thread, rounded up.
-	 * This is equivalent to 1 + (segdb_count-1) / gp_connections_per_thread.
-	 * We allocate enough memory for this many DoConnectParms structures,
-	 * even though we may not use them all.
-	 */
-
-	threadCount = 1 + (size - 1) / gp_connections_per_thread;
-	Assert(threadCount > 0);
-
-	/* initialize connect parameters */
-	doConnectParmsAr = makeConnectParms(threadCount, type);
-	for (i = 0; i < size; i++)
-	{
-		parmIndex = i / gp_connections_per_thread;
-		pParms = &doConnectParmsAr[parmIndex];
-		segdbDesc = &newGangDefinition->db_descriptors[i];
-		pParms->segdbDescPtrArray[pParms->db_count++] = segdbDesc;
-	}
-
-	/* start threads and doing the connect */
-	for (i = 0; i < threadCount; i++)
-	{
-		int pthread_err;
-		pParms = &doConnectParmsAr[i];
-
-		LOG_GANG_DEBUG(LOG,
-				"createGang creating thread %d of %d for libpq connections",
-				i + 1, threadCount);
-
-		pthread_err = gp_pthread_create(&pParms->thread, thread_DoConnect, pParms, "createGang");
-		if (pthread_err != 0)
-		{
-			int j;
-
-			/*
-			 * Error during thread create (this should be caused by resource
-			 * constraints). If we leave the threads running, they'll
-			 * immediately have some problems -- so we need to join them, and
-			 * *then* we can issue our FATAL error
-			 */
-			for (j = 0; j < i; j++)
-			{
-				pthread_join(doConnectParmsAr[j].thread, NULL);
-			}
-
-			ereport(FATAL, (errcode(ERRCODE_INTERNAL_ERROR),
-					errmsg("failed to create thread %d of %d", i + 1, threadCount),
-					errdetail("pthread_create() failed with err %d", pthread_err)));
-		}
-	}
-
-	/*
-	 * wait for all of the DoConnect threads to complete.
-	 */
-	for (i = 0; i < threadCount; i++)
-	{
-		LOG_GANG_DEBUG(LOG, "joining to thread %d of %d for libpq connections",
-				i + 1, threadCount);
-
-		if (0 != pthread_join(doConnectParmsAr[i].thread, NULL))
-		{
-			elog(FATAL, "could not create segworker group");
-		}
-	}
-
-	/*
-	 * Free the memory allocated for the threadParms array
-	 */
-	destroyConnectParms(doConnectParmsAr, threadCount);
-	doConnectParmsAr = NULL;
-
-	/* find out the successful connections and the failed ones */
-	checkConnectionStatus(newGangDefinition, &in_recovery_mode_count,
-			&successful_connections);
-
-	LOG_GANG_DEBUG(LOG,"createGang: %d processes requested; %d successful connections %d in recovery",
-			size, successful_connections, in_recovery_mode_count);
-
-	MemoryContextSwitchTo(GangContext);
-
-	if (size == successful_connections)
-	{
-		largest_gangsize = Max(largest_gangsize, size);
-		return newGangDefinition;
-	}
-
-	/* there'er failed connections */
-
-	/*
-	 * If this is a reader gang and the writer gang is invalid, destroy all gangs.
-	 * This happens when one segment is reset.
-	 */
-	if (type != GANGTYPE_PRIMARY_WRITER && !isPrimaryWriterGangAlive())
-	{
-		elog(LOG, "primary writer gang is broken");
-		goto exit;
-	}
-
-	/* FTS shows some segment DBs are down, destroy all gangs. */
-	if (isFTSEnabled() &&
-		FtsTestSegmentDBIsDown(newGangDefinition->db_descriptors, size))
-	{
-		elog(LOG, "FTS detected some segments are down");
-		goto exit;
-	}
-
-	disconnectAndDestroyGang(newGangDefinition);
-	newGangDefinition = NULL;
-
-	/* Writer gang is created before reader gangs. */
-	if (type == GANGTYPE_PRIMARY_WRITER)
-		Insist(!gangsExist());
-
-	/* We could do some retry here */
-	if (successful_connections + in_recovery_mode_count == size &&
-		gp_gang_creation_retry_count &&
-		create_gang_retry_counter++ < gp_gang_creation_retry_count)
-	{
-		LOG_GANG_DEBUG(LOG, "createGang: gang creation failed, but retryable.");
-
-		/*
-		 * On the first retry, we want to verify that we are
-		 * using the most current version of the
-		 * configuration.
-		 */
-		if (create_gang_retry_counter == 0)
-			FtsNotifyProber();
-
-		CHECK_FOR_INTERRUPTS();
-		pg_usleep(gp_gang_creation_retry_timer * 1000);
-		CHECK_FOR_INTERRUPTS();
-
-		goto create_gang_retry;
-	}
-
-exit:
-	if(newGangDefinition != NULL)
-		disconnectAndDestroyGang(newGangDefinition);
-
-	disconnectAndDestroyAllGangs(true);
-	CheckForResetSession();
-	ereport(ERROR,
-			(errcode(ERRCODE_GP_INTERCONNECTION_ERROR), errmsg("failed to acquire resources on one or more segments")));
-	return NULL;
+	return createGang_thread(type, gang_id, size, content);
 }
 
-/*
- *	Thread procedure.
- *	Perform the connect.
- */
-static void *
-thread_DoConnect(void *arg)
-{
-	DoConnectParms *pParms = (DoConnectParms *) arg;
-	SegmentDatabaseDescriptor **segdbDescPtrArray = pParms->segdbDescPtrArray;
-	int db_count = pParms->db_count;
-
-	SegmentDatabaseDescriptor *segdbDesc = NULL;
-	int i = 0;
-
-	gp_set_thread_sigmasks();
-
-	/*
-	 * The pParms contains an array of SegmentDatabaseDescriptors
-	 * to connect to.
-	 */
-	for (i = 0; i < db_count; i++)
-	{
-		char gpqeid[100];
-
-		segdbDesc = segdbDescPtrArray[i];
-
-		if (segdbDesc == NULL || segdbDesc->segment_database_info == NULL)
-		{
-			write_log("thread_DoConnect: bad segment definition during gang creation %d/%d\n", i, db_count);
-			continue;
-		}
-
-		/*
-		 * Build the connection string.  Writer-ness needs to be processed
-		 * early enough now some locks are taken before command line options
-		 * are recognized.
-		 */
-		build_gpqeid_param(gpqeid, sizeof(gpqeid), segdbDesc->segindex, pParms->type == GANGTYPE_PRIMARY_WRITER);
-
-		/* check the result in createGang */
-		cdbconn_doConnect(segdbDesc, gpqeid, pParms->connectOptions->data);
-	}
-
-	return (NULL);
-} /* thread_DoConnect */
 
 /*
  * Test if the connections of the primary writer gang are alive.
  */
-static bool isPrimaryWriterGangAlive(void)
+bool isPrimaryWriterGangAlive(void)
 {
 	if (primaryWriterGang == NULL)
 		return false;
@@ -622,7 +358,7 @@ static bool segment_failure_due_to_recovery(
  * return the count of successful connections and
  * the count of failed connections due to recovery.
  */
-static void checkConnectionStatus(Gang* gp, int* countInRecovery,
+void checkConnectionStatus(Gang* gp, int* countInRecovery,
 		int* countSuccessful)
 {
 	SegmentDatabaseDescriptor* segdbDesc = NULL;
@@ -755,7 +491,7 @@ static CdbComponentDatabaseInfo *findDatabaseInfoBySegIndex(
  * Call this function in GangContext.
  * Returns a not-null pointer.
  */
-static Gang *
+Gang *
 buildGangDefinition(GangType type, int gang_id, int size, int content)
 {
 	Gang *newGangDefinition = NULL;
@@ -920,7 +656,7 @@ static void addOneOption(StringInfo string, struct config_generic * guc)
 /*
  * Add GUCs to option string.
  */
-static void addOptions(StringInfo string, bool iswriter)
+void addOptions(StringInfo string, bool iswriter)
 {
 	struct config_generic **gucs = get_guc_variables();
 	int ngucs = get_num_guc_variables();
@@ -970,69 +706,13 @@ static void addOptions(StringInfo string, bool iswriter)
 }
 
 /*
- * Initialize a DoConnectParms structure.
- *
- * Including initialize the connect option string.
- */
-static DoConnectParms* makeConnectParms(int parmsCount, GangType type)
-{
-	DoConnectParms *doConnectParmsAr = (DoConnectParms*) palloc0(
-			parmsCount * sizeof(DoConnectParms));
-	DoConnectParms* pParms = NULL;
-	StringInfo pOptions = makeStringInfo();
-	int segdbPerThread = gp_connections_per_thread;
-	int i = 0;
-
-	addOptions(pOptions, type == GANGTYPE_PRIMARY_WRITER);
-
-	for (i = 0; i < parmsCount; i++)
-	{
-		pParms = &doConnectParmsAr[i];
-		pParms->segdbDescPtrArray = (SegmentDatabaseDescriptor**) palloc0(
-				segdbPerThread * sizeof(SegmentDatabaseDescriptor *));
-		MemSet(&pParms->thread, 0, sizeof(pthread_t));
-		pParms->db_count = 0;
-		pParms->type = type;
-		pParms->connectOptions = pOptions;
-	}
-	return doConnectParmsAr;
-}
-
-/*
- * Free all the memory allocated in DoConnectParms.
- */
-static void destroyConnectParms(DoConnectParms *doConnectParmsAr, int count)
-{
-	if (doConnectParmsAr != NULL)
-	{
-		int i = 0;
-		for (i = 0; i < count; i++)
-		{
-			DoConnectParms *pParms = &doConnectParmsAr[i];
-			StringInfo pOptions = pParms->connectOptions;
-			if (pOptions->data != NULL)
-			{
-				pfree(pOptions->data);
-				pOptions->data = NULL;
-			}
-			pParms->connectOptions = NULL;
-
-			pfree(pParms->segdbDescPtrArray);
-			pParms->segdbDescPtrArray = NULL;
-		}
-
-		pfree(doConnectParmsAr);
-	}
-}
-
-/*
  * build_gpqeid_params
  *
  * Called from the qDisp process to create the "gpqeid" parameter string
  * to be passed to a qExec that is being started.  NB: Can be called in a
  * thread, so mustn't use palloc/elog/ereport/etc.
  */
-static void build_gpqeid_param(char *buf, int bufsz, int segIndex,
+void build_gpqeid_param(char *buf, int bufsz, int segIndex,
 		bool is_writer)
 {
 #ifdef HAVE_INT64_TIMESTAMP
@@ -1516,7 +1196,7 @@ getCdbProcessesForQD(int isPrimary)
  * Caller needs to reset session id if this is a writer gang.
  */
 void
-static disconnectAndDestroyGang(Gang *gp)
+disconnectAndDestroyGang(Gang *gp)
 {
 	int i = 0;
 
@@ -2197,6 +1877,13 @@ int largestGangsize(void)
 {
 	return largest_gangsize;
 }
+
+void setLargestGangsize(int size)
+{
+	if (size > largest_gangsize)
+		largest_gangsize = size;
+}
+
 
 #ifdef USE_ASSERT_CHECKING
 /**
