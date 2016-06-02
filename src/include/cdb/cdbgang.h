@@ -315,8 +315,8 @@ isPrimaryWriterGangAlive(void);
 extern void
 build_gpqeid_param(char *buf, int bufsz, int segIndex, bool is_writer);
 
-extern void
-addOptions(StringInfo string, bool iswriter);
+extern char*
+addOptions(bool iswriter);
 
 extern void
 disconnectAndDestroyGang(Gang *gp);

@@ -42,7 +42,7 @@ typedef struct DoConnectParms
 	GangType type;
 
 	/* connect options. GUC etc. */
-	StringInfo connectOptions;
+	char *connectOptions;
 
 	/* The pthread_t thread handle. */
 	pthread_t thread;
@@ -291,7 +291,7 @@ thread_DoConnect(void *arg)
 		build_gpqeid_param(gpqeid, sizeof(gpqeid), segdbDesc->segindex, pParms->type == GANGTYPE_PRIMARY_WRITER);
 
 		/* check the result in createGang */
-		cdbconn_doConnect(segdbDesc, gpqeid, pParms->connectOptions->data);
+		cdbconn_doConnect(segdbDesc, gpqeid, pParms->connectOptions);
 	}
 
 	return (NULL);
@@ -308,11 +308,8 @@ static DoConnectParms* makeConnectParms(int parmsCount, GangType type)
 	DoConnectParms *doConnectParmsAr = (DoConnectParms*) palloc0(
 			parmsCount * sizeof(DoConnectParms));
 	DoConnectParms* pParms = NULL;
-	StringInfo pOptions = makeStringInfo();
 	int segdbPerThread = gp_connections_per_thread;
 	int i = 0;
-
-	addOptions(pOptions, type == GANGTYPE_PRIMARY_WRITER);
 
 	for (i = 0; i < parmsCount; i++)
 	{
@@ -322,7 +319,7 @@ static DoConnectParms* makeConnectParms(int parmsCount, GangType type)
 		MemSet(&pParms->thread, 0, sizeof(pthread_t));
 		pParms->db_count = 0;
 		pParms->type = type;
-		pParms->connectOptions = pOptions;
+		pParms->connectOptions = addOptions(type == GANGTYPE_PRIMARY_WRITER);
 	}
 	return doConnectParmsAr;
 }
@@ -338,13 +335,12 @@ static void destroyConnectParms(DoConnectParms *doConnectParmsAr, int count)
 		for (i = 0; i < count; i++)
 		{
 			DoConnectParms *pParms = &doConnectParmsAr[i];
-			StringInfo pOptions = pParms->connectOptions;
-			if (pOptions->data != NULL)
+
+			if (pParms->connectOptions != NULL)
 			{
-				pfree(pOptions->data);
-				pOptions->data = NULL;
+				pfree(pParms->connectOptions);
+				pParms->connectOptions = NULL;
 			}
-			pParms->connectOptions = NULL;
 
 			pfree(pParms->segdbDescPtrArray);
 			pParms->segdbDescPtrArray = NULL;

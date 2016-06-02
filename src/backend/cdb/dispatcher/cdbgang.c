@@ -656,21 +656,26 @@ static void addOneOption(StringInfo string, struct config_generic * guc)
 /*
  * Add GUCs to option string.
  */
-void addOptions(StringInfo string, bool iswriter)
+char *
+addOptions(bool iswriter)
 {
 	struct config_generic **gucs = get_guc_variables();
 	int ngucs = get_num_guc_variables();
 	CdbComponentDatabaseInfo *qdinfo = NULL;
+	StringInfoData string;
+
 	int i;
 
 	Assert (Gp_role == GP_ROLE_DISPATCH);
 	LOG_GANG_DEBUG(LOG, "addOptions: iswriter %d", iswriter);
 
-	qdinfo = &cdb_component_dbs->entry_db_info[0];
-	appendStringInfo(string, " -c gp_qd_hostname=%s", qdinfo->hostip);
-	appendStringInfo(string, " -c gp_qd_port=%d", qdinfo->port);
+	initStringInfo(&string);
 
-	appendStringInfo(string, " -c gp_qd_callback_info=port=%d", PostPortNumber);
+	qdinfo = &cdb_component_dbs->entry_db_info[0];
+	appendStringInfo(&string, " -c gp_qd_hostname=%s", qdinfo->hostip);
+	appendStringInfo(&string, " -c gp_qd_port=%d", qdinfo->port);
+
+	appendStringInfo(&string, " -c gp_qd_callback_info=port=%d", PostPortNumber);
 
 	/*
 	 * Transactions are tricky.
@@ -687,13 +692,13 @@ void addOptions(StringInfo string, bool iswriter)
 	if (DefaultXactIsoLevel != XACT_READ_COMMITTED)
 	{
 		if (DefaultXactIsoLevel == XACT_SERIALIZABLE)
-			appendStringInfo(string, " -c default_transaction_isolation=serializable");
+			appendStringInfo(&string, " -c default_transaction_isolation=serializable");
 	}
 
 	if (XactIsoLevel != XACT_READ_COMMITTED)
 	{
 		if (XactIsoLevel == XACT_SERIALIZABLE)
-			appendStringInfo(string, " -c transaction_isolation=serializable");
+			appendStringInfo(&string, " -c transaction_isolation=serializable");
 	}
 
 	for (i = 0; i < ngucs; ++i)
@@ -701,8 +706,10 @@ void addOptions(StringInfo string, bool iswriter)
 		struct config_generic *guc = gucs[i];
 
 		if ((guc->flags & GUC_GPDB_ADDOPT) && (guc->context == PGC_USERSET || procRoleIsSuperuser()))
-			addOneOption(string, guc);
+			addOneOption(&string, guc);
 	}
+
+	return string.data;
 }
 
 /*
