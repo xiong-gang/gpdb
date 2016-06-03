@@ -86,6 +86,7 @@ extern List * getAllBusyReaderGangs(void);
 extern CdbComponentDatabases *getComponentDatabases(void);
 
 extern bool gangsExist(void);
+extern bool readerGangsExist(void);
 
 struct SegmentDatabaseDescriptor *getSegmentDescriptorFromGang(const Gang *gp, int seg);
 
@@ -305,6 +306,9 @@ extern void ReleaseGangs(QueryDesc *queryDesc);
 
 extern Gang *
 buildGangDefinition(GangType type, int gang_id, int size, int content);
+
+extern bool
+segment_failure_due_to_recovery(struct SegmentDatabaseDescriptor *segdbDesc);
 
 extern void
 checkConnectionStatus(Gang* gp, int* countInRecovery, int* countSuccessful);

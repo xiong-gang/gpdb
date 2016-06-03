@@ -25,6 +25,9 @@
 #include "utils/memutils.h"
 #include "storage/bfz.h"
 #include "cdb/memquota.h"
+#include "cdb/cdbdisp.h"
+#include "cdb/cdbdisp_thread.h"
+#include "cdb/cdbdisp_non_thread.h"
 
 /*
  * ----------------
@@ -652,10 +655,14 @@ assign_gp_connections_per_thread(int newval, bool doit, GucSource source __attri
 
 	if (doit)
 	{
-		if (newval <= 0)
+		if (newval < 0)
 			return false;
 
 		gp_connections_per_thread = newval;
+		if(gp_connections_per_thread == 0)
+			pDispatchFuncs = &NonThreadedFuncs;
+		else
+			pDispatchFuncs = &ThreadedFuncs;
 	}
 
 	return true;

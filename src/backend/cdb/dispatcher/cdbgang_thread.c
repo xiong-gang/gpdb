@@ -110,7 +110,6 @@ create_gang_retry:
 	 * We allocate enough memory for this many DoConnectParms structures,
 	 * even though we may not use them all.
 	 */
-
 	threadCount = 1 + (size - 1) / gp_connections_per_thread;
 	Assert(threadCount > 0);
 
@@ -211,27 +210,26 @@ create_gang_retry:
 		goto exit;
 	}
 
-	disconnectAndDestroyGang(newGangDefinition);
-	newGangDefinition = NULL;
-
 	/* Writer gang is created before reader gangs. */
 	if (type == GANGTYPE_PRIMARY_WRITER)
 		Insist(!gangsExist());
 
-	/* We could do some retry here */
-	if (successful_connections + in_recovery_mode_count == size &&
-		gp_gang_creation_retry_count &&
-		create_gang_retry_counter++ < gp_gang_creation_retry_count)
+	/*
+	 * Retry when:
+	 * 1) It's a writer gang.
+	 * 2) It's the first reader gang.
+	 * 3) All failed segment are in recovery mode.
+	 */
+	if(gp_gang_creation_retry_count &&
+	   create_gang_retry_counter++ < gp_gang_creation_retry_count &&
+	   (type == GANGTYPE_PRIMARY_WRITER ||
+	    readerGangsExist() ||
+	    successful_connections + in_recovery_mode_count == size))
 	{
-		LOG_GANG_DEBUG(LOG, "createGang: gang creation failed, but retryable.");
+		disconnectAndDestroyGang(newGangDefinition);
+		newGangDefinition = NULL;
 
-		/*
-		 * On the first retry, we want to verify that we are
-		 * using the most current version of the
-		 * configuration.
-		 */
-		if (create_gang_retry_counter == 0)
-			FtsNotifyProber();
+		LOG_GANG_DEBUG(LOG, "createGang: gang creation failed, but retryable.");
 
 		CHECK_FOR_INTERRUPTS();
 		pg_usleep(gp_gang_creation_retry_timer * 1000);
@@ -241,8 +239,7 @@ create_gang_retry:
 	}
 
 exit:
-	if(newGangDefinition != NULL)
-		disconnectAndDestroyGang(newGangDefinition);
+	disconnectAndDestroyGang(newGangDefinition);
 
 	disconnectAndDestroyAllGangs(true);
 	CheckForResetSession();
@@ -291,7 +288,7 @@ thread_DoConnect(void *arg)
 		build_gpqeid_param(gpqeid, sizeof(gpqeid), segdbDesc->segindex, pParms->type == GANGTYPE_PRIMARY_WRITER);
 
 		/* check the result in createGang */
-		cdbconn_doConnect(segdbDesc, gpqeid, pParms->connectOptions);
+		cdbconn_doConnect(segdbDesc, gpqeid, pParms->connectOptions, true);
 	}
 
 	return (NULL);
@@ -349,3 +346,4 @@ static void destroyConnectParms(DoConnectParms *doConnectParmsAr, int count)
 		pfree(doConnectParmsAr);
 	}
 }
+

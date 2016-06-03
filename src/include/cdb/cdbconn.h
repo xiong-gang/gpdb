@@ -39,7 +39,9 @@ typedef struct SegmentDatabaseDescriptor
 	 * A non-NULL value points to the PGconn block of a successfully
 	 * established connection to the segment database.
 	 */
-	PGconn				   *conn;		
+	PGconn				   *conn;
+
+	PostgresPollingStatusType poll_status;
 	
 	/*
 	 * Error info saved when connection cannot be established.
@@ -77,8 +79,12 @@ cdbconn_termSegmentDescriptor(SegmentDatabaseDescriptor *segdbDesc);
 /* Connect to a QE as a client via libpq. */
 void
 cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc,
-		  const char *gpqeid,
-		  const char *options);
+				  const char *gpqeid,
+				  const char *options,
+				  bool wait);
+
+void
+cdbconn_doConnectComplete(SegmentDatabaseDescriptor *segdbDesc);
 
 /* Disconnect from QE */
 void cdbconn_disconnect(SegmentDatabaseDescriptor *segdbDesc);

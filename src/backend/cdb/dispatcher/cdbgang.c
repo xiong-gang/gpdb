@@ -14,6 +14,7 @@
 #include "cdb/cdbfts.h"
 #include "cdb/cdbgang.h"		/* me */
 #include "cdb/cdbgang_thread.h"
+#include "cdb/cdbgang_non_thread.h"
 #include "cdb/cdbvars.h"		/* Gp_role, etc. */
 #include "postmaster/postmaster.h"
 #include "storage/proc.h"		/* MyProc */
@@ -277,7 +278,10 @@ allocateWriterGang()
 static Gang *
 createGang(GangType type, int gang_id, int size, int content)
 {
-	return createGang_thread(type, gang_id, size, content);
+	if (gp_connections_per_thread == 0)
+		return createGang_non_thread(type, gang_id, size, content);
+	else
+		return createGang_thread(type, gang_id, size, content);
 }
 
 
@@ -307,8 +311,7 @@ bool isPrimaryWriterGangAlive(void)
 /*
  * Check the segment failure reason by comparing connection error message.
  */
-static bool segment_failure_due_to_recovery(
-		SegmentDatabaseDescriptor *segdbDesc)
+bool segment_failure_due_to_recovery(SegmentDatabaseDescriptor *segdbDesc)
 {
 	char *fatal = NULL, *message = NULL, *ptr = NULL;
 	int fatal_len = 0;
@@ -1875,6 +1878,14 @@ bool gangsExist(void)
 {
 	return (primaryWriterGang != NULL ||
 			allocatedReaderGangsN != NIL ||
+			availableReaderGangsN != NIL ||
+			allocatedReaderGangs1 != NIL||
+			availableReaderGangs1 != NIL);
+}
+
+bool readerGangsExist(void)
+{
+	return (allocatedReaderGangsN != NIL ||
 			availableReaderGangsN != NIL ||
 			allocatedReaderGangs1 != NIL||
 			availableReaderGangs1 != NIL);

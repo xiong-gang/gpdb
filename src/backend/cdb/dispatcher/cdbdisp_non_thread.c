@@ -250,7 +250,12 @@ static void
 CdbCheckDispatchResult_internal(struct CdbDispatcherState *ds,
 								DispatchWaitMode waitMode)
 {
+	Assert(ds != NULL);
 	CdbDispatchParmsNonThread *pParms = (CdbDispatchParmsNonThread*)ds->dispatchParams;
+
+	/* cdbdisp_destroyDispatcherState is called */
+	if(pParms == NULL)
+		return;
 
 	/* Don't overwrite DISPATCH_WAIT_CANCEL or DISPATCH_WAIT_FINISH with DISPATCH_WAIT_NONE */
 	if (waitMode != DISPATCH_WAIT_NONE)
@@ -281,16 +286,16 @@ cdbdisp_makeNonThreadedParms(int maxSlices, char *queryText, int len)
 	int	maxResults = maxSlices * getgpsegmentCount();
 	int	size = 0;
 
-	CdbDispatchParmsNonThread *dThreads = palloc0(sizeof(CdbDispatchParmsNonThread));
+	CdbDispatchParmsNonThread *pParms = palloc0(sizeof(CdbDispatchParmsNonThread));
 
 	size = maxResults * sizeof(CdbDispatchResult *);
-	dThreads->dispatchResultPtrArray = (CdbDispatchResult **) palloc0(size);
-	dThreads->dispatchCount = 0;
-	dThreads->waitMode = DISPATCH_WAIT_NONE;
-	dThreads->query_text = queryText;
-	dThreads->query_text_len = len;
+	pParms->dispatchResultPtrArray = (CdbDispatchResult **) palloc0(size);
+	pParms->dispatchCount = 0;
+	pParms->waitMode = DISPATCH_WAIT_NONE;
+	pParms->query_text = queryText;
+	pParms->query_text_len = len;
 
-	return (void*)dThreads;
+	return (void*)pParms;
 }
 
 
