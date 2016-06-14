@@ -101,4 +101,6 @@ void cdbconn_resetQEErrorMessage(SegmentDatabaseDescriptor *segdbDesc);
 
 /* Set the slice index for error messages related to this QE. */
 void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc, int sliceIndex, MemoryContext mcxt);
+
+bool cdbconn_signalQE(SegmentDatabaseDescriptor *segdbDesc, bool isCancel);
 #endif   /* CDBCONN_H */

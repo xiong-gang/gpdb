@@ -1023,6 +1023,7 @@ static void destroyConnectParms(DoConnectParms *doConnectParmsAr, int count)
 		for (i = 0; i < count; i++)
 		{
 			DoConnectParms *pParms = &doConnectParmsAr[i];
+
 			if (pParms->connectOptions != NULL)
 			{
 				pfree(pParms->connectOptions);

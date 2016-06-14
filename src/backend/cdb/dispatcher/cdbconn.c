@@ -495,7 +495,8 @@ bool cdbconn_discardResults(SegmentDatabaseDescriptor *segdbDesc,
 /* Return if it's a bad connection */
 bool cdbconn_isBadConnection(SegmentDatabaseDescriptor *segdbDesc)
 {
-	return PQstatus(segdbDesc->conn) == CONNECTION_BAD;
+	return (PQsocket(segdbDesc->conn) < 0 ||
+		    PQstatus(segdbDesc->conn) == CONNECTION_BAD);
 }
 
 /* Reset error message buffer */
@@ -541,3 +542,38 @@ void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc,
 	MemoryContextSwitchTo(oldContext);
 }
 
+bool
+cdbconn_signalQE(SegmentDatabaseDescriptor *segdbDesc,
+				 bool isCancel)
+{
+	char errbuf[256];
+	bool ret;
+
+	PGcancel *cn = PQgetCancel(segdbDesc->conn);
+	if (cn == NULL)
+		return false;
+
+	if (Debug_cancel_print || DEBUG4 >= log_min_messages)
+		write_log("Calling PQcancel for %s", segdbDesc->whoami);
+
+	/*
+	 * PQcancel uses some strcpy/strcat functions; let's
+	 * clear this for safety.
+	 */
+	MemSet(errbuf, 0, sizeof(errbuf));
+
+	/*
+	 * Send query-finish, unless the client really wants to cancel the
+	 * query.  This could happen if cancel comes after we sent finish.
+	 */
+	if (isCancel)
+		ret = PQcancel(cn, errbuf, 256);
+	else
+		ret = PQrequestFinish(cn, errbuf, 256);
+
+	if (ret == 0 && (Debug_cancel_print || LOG >= log_min_messages))
+		write_log("Unable to cancel: %s", errbuf);
+
+	PQfreeCancel(cn);
+	return ret != 0;
+}
