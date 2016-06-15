@@ -45,10 +45,19 @@ extern CdbDispatchDirectDesc default_dispatch_direct_desc;
 typedef struct CdbDispatcherState
 {
 	struct CdbDispatchResults *primaryResults;
-	struct CdbDispatchCmdThreads *dispatchThreads;
+	void *dispatchParams;
 	MemoryContext dispatchStateContext;
 } CdbDispatcherState;
 
+typedef struct DispatcherInternalFuncs
+{
+	void (*procExitCallBack)(void);
+	bool (*checkForCancel)(struct CdbDispatcherState *ds);
+	void* (*makeDispatchParams)(int maxSlices, char *queryText, int queryTextLen);
+	void (*checkResults)(struct CdbDispatcherState *ds, DispatchWaitMode waitMode);
+	void (*dispatchToGang)(struct CdbDispatcherState *ds, struct Gang *gp,
+			int sliceIndex, CdbDispatchDirectDesc *direct);
+}DispatcherInternalFuncs;
 /*--------------------------------------------------------------------*/
 /*
  * cdbdisp_dispatchToGang:
@@ -136,9 +145,10 @@ cdbdisp_handleError(struct CdbDispatcherState *ds);
  */
 void
 cdbdisp_makeDispatcherState(CdbDispatcherState *ds,
-							int maxResults,
 							int maxSlices,
-							bool cancelOnError);
+							bool cancelOnError,
+							char *queryText,
+							int queryTextLen);
 
 /*
  * Free memory in CdbDispatcherState
@@ -160,4 +170,6 @@ CollectQEWriterTransactionInformation(struct SegmentDatabaseDescriptor *segdbDes
 DispatchWaitMode
 cdbdisp_signalQE(struct SegmentDatabaseDescriptor * segdbDesc,
 				 DispatchWaitMode waitMode);
+
+extern DispatcherInternalFuncs *pDispatchFuncs;
 #endif   /* CDBDISP_H */

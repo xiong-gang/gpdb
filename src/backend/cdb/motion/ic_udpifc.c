@@ -3209,9 +3209,10 @@ checkForCancelFromQD(ChunkTransportState *pTransportStates)
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 	Assert(pTransportStates);
 	Assert(pTransportStates->estate);
-	Assert(pTransportStates->estate->dispatcherState);
 
-	if (cdbdisp_checkResultsErrcode(pTransportStates->estate->dispatcherState->primaryResults))
+	if (pDispatchFuncs != NULL &&
+		pDispatchFuncs->checkForCancel != NULL &&
+		(pDispatchFuncs->checkForCancel)(pTransportStates->estate->dispatcherState))
 	{
 		ereport(ERROR, (errcode(ERRCODE_GP_INTERCONNECTION_ERROR),
 						errmsg(CDB_MOTION_LOST_CONTACT_STRING)));
