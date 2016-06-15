@@ -128,7 +128,6 @@ static void *thread_DispatchCommand(void *arg);
 static void thread_DispatchOut(DispatchCommandParms * pParms);
 static void thread_DispatchWait(DispatchCommandParms * pParms);
 
-static void cdbdisp_checkConnectionAlive(DispatchCommandParms * pParms);
 static void cdbdisp_checkSegmentDBAlive(DispatchCommandParms * pParms);
 static void handlePollSuccess(DispatchCommandParms* pParms);
 
@@ -513,7 +512,7 @@ thread_DispatchOut(DispatchCommandParms * pParms)
 			}
 			else
 			{
-				cdbdisp_appendMessage(dispatchResult, LOG,
+				cdbdisp_appendMessage(dispatchResult, LOG, false,
 									  "Command could not be sent to segment db (%s)",
 									  dispatchResult->segdbDesc->whoami);
 
@@ -623,20 +622,19 @@ thread_DispatchWait(DispatchCommandParms * pParms)
 			CdbDispatchResult *dispatchResult = pParms->dispatchResultPtrArray[i];
 			SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
 
+			if (cdbconn_isBadConnection(segdbDesc))
+			{
+				cdbdisp_appendMessage(dispatchResult, LOG, false,
+									  "Lost connection to %s.",
+									  segdbDesc->whoami);
+				dispatchResult->stillRunning = false;
+			}
+
 			/*
 			 * Already finished with this QE?
 			 */
 			if (!dispatchResult->stillRunning)
 				continue;
-
-			if (cdbconn_isBadConnection(segdbDesc))
-			{
-				cdbdisp_appendMessage(dispatchResult, LOG,
-									  "Lost connection to %s.",
-									  segdbDesc->whoami);
-				dispatchResult->stillRunning = false;
-				continue;
-			}
 
 			/*
 			 * Add socket to fd_set if still connected.
@@ -677,7 +675,6 @@ thread_DispatchWait(DispatchCommandParms * pParms)
 
 			write_log("handlePollError poll() failed; errno=%d", sock_errno);
 
-			cdbdisp_checkConnectionAlive(pParms);
 			cdbdisp_checkCancel(pParms);
 			cdbdisp_checkSegmentDBAlive(pParms);
 		}
@@ -779,7 +776,7 @@ dispatchCommand(CdbDispatchResult * dispatchResult,
 	{
 		char *msg = PQerrorMessage(segdbDesc->conn);
 
-		cdbdisp_appendMessage(dispatchResult, LOG,
+		cdbdisp_appendMessage(dispatchResult, LOG, false,
 							  "Error before transmit from %s: %s",
 							  dispatchResult->segdbDesc->whoami,
 							  msg ? msg : "unknown error");
@@ -801,55 +798,6 @@ dispatchCommand(CdbDispatchResult * dispatchResult,
 	}
 
 	return true;
-}
-
-/*
- * Helper function to thread_DispatchCommand that handles errors that occur
- * during the poll() call.
- */
-static void
-cdbdisp_checkConnectionAlive(DispatchCommandParms * pParms)
-{
-	int	i;
-
-	/*
-	 * Based on the select man page, we could get here with
-	 * errno == EBADF (bad descriptor), EINVAL (highest descriptor negative or negative timeout)
-	 * or ENOMEM (out of memory).
-	 * This is most likely a programming error or a bad system failure, but we'll try to 
-	 * clean up a bit anyhow.
-	 *
-	 * We *can* get here as a result of some hardware issues. the timeout code
-	 * knows how to clean up if we've lost contact with one of our peers.
-	 *
-	 * We should check a connection's integrity before calling PQisBusy().
-	 */
-	for (i = 0; i < pParms->db_count; i++)
-	{
-		CdbDispatchResult *dispatchResult = pParms->dispatchResultPtrArray[i];
-
-		/*
-		 * Skip if already finished or didn't dispatch. 
-		 */
-		if (!dispatchResult->stillRunning)
-			continue;
-
-		/*
-		 * We're done with this QE, sadly. 
-		 */
-		if (cdbconn_isBadConnection(dispatchResult->segdbDesc))
-		{
-			char *msg = PQerrorMessage(dispatchResult->segdbDesc->conn);
-			cdbdisp_appendMessage(dispatchResult, LOG,
-								  "Error after dispatch from %s: %s",
-								  dispatchResult->segdbDesc->whoami,
-								  msg ? msg : "unknown error");
-
-			dispatchResult->stillRunning = false;
-		}
-	}
-
-	return;
 }
 
 /*
@@ -905,7 +853,19 @@ cdbdisp_checkCancel(DispatchCommandParms * pParms)
 		if (waitMode != DISPATCH_WAIT_NONE &&
 			waitMode != dispatchResult->sentSignal &&
 			!cdbconn_isBadConnection(segdbDesc))
-			dispatchResult->sentSignal = cdbdisp_signalQE(segdbDesc, waitMode);
+		{
+			char errbuf[256];
+			bool sent;
+
+			memset(errbuf, 0, sizeof(errbuf));
+
+			sent = cdbconn_signalQE(segdbDesc, errbuf, waitMode == DISPATCH_WAIT_CANCEL);
+			if (sent)
+				dispatchResult->sentSignal = waitMode;
+			else if (Debug_cancel_print || gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
+				write_log("Unable to cancel: %s",
+					 strlen(errbuf) == 0 ? "cannot allocate PGCancel" : errbuf);
+		}
 	}
 }
 
@@ -951,7 +911,7 @@ cdbdisp_checkSegmentDBAlive(DispatchCommandParms * pParms)
 
 		if (!FtsTestConnection(segdbDesc->segment_database_info, falseScan))
 		{
-			cdbdisp_appendMessage(dispatchResult, LOG,
+			cdbdisp_appendMessage(dispatchResult, LOG, false,
 								  "Lost connection to %s. FTS detected segment failures.",
 								  segdbDesc->whoami);
 
@@ -993,7 +953,7 @@ shouldStillDispatchCommand(DispatchCommandParms * pParms,
 	{
 		char *msg = PQerrorMessage(segdbDesc->conn);
 
-		cdbdisp_appendMessage(dispatchResult, LOG,
+		cdbdisp_appendMessage(dispatchResult, LOG, false,
 							  "Lost connection to %s.  %s",
 							  segdbDesc->whoami, msg ? msg : "unknown error");
 
@@ -1046,7 +1006,13 @@ processResults(CdbDispatchResult * dispatchResult)
 	 * Receive input from QE.
 	 */
 	if (PQconsumeInput(segdbDesc->conn) == 0)
-		goto connection_error;
+	{
+		msg = PQerrorMessage(segdbDesc->conn);
+		cdbdisp_appendMessage(dispatchResult, LOG, false,
+							  "Error on receive from %s: %s",
+							  segdbDesc->whoami, msg ? msg : "unknown error");
+		return true;
+	}
 
 	/*
 	 * If we have received one or more complete messages, process them.
@@ -1067,7 +1033,13 @@ processResults(CdbDispatchResult * dispatchResult)
 		 * bogus value!
 		 */
 		if (cdbconn_isBadConnection(segdbDesc))
-			goto connection_error;
+		{
+			msg = PQerrorMessage(segdbDesc->conn);
+			cdbdisp_appendMessage(dispatchResult, LOG, false,
+								  "Connect lost when receiving from %s: %s",
+								  segdbDesc->whoami, msg ? msg : "unknown error");
+			return true;
+		}
 
 		/*
 		 * Get one message.
@@ -1163,15 +1135,6 @@ processResults(CdbDispatchResult * dispatchResult)
 	}
 
 	return false; /* we must keep on monitoring this socket */
-
-connection_error:
-	msg = PQerrorMessage(segdbDesc->conn);
-	cdbdisp_appendMessage(dispatchResult, LOG,
-						  "Error on receive from %s: %s",
-						  segdbDesc->whoami, msg ? msg : "unknown error");
-
-	dispatchResult->stillRunning = false;
-	return true;
 }
 
 static bool

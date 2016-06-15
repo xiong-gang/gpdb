@@ -289,12 +289,10 @@ cdbdisp_seterrcode(int errcode, /* ERRCODE_xxx or 0 */
  * Also write it to stderr if logging is enabled for messages of the
  * given severity level 'elevel' (for example, DEBUG1; or 0 to suppress).
  * 'errcode' is the ERRCODE_xxx value for setting the client's SQLSTATE.
- * NB: This can be called from a dispatcher thread, so it must not use
- * palloc/pfree or elog/ereport because they are not thread safe.
  */
 void
 cdbdisp_appendMessage(CdbDispatchResult * dispatchResult,
-					  int elevel, const char *fmt, ...)
+					  int elevel, bool useElog, const char *fmt, ...)
 {
 	va_list	args;
 	int	msgoff;
@@ -327,7 +325,10 @@ cdbdisp_appendMessage(CdbDispatchResult * dispatchResult,
 	if (elevel >= log_min_messages)
 	{
 		oneTrailingNewlinePQ(dispatchResult->error_message);
-		write_log("%s", dispatchResult->error_message->data + msgoff);
+		if (useElog)
+			elog(LOG, "%s", dispatchResult->error_message->data + msgoff);
+		else
+			write_log("%s", dispatchResult->error_message->data + msgoff);
 	}
 
 	/*

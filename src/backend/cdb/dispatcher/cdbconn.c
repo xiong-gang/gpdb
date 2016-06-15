@@ -542,25 +542,22 @@ void setQEIdentifier(SegmentDatabaseDescriptor *segdbDesc,
 	MemoryContextSwitchTo(oldContext);
 }
 
+/*
+ * Send cancel/finish signal to still-running QE through libpq.
+ * waitMode is either CANCEL or FINISH.  Returns true if we successfully
+ * sent a signal (not necessarily received by the target process).
+ */
 bool
 cdbconn_signalQE(SegmentDatabaseDescriptor *segdbDesc,
+				 char *errbuf,
 				 bool isCancel)
 {
-	char errbuf[256];
 	bool ret;
+	PGcancel *cn = NULL;
 
-	PGcancel *cn = PQgetCancel(segdbDesc->conn);
+	cn = PQgetCancel(segdbDesc->conn);
 	if (cn == NULL)
 		return false;
-
-	if (Debug_cancel_print || DEBUG4 >= log_min_messages)
-		write_log("Calling PQcancel for %s", segdbDesc->whoami);
-
-	/*
-	 * PQcancel uses some strcpy/strcat functions; let's
-	 * clear this for safety.
-	 */
-	MemSet(errbuf, 0, sizeof(errbuf));
 
 	/*
 	 * Send query-finish, unless the client really wants to cancel the
@@ -571,9 +568,6 @@ cdbconn_signalQE(SegmentDatabaseDescriptor *segdbDesc,
 	else
 		ret = PQrequestFinish(cn, errbuf, 256);
 
-	if (ret == 0 && (Debug_cancel_print || LOG >= log_min_messages))
-		write_log("Unable to cancel: %s", errbuf);
-
 	PQfreeCancel(cn);
-	return ret != 0;
+	return ret;
 }

@@ -17,6 +17,7 @@
 #include "tcop/tcopprot.h"
 #include "cdb/cdbdisp.h"
 #include "cdb/cdbdisp_thread.h"
+#include "cdb/cdbdisp_non_thread.h"
 #include "cdb/cdbdispatchresult.h"
 #include "cdb/cdbfts.h"
 #include "cdb/cdbgang.h"
@@ -30,7 +31,7 @@ CdbDispatchDirectDesc default_dispatch_direct_desc = { false, 0, {0}};
 
 static void cdbdisp_clearGangActiveFlag(CdbDispatcherState * ds);
 
-DispatcherInternalFuncs *pDispatchFuncs = &ThreadedFuncs;
+DispatcherInternalFuncs *pDispatchFuncs = &NonThreadedFuncs;
 /*
  * cdbdisp_dispatchToGang:
  * Send the strCommand SQL statement to the subset of all segdbs in the cluster
@@ -332,7 +333,6 @@ cdbdisp_makeDispatcherState(CdbDispatcherState * ds,
 	MemoryContext oldContext = NULL;
 
 	Assert(ds != NULL);
-	Assert(ds->dispatchStateContext == NULL);
 	Assert(ds->dispatchParams == NULL);
 	Assert(ds->primaryResults == NULL);
 
@@ -412,25 +412,4 @@ CollectQEWriterTransactionInformation(SegmentDatabaseDescriptor * segdbDesc,
 			dispatchResult->QEWriter_Dirty = true;
 		}
 	}
-}
-
-/*
- * Send cancel/finish signal to still-running QE through libpq.
- * waitMode is either CANCEL or FINISH.  Returns true if we successfully
- * sent a signal (not necessarily received by the target process).
- */
-DispatchWaitMode
-cdbdisp_signalQE(SegmentDatabaseDescriptor * segdbDesc,
-				 DispatchWaitMode waitMode)
-{
-	bool ret;
-
-	Assert(waitMode == DISPATCH_WAIT_CANCEL || waitMode == DISPATCH_WAIT_FINISH);
-
-	if (waitMode == DISPATCH_WAIT_CANCEL)
-		ret = cdbconn_signalQE(segdbDesc, true);
-	else
-		ret = cdbconn_signalQE(segdbDesc, false);
-
-	return (ret ? waitMode : DISPATCH_WAIT_NONE);
 }

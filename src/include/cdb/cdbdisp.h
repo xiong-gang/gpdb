@@ -162,14 +162,5 @@ void
 CollectQEWriterTransactionInformation(struct SegmentDatabaseDescriptor *segdbDesc,
 									  struct CdbDispatchResult *dispatchResult);
 
-/*
- * Send cancel/finish signal to still-running QE through libpq.
- * waitMode is either CANCEL or FINISH.  Returns true if we successfully
- * sent a signal (not necessarily received by the target process).
- */
-DispatchWaitMode
-cdbdisp_signalQE(struct SegmentDatabaseDescriptor * segdbDesc,
-				 DispatchWaitMode waitMode);
-
 extern DispatcherInternalFuncs *pDispatchFuncs;
 #endif   /* CDBDISP_H */
