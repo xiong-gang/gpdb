@@ -11,7 +11,6 @@
  */
 
 #include "postgres.h"
-#include <limits.h>
 
 #include "storage/ipc.h"		/* For proc_exit_inprogress */
 #include "tcop/tcopprot.h"
@@ -31,7 +30,7 @@ CdbDispatchDirectDesc default_dispatch_direct_desc = { false, 0, {0}};
 
 static void cdbdisp_clearGangActiveFlag(CdbDispatcherState * ds);
 
-DispatcherInternalFuncs *pDispatchFuncs = &NonThreadedFuncs;
+static DispatcherInternalFuncs *pDispatchFuncs = NULL;
 /*
  * cdbdisp_dispatchToGang:
  * Send the strCommand SQL statement to the subset of all segdbs in the cluster
@@ -412,4 +411,25 @@ CollectQEWriterTransactionInformation(SegmentDatabaseDescriptor * segdbDesc,
 			dispatchResult->QEWriter_Dirty = true;
 		}
 	}
+}
+
+void cdbdisp_useThread(bool useThread)
+{
+	if (useThread)
+		pDispatchFuncs = &ThreadedFuncs;
+	else
+		pDispatchFuncs = &NonThreadedFuncs;
+}
+
+bool cdbdisp_checkForCancel(CdbDispatcherState * ds)
+{
+	if (pDispatchFuncs == NULL || pDispatchFuncs->checkForCancel == NULL)
+		return false;
+	return (pDispatchFuncs->checkForCancel)(ds);
+}
+
+void cdbdisp_onProcExit(void)
+{
+	if(pDispatchFuncs != NULL && pDispatchFuncs->procExitCallBack != NULL)
+		(pDispatchFuncs->procExitCallBack)();
 }

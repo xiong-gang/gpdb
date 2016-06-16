@@ -200,8 +200,7 @@ proc_exit_prepare(int code)
 	 * something.  Actually, I cannot find any better option to do the
 	 * correct work.
 	 */
-	if(pDispatchFuncs != NULL && pDispatchFuncs->procExitCallBack != NULL)
-		(pDispatchFuncs->procExitCallBack)();
+	cdbdisp_onProcExit();
 
 	/*
 	* Make sure interconnect thread quit before shmem_exit() in FATAL case.

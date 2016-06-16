@@ -287,8 +287,10 @@ void cdbconn_termSegmentDescriptor(SegmentDatabaseDescriptor *segdbDesc)
  * Connect to a QE as a client via libpq.
  * returns true if connected.
  */
-void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc, const char *gpqeid,
-		const char *options)
+void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc,
+					   const char *gpqeid,
+					   const char *options,
+					   bool wait)
 {
 #define MAX_KEYWORDS 10
 #define MAX_INT_STRING_LEN 20
@@ -366,6 +368,12 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc, const char *gpqeid,
 
 	Assert(nkeywords < MAX_KEYWORDS);
 
+	if (!wait)
+	{
+		segdbDesc->conn = PQconnectStartParams(keywords, values, false);
+		return;
+	}
+
 	/*
 	 * Call libpq to connect
 	 */
@@ -421,6 +429,29 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc, const char *gpqeid,
 						segdbDesc->whoami, segdbDesc->motionListener, options);
 		}
 	}
+}
+
+void
+cdbconn_doConnectComplete(SegmentDatabaseDescriptor *segdbDesc)
+{
+	PQsetNoticeReceiver(segdbDesc->conn, &MPPnoticeReceiver, segdbDesc);
+	/* Command the QE to initialize its motion layer.
+	 * Wait for it to respond giving us the TCP port number
+	 * where it listens for connections from the gang below.
+	 */
+	segdbDesc->motionListener = PQgetQEdetail(segdbDesc->conn);
+	segdbDesc->backendPid = PQbackendPID(segdbDesc->conn);
+	if (segdbDesc->motionListener == -1)
+		ereport(ERROR,
+				(errcode(ERRCODE_GP_INTERNAL_ERROR),
+				 errmsg("Internal error: No motion listener port for %s\n",
+						segdbDesc->whoami)));
+	else if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
+		elog(LOG, "Connected to %s motionListenerPorts=%d/%d with options %s",
+			 segdbDesc->whoami,
+			 (segdbDesc->motionListener & 0x0ffff),
+			 ((segdbDesc->motionListener >> 16) & 0x0ffff),
+			 PQoptions(segdbDesc->conn));
 }
 
 /* Disconnect from QE */

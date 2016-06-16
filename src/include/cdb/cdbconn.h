@@ -41,6 +41,9 @@ typedef struct SegmentDatabaseDescriptor
 	 */
 	PGconn				   *conn;		
 	
+	/* Used for non-threaded gang creation */
+	PostgresPollingStatusType pollStatus;
+
 	/*
 	 * Error info saved when connection cannot be established.
 	 * ERRCODE_xxx (sqlstate encoded as an int) of first error, or 0.
@@ -77,8 +80,13 @@ cdbconn_termSegmentDescriptor(SegmentDatabaseDescriptor *segdbDesc);
 /* Connect to a QE as a client via libpq. */
 void
 cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc,
-		  const char *gpqeid,
-		  const char *options);
+				  const char *gpqeid,
+				  const char *options,
+				  bool wait);
+
+void
+cdbconn_doConnectComplete(SegmentDatabaseDescriptor *segdbDesc);
+
 
 /* Disconnect from QE */
 void cdbconn_disconnect(SegmentDatabaseDescriptor *segdbDesc);

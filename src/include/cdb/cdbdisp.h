@@ -11,8 +11,6 @@
 #ifndef CDBDISP_H
 #define CDBDISP_H
 
-#include "lib/stringinfo.h" /* StringInfo */
-
 #include "cdb/cdbtm.h"
 
 #define CDB_MOTION_LOST_CONTACT_STRING "Interconnect error master lost contact with segment."
@@ -162,5 +160,8 @@ void
 CollectQEWriterTransactionInformation(struct SegmentDatabaseDescriptor *segdbDesc,
 									  struct CdbDispatchResult *dispatchResult);
 
-extern DispatcherInternalFuncs *pDispatchFuncs;
+void cdbdisp_useThread(bool useThread);
+bool cdbdisp_checkForCancel(CdbDispatcherState * ds);
+void cdbdisp_onProcExit(void);
+
 #endif   /* CDBDISP_H */
