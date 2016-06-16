@@ -9,19 +9,18 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+#include "miscadmin.h"
 
 #include "gp-libpq-fe.h"
 #include "gp-libpq-int.h"
-#include "miscadmin.h"
-#include "utils/memutils.h"
 #include "libpq/libpq-be.h"
+#include "cdb/cdbconn.h"            /* me */
+#include "cdb/cdbutil.h"            /* CdbComponentDatabaseInfo */
+#include "cdb/cdbvars.h"
 
 extern int	pq_flush(void);
 extern int	pq_putmessage(char msgtype, const char *s, size_t len);
 
-#include "cdb/cdbconn.h"            /* me */
-#include "cdb/cdbutil.h"            /* CdbComponentDatabaseInfo */
-#include "cdb/cdbvars.h"
 
 int		gp_segment_connect_timeout = 180;
 
@@ -382,7 +381,7 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc,
 	/*
 	 * Check for connection failure.
 	 */
-	if (PQstatus(segdbDesc->conn) == CONNECTION_BAD)
+	if (cdbconn_isBadConnection(segdbDesc))
 	{
 		if (!segdbDesc->errcode)
 			segdbDesc->errcode = ERRCODE_GP_INTERCONNECTION_ERROR;
@@ -391,8 +390,7 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc,
 				segdbDesc->whoami, options, PQerrorMessage(segdbDesc->conn));
 
 		/* Don't use elog, it's not thread-safe */
-		if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
-			write_log("%s\n", segdbDesc->error_message.data);
+		WRITE_LOG_GANG_DEBUG("%s\n", segdbDesc->error_message.data);
 
 		PQfinish(segdbDesc->conn);
 		segdbDesc->conn = NULL;
@@ -416,18 +414,14 @@ void cdbconn_doConnect(SegmentDatabaseDescriptor *segdbDesc,
 					"Internal error: No motion listener port for %s\n",
 					segdbDesc->whoami);
 
-			if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
-				write_log("%s\n", segdbDesc->error_message.data);
+			WRITE_LOG_GANG_DEBUG("%s\n", segdbDesc->error_message.data);
 
 			PQfinish(segdbDesc->conn);
 			segdbDesc->conn = NULL;
 		}
 		else
-		{
-			if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
-				write_log("Connected to %s motionListener=%d with options: %s\n",
+			WRITE_LOG_GANG_DEBUG("Connected to %s motionListener=%d with options: %s\n",
 						segdbDesc->whoami, segdbDesc->motionListener, options);
-		}
 	}
 }
 
@@ -446,8 +440,8 @@ cdbconn_doConnectComplete(SegmentDatabaseDescriptor *segdbDesc)
 				(errcode(ERRCODE_GP_INTERNAL_ERROR),
 				 errmsg("Internal error: No motion listener port for %s\n",
 						segdbDesc->whoami)));
-	else if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
-		elog(LOG, "Connected to %s motionListenerPorts=%d/%d with options %s",
+	else
+		ELOG_GANG_DEBUG("Connected to %s motionListenerPorts=%d/%d with options %s",
 			 segdbDesc->whoami,
 			 (segdbDesc->motionListener & 0x0ffff),
 			 ((segdbDesc->motionListener >> 16) & 0x0ffff),
@@ -457,12 +451,11 @@ cdbconn_doConnectComplete(SegmentDatabaseDescriptor *segdbDesc)
 /* Disconnect from QE */
 void cdbconn_disconnect(SegmentDatabaseDescriptor *segdbDesc)
 {
-	if (PQstatus(segdbDesc->conn) != CONNECTION_BAD)
+	if (!cdbconn_isBadConnection(segdbDesc))
 	{
 		PGTransactionStatusType status = PQtransactionStatus(segdbDesc->conn);
 
-		if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
-			elog(LOG, "Finishing connection with %s; %s", segdbDesc->whoami, transStatusToString(status));
+		ELOG_GANG_DEBUG("Finishing connection with %s; %s", segdbDesc->whoami, transStatusToString(status));
 
 		elog((Debug_print_full_dtm ? LOG : (gp_log_gang >= GPVARS_VERBOSITY_DEBUG ? LOG : DEBUG5)),
 			"disconnectAndDestroyGang: got QEDistributedTransactionId = %u, QECommandId = %u, and QEDirty = %s",
@@ -473,15 +466,10 @@ void cdbconn_disconnect(SegmentDatabaseDescriptor *segdbDesc)
 		if (status == PQTRANS_ACTIVE)
 		{
 			char errbuf[256];
-			PGcancel *cn = PQgetCancel(segdbDesc->conn);
-
-			if (Debug_cancel_print || gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
+			if (!cdbconn_signalQE(segdbDesc, errbuf, true))
+				elog(LOG, "Unable to cancel: %s", strlen(errbuf) == 0 ? "cannot allocate PGCancel" : errbuf);
+			else if (Debug_cancel_print || gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
 				elog(LOG, "Calling PQcancel for %s", segdbDesc->whoami);
-
-			if (PQcancel(cn, errbuf, 256) == 0)
-				elog(LOG, "Unable to cancel %s: %s", segdbDesc->whoami, errbuf);
-
-			PQfreeCancel(cn);
 		}
 
 		PQfinish(segdbDesc->conn);

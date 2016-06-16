@@ -23,6 +23,7 @@
 #include "cdb/cdbdisp.h"
 #include "cdb/cdbfilerep.h"
 #include "cdb/cdbsreh.h"
+#include "cdb/cdbtm.h"
 #include "cdb/cdbvars.h"
 #include "cdb/memquota.h"
 #include "commands/vacuum.h"

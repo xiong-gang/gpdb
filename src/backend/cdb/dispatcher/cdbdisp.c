@@ -21,6 +21,7 @@
 #include "cdb/cdbfts.h"
 #include "cdb/cdbgang.h"
 #include "cdb/cdbsreh.h"
+#include "cdb/cdbutil.h"
 #include "cdb/cdbvars.h"
 
 /*

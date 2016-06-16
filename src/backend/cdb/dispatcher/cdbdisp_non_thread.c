@@ -11,7 +11,6 @@
  */
 
 #include "postgres.h"
-#include <limits.h>
 
 #ifdef HAVE_POLL_H
 #include <poll.h>
@@ -29,13 +28,6 @@
 #include "cdb/cdbgang.h"
 #include "cdb/cdbvars.h"
 #include "miscadmin.h"
-#include "utils/gp_atomic.h"
-
-#define DISPATCH_WAIT_TIMEOUT_SEC 2
-
-#define LOG_DISPATCHER_DEBUG(...) do { \
-	if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG) elog(LOG, __VA_ARGS__); \
-    } while(false);
 
 /*
  * Keeps state of all the dispatch command threads.
@@ -132,7 +124,7 @@ cdbdisp_dispatchOut(CdbDispatchParmsNonThread* pParms,
 		 * was dispatched -- in order to check for a lost connection
 		 * or any other errors that libpq might have in store for us.
 		 */
-		LOG_DISPATCHER_DEBUG("Command dispatched to QE (%s)",
+		ELOG_GANG_DEBUG("Command dispatched to QE (%s)",
 							 qeResult->segdbDesc->whoami);
 		qeResult->hasDispatched = true;
 	}
@@ -430,7 +422,7 @@ handlePollSuccess(CdbDispatchParmsNonThread* pParms,
 		if (!dispatchResult->stillRunning)
 			continue;
 
-		LOG_DISPATCHER_DEBUG("looking for results from %d of %d (%s)",
+		ELOG_GANG_DEBUG("looking for results from %d of %d (%s)",
 							 i + 1, pParms->dispatchCount, segdbDesc->whoami);
 
 		sock = PQsocket(segdbDesc->conn);
@@ -443,7 +435,7 @@ handlePollSuccess(CdbDispatchParmsNonThread* pParms,
 		if (!(fds[cur_fds_num++].revents & POLLIN))
 			continue;
 
-		LOG_DISPATCHER_DEBUG("PQsocket says there are results from %d of %d (%s)",
+		ELOG_GANG_DEBUG("PQsocket says there are results from %d of %d (%s)",
 							 i + 1, pParms->dispatchCount, segdbDesc->whoami);
 
 		/*
@@ -457,7 +449,7 @@ handlePollSuccess(CdbDispatchParmsNonThread* pParms,
 		{
 			dispatchResult->stillRunning = false;
 
-			LOG_DISPATCHER_DEBUG("processResults says we are finished with %d of %d (%s)",
+			ELOG_GANG_DEBUG("processResults says we are finished with %d of %d (%s)",
 								 i + 1, pParms->dispatchCount, segdbDesc->whoami);
 
 			if (DEBUG1 >= log_min_messages)
@@ -477,7 +469,7 @@ handlePollSuccess(CdbDispatchParmsNonThread* pParms,
 				elog(LOG, "We thought we were done, because finished==true, but libpq says we are still busy");
 		}
 		else
-			LOG_DISPATCHER_DEBUG("processResults says we have more to do with %d of %d (%s)",
+			ELOG_GANG_DEBUG("processResults says we have more to do with %d of %d (%s)",
 								 i + 1, pParms->dispatchCount, segdbDesc->whoami);
 	}
 }
@@ -576,7 +568,7 @@ cdbdisp_checkSegmentDBAlive(CdbDispatchParmsNonThread * pParms)
 		if (segdbDesc->segindex < 0)
 			continue;
 
-		LOG_DISPATCHER_DEBUG("FTS testing connection %d of %d (%s)",
+		ELOG_GANG_DEBUG("FTS testing connection %d of %d (%s)",
 							  i + 1, pParms->dispatchCount, segdbDesc->whoami);
 
 		if (!FtsTestConnection(segdbDesc->segment_database_info, forceScan))
@@ -641,7 +633,7 @@ processResults(CdbDispatchResult * dispatchResult)
 		/*
 		 * Get one message.
 		 */
-		LOG_DISPATCHER_DEBUG("PQgetResult");
+		ELOG_GANG_DEBUG("PQgetResult");
 		pRes = PQgetResult(segdbDesc->conn);
 
 		/*
@@ -653,7 +645,7 @@ processResults(CdbDispatchResult * dispatchResult)
 		 */
 		if (!pRes)
 		{
-			LOG_DISPATCHER_DEBUG("%s -> idle", segdbDesc->whoami);
+			ELOG_GANG_DEBUG("%s -> idle", segdbDesc->whoami);
 			/* this is normal end of command */
 			return true;
 		}
@@ -677,12 +669,12 @@ processResults(CdbDispatchResult * dispatchResult)
 			resultStatus == PGRES_COPY_OUT ||
 			resultStatus == PGRES_EMPTY_QUERY)
 		{
-			LOG_DISPATCHER_DEBUG("%s -> ok %s",
+			ELOG_GANG_DEBUG("%s -> ok %s",
 					  	  	  	 segdbDesc->whoami,
 								 PQcmdStatus(pRes) ? PQcmdStatus(pRes) : "(no cmdStatus)");
 
 			if (resultStatus == PGRES_EMPTY_QUERY)
-				LOG_DISPATCHER_DEBUG("QE received empty query.");
+				ELOG_GANG_DEBUG("QE received empty query.");
 
 			/*
 			 * Save the index of the last successful PGresult. Can be given to
@@ -711,7 +703,7 @@ processResults(CdbDispatchResult * dispatchResult)
 
 			msg = PQresultErrorMessage(pRes);
 
-			LOG_DISPATCHER_DEBUG("%s -> %s %s  %s",
+			ELOG_GANG_DEBUG("%s -> %s %s  %s",
 					  	  	  	 segdbDesc->whoami,
 								 PQresStatus(resultStatus),
 								 sqlstate ? sqlstate : "(no SQLSTATE)",

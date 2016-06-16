@@ -11,8 +11,6 @@
  */
 
 #include "postgres.h"
-#include <pthread.h>
-#include <limits.h>
 
 #ifdef HAVE_POLL_H
 #include <poll.h>
@@ -37,17 +35,6 @@
 #else
 #define mythread() ((unsigned long) pthread_self().p)
 #endif
-
-#define DISPATCH_WAIT_TIMEOUT_SEC 2
-
-#define ELOG_DISPATCHER_DEBUG(...) do { \
-	if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG) elog(LOG, __VA_ARGS__); \
-    } while(false);
-
-#define WRITE_LOG_DISPATCHER_DEBUG(...) do { \
-	if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG) write_log(__VA_ARGS__); \
-    } while(false);
-
 
 /*
  * Parameter structure for the DispatchCommand threads
@@ -291,7 +278,7 @@ cdbdisp_dispatchToGang_internal(struct CdbDispatcherState *ds,
 		pThreads->threadCount++;
 	}
 
-	ELOG_DISPATCHER_DEBUG("dispatchToGang: Total threads now %d", pThreads->threadCount);
+	ELOG_GANG_DEBUG("dispatchToGang: Total threads now %d", pThreads->threadCount);
 }
 
 void
@@ -310,7 +297,7 @@ CdbCheckDispatchResult_internal(struct CdbDispatcherState *ds,
 	 */
 	if (pThreads == NULL || pThreads->threadCount == 0)
 	{
-		ELOG_DISPATCHER_DEBUG("CheckDispatchResult: no threads active");
+		ELOG_GANG_DEBUG("CheckDispatchResult: no threads active");
 		return;
 	}
 
@@ -327,7 +314,7 @@ CdbCheckDispatchResult_internal(struct CdbDispatcherState *ds,
 		if (waitMode != DISPATCH_WAIT_NONE)
 			pParms->waitMode = waitMode;
 
-		ELOG_DISPATCHER_DEBUG("CheckDispatchResult: Joining to thread %d of %d", i + 1, threadCount);
+		ELOG_GANG_DEBUG("CheckDispatchResult: Joining to thread %d of %d", i + 1, threadCount);
 
 		if (pParms->thread_valid)
 		{
@@ -474,7 +461,7 @@ thread_DispatchOut(DispatchCommandParms * pParms)
 
 		Assert(dispatchResult->segdbDesc != NULL &&
 			   dispatchResult->segdbDesc->conn != NULL);
-		WRITE_LOG_DISPATCHER_DEBUG("thread_DispatchOut working on %d of %d commands.  asyncStatus %d",
+		WRITE_LOG_GANG_DEBUG("thread_DispatchOut working on %d of %d commands.  asyncStatus %d",
 							i + 1, db_count, dispatchResult->segdbDesc->conn->asyncStatus);
 
 
@@ -505,7 +492,7 @@ thread_DispatchOut(DispatchCommandParms * pParms)
 				 * was dispatched -- in order to check for a lost connection
 				 * or any other errors that libpq might have in store for us.
 				 */
-				WRITE_LOG_DISPATCHER_DEBUG("Command dispatched to QE %d of %d: (%s)",
+				WRITE_LOG_GANG_DEBUG("Command dispatched to QE %d of %d: (%s)",
 									i + 1, db_count, dispatchResult->segdbDesc->whoami);
 
 				dispatchResult->hasDispatched = true;
@@ -544,7 +531,7 @@ handlePollSuccess(DispatchCommandParms* pParms)
 		if (!dispatchResult->stillRunning)
 			continue;
 
-		WRITE_LOG_DISPATCHER_DEBUG("looking for results from %d of %d (%s)",
+		WRITE_LOG_GANG_DEBUG("looking for results from %d of %d (%s)",
 							 i + 1, pParms->db_count, segdbDesc->whoami);
 
 		sock = PQsocket(segdbDesc->conn);
@@ -557,7 +544,7 @@ handlePollSuccess(DispatchCommandParms* pParms)
 		if (!(pParms->fds[cur_fds_num++].revents & POLLIN))
 			continue;
 
-		WRITE_LOG_DISPATCHER_DEBUG("PQsocket says there are results from  %d of %d (%s)",
+		WRITE_LOG_GANG_DEBUG("PQsocket says there are results from  %d of %d (%s)",
 							i + 1, pParms->db_count, segdbDesc->whoami);
 
 		/*
@@ -571,7 +558,7 @@ handlePollSuccess(DispatchCommandParms* pParms)
 		{
 			dispatchResult->stillRunning = false;
 
-			WRITE_LOG_DISPATCHER_DEBUG("processResults says we are finished with %d of %d (%s)",
+			WRITE_LOG_GANG_DEBUG("processResults says we are finished with %d of %d (%s)",
 							i + 1, pParms->db_count, segdbDesc->whoami);
 
 			if (DEBUG1 >= log_min_messages)
@@ -592,7 +579,7 @@ handlePollSuccess(DispatchCommandParms* pParms)
 		}
 		else
 		{
-			WRITE_LOG_DISPATCHER_DEBUG("processResults says we have more to do with %d of %d (%s)",
+			WRITE_LOG_GANG_DEBUG("processResults says we have more to do with %d of %d (%s)",
 							i + 1, pParms->db_count, segdbDesc->whoami);
 		}
 	}
@@ -891,7 +878,7 @@ cdbdisp_checkSegmentDBAlive(DispatchCommandParms * pParms)
 		CdbDispatchResult *dispatchResult = pParms->dispatchResultPtrArray[i];
 		SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
 
-		WRITE_LOG_DISPATCHER_DEBUG("checking status %d of %d %s stillRunning %d",
+		WRITE_LOG_GANG_DEBUG("checking status %d of %d %s stillRunning %d",
 				i + 1, pParms->db_count, segdbDesc->whoami, dispatchResult->stillRunning);
 
 		/*
@@ -906,7 +893,7 @@ cdbdisp_checkSegmentDBAlive(DispatchCommandParms * pParms)
 		if (segdbDesc->segindex < 0)
 			continue;
 
-		WRITE_LOG_DISPATCHER_DEBUG("testing connection %d of %d %s stillRunning %d",
+		WRITE_LOG_GANG_DEBUG("testing connection %d of %d %s stillRunning %d",
 				i + 1, pParms->db_count, segdbDesc->whoami, dispatchResult->stillRunning);
 
 		if (!FtsTestConnection(segdbDesc->segment_database_info, falseScan))
@@ -1044,7 +1031,7 @@ processResults(CdbDispatchResult * dispatchResult)
 		/*
 		 * Get one message.
 		 */
-		WRITE_LOG_DISPATCHER_DEBUG("PQgetResult");
+		WRITE_LOG_GANG_DEBUG("PQgetResult");
 		pRes = PQgetResult(segdbDesc->conn);
 		/*
 		 * Command is complete when PGgetResult() returns NULL. It is critical
@@ -1055,7 +1042,7 @@ processResults(CdbDispatchResult * dispatchResult)
 		 */
 		if (!pRes)
 		{
-			WRITE_LOG_DISPATCHER_DEBUG("%s -> idle", segdbDesc->whoami);
+			WRITE_LOG_GANG_DEBUG("%s -> idle", segdbDesc->whoami);
 			/* this is normal end of command */
 			return true;
 		}
@@ -1079,12 +1066,12 @@ processResults(CdbDispatchResult * dispatchResult)
 			resultStatus == PGRES_COPY_OUT ||
 			resultStatus == PGRES_EMPTY_QUERY)
 		{
-			WRITE_LOG_DISPATCHER_DEBUG("%s -> ok %s",
+			WRITE_LOG_GANG_DEBUG("%s -> ok %s",
 								 segdbDesc->whoami,
 								 PQcmdStatus(pRes) ? PQcmdStatus(pRes) : "(no cmdStatus)");
 
 			if (resultStatus == PGRES_EMPTY_QUERY)
-				WRITE_LOG_DISPATCHER_DEBUG("QE received empty query.");
+				WRITE_LOG_GANG_DEBUG("QE received empty query.");
 
 			/*
 			 * Save the index of the last successful PGresult. Can be given to
@@ -1113,7 +1100,7 @@ processResults(CdbDispatchResult * dispatchResult)
 
 			msg = PQresultErrorMessage(pRes);
 
-			WRITE_LOG_DISPATCHER_DEBUG("%s -> %s %s  %s",
+			WRITE_LOG_GANG_DEBUG("%s -> %s %s  %s",
 								 segdbDesc->whoami,
 								 PQresStatus(resultStatus),
 								 sqlstate ? sqlstate : "(no SQLSTATE)",

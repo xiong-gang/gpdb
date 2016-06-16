@@ -14,7 +14,6 @@
 #include "gp-libpq-fe.h"               /* prerequisite for libpq-int.h */
 #include "gp-libpq-int.h"              /* PQExpBufferData */
 
-
 /* --------------------------------------------------------------------------------------------------
  * Structure for segment database definition and working values
  */
