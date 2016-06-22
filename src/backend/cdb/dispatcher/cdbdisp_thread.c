@@ -219,7 +219,6 @@ CdbCheckDispatchResult_internal(struct CdbDispatcherState *ds,
 	int	i;
 	int	j;
 	DispatchCommandParms *pParms;
-	CdbDispatchResult *dispatchResult;
 
 	Assert(ds != NULL);
 
@@ -273,34 +272,13 @@ CdbCheckDispatchResult_internal(struct CdbDispatcherState *ds,
 		 * Examine the CdbDispatchResult objects containing the results
 		 * from this thread's QEs.
 		 */
-		for (j = 0; j < pParms->db_count; j++)
+		if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
 		{
-			dispatchResult = pParms->dispatchResultPtrArray[j];
-
-			if (dispatchResult == NULL)
+			for (j = 0; j < pParms->db_count; j++)
 			{
-				elog(LOG, "CheckDispatchResult: result object is NULL ? skipping.");
-				continue;
+				CdbDispatchResult *dispatchResult = pParms->dispatchResultPtrArray[j];
+				cdbdisp_debugDispatchResult(dispatchResult);
 			}
-
-			if (dispatchResult->segdbDesc == NULL)
-			{
-				elog(LOG, "CheckDispatchResult: result object segment descriptor is NULL ? skipping.");
-				continue;
-			}
-
-			/*
-			 * Log the result
-			 */
-			if (DEBUG2 >= log_min_messages)
-				cdbdisp_debugDispatchResult(dispatchResult, DEBUG2, DEBUG3);
-
-			/*
-			 * Zap our SegmentDatabaseDescriptor ptr because it may be
-			 * invalidated by the call to FtsHandleNetFailure() below.
-			 * Anything we need from there, we should get before this.
-			 */
-			dispatchResult->segdbDesc = NULL;
 		}
 	}
 
@@ -445,7 +423,7 @@ thread_DispatchOut(DispatchCommandParms * pParms)
 			 * was dispatched -- in order to check for a lost connection
 			 * or any other errors that libpq might have in store for us.
 			 */
-			WRITE_LOG_GANG_DEBUG("Command dispatched to segment db (%s)",
+			WRITE_LOG_DISPATCHER_DEBUG("Command dispatched to segment db (%s)",
 					dispatchResult->segdbDesc->whoami);
 		}
 		else
@@ -919,7 +897,7 @@ shouldStillDispatchCommand(DispatchCommandParms * pParms,
 	if (InterruptPending && gangResults->cancelOnError)
 	{
 		dispatchResult->wasCanceled = true;
-		if (Debug_cancel_print || gp_log_gang >= GPVARS_VERBOSITY_DEBUGs)
+		if (Debug_cancel_print || gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
 			write_log("Cancellation request pending; command not sent to %s",
 					  segdbDesc->whoami);
 		return false;
