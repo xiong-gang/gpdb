@@ -40,9 +40,6 @@
 
 #define DISPATCH_WAIT_TIMEOUT_SEC 2
 
-#define WRITE_LOG_DISPATCHER_DEBUG(...) do { \
-	if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG) write_log(__VA_ARGS__); \
-    } while(false);
 
 /*
  * Counter to indicate there are some dispatch threads running.  This will
@@ -209,7 +206,7 @@ cdbdisp_dispatchToGang_internal(struct CdbDispatcherState *ds,
 		ds->dispatchThreads->threadCount++;
 	}
 
-	elog(DEBUG4, "dispatchToGang: Total threads now %d", ds->dispatchThreads->threadCount);
+	ELOG_DISPATCHER_DEBUG("dispatchToGang: Total threads now %d", ds->dispatchThreads->threadCount);
 }
 
 void
@@ -227,7 +224,7 @@ CdbCheckDispatchResult_internal(struct CdbDispatcherState *ds,
 	 */
 	if (!ds->dispatchThreads || ds->dispatchThreads->threadCount == 0)
 	{
-		elog(DEBUG5, "CheckDispatchResult: no threads active");
+		ELOG_DISPATCHER_DEBUG("CheckDispatchResult: no threads active");
 		return;
 	}
 
@@ -243,7 +240,8 @@ CdbCheckDispatchResult_internal(struct CdbDispatcherState *ds,
 		if (waitMode != DISPATCH_WAIT_NONE)
 			pParms->waitMode = waitMode;
 
-		elog(DEBUG4, "CheckDispatchResult: Joining to thread %d of %d", i + 1, ds->dispatchThreads->threadCount);
+		ELOG_DISPATCHER_DEBUG("CheckDispatchResult: Joining to thread %d of %d",
+				i + 1, ds->dispatchThreads->threadCount);
 
 		if (pParms->thread_valid)
 		{
@@ -632,9 +630,6 @@ DecrementRunningCount(void *arg)
  * NOTE: This function MUST NOT contain elog or ereport statements. (or most any other backend code)
  *		 elog is NOT thread-safe.  Developers should instead use something like:
  *
- *	if (DEBUG3 >= log_min_messages)
- *			write_log("my brilliant log statement here.");
- *
  * NOTE: In threads, we cannot use palloc, because it's not thread safe.
  */
 static void *
@@ -921,7 +916,7 @@ processResults(CdbDispatchResult * dispatchResult)
 	/*
 	 * PQisBusy() has side-effects
 	 */
-	if (DEBUG5 >= log_min_messages)
+	if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
 	{
 		write_log("processResults.  isBusy = %d", PQisBusy(segdbDesc->conn));
 
@@ -945,7 +940,7 @@ processResults(CdbDispatchResult * dispatchResult)
 	/*
 	 * PQisBusy() has side-effects
 	 */
-	if (DEBUG4 >= log_min_messages && PQisBusy(segdbDesc->conn))
+	if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG && PQisBusy(segdbDesc->conn))
 		write_log("PQisBusy");
 
 	/*
@@ -974,8 +969,8 @@ processResults(CdbDispatchResult * dispatchResult)
 
 		resultIndex = cdbdisp_numPGresult(dispatchResult);
 
-		if (DEBUG4 >= log_min_messages)
-			write_log("PQgetResult");
+		WRITE_LOG_DISPATCHER_DEBUG("PQgetResult");
+
 		/*
 		 * Get one message.
 		 */
@@ -992,13 +987,8 @@ processResults(CdbDispatchResult * dispatchResult)
 		 */
 		if (!pRes)
 		{
-			if (DEBUG4 >= log_min_messages)
-			{
-				/*
-				 * Don't use elog, it's not thread-safe
-				 */
-				write_log("%s -> idle", segdbDesc->whoami);
-			}
+			WRITE_LOG_DISPATCHER_DEBUG("%s -> idle", segdbDesc->whoami);
+
 			/* this is normal end of command */
 			return true;
 		} /* end of results */
@@ -1024,17 +1014,8 @@ processResults(CdbDispatchResult * dispatchResult)
 			 */
 			dispatchResult->okindex = resultIndex;
 
-			if (DEBUG3 >= log_min_messages)
-			{
-				/*
-				 * Don't use elog, it's not thread-safe
-				 */
-				char	   *cmdStatus = PQcmdStatus(pRes);
-
-				write_log("%s -> ok %s",
-						  segdbDesc->whoami,
-						  cmdStatus ? cmdStatus : "(no cmdStatus)");
-			}
+			WRITE_LOG_DISPATCHER_DEBUG("%s -> ok %s", segdbDesc->whoami,
+						PQcmdStatus(pRes) ? PQcmdStatus(pRes) : "(no cmdStatus)");
 
 			/*
 			 * SREH - get number of rows rejected from QE if any
@@ -1058,17 +1039,10 @@ processResults(CdbDispatchResult * dispatchResult)
 
 			msg = PQresultErrorMessage(pRes);
 
-			if (DEBUG2 >= log_min_messages)
-			{
-				/*
-				 * Don't use elog, it's not thread-safe
-				 */
-				write_log("%s -> %s %s  %s",
-						  segdbDesc->whoami,
-						  PQresStatus(resultStatus),
-						  sqlstate ? sqlstate : "(no SQLSTATE)",
-						  msg ? msg : "");
-			}
+			WRITE_LOG_DISPATCHER_DEBUG("%s -> %s %s  %s",
+					segdbDesc->whoami,
+					PQresStatus(resultStatus),
+					sqlstate ? sqlstate : "(no SQLSTATE)", msg ? msg : "");
 
 			/*
 			 * Convert SQLSTATE to an error code (ERRCODE_xxx). Use a generic
@@ -1141,7 +1115,7 @@ cdbdisp_signalQE(SegmentDatabaseDescriptor * segdbDesc,
 	 */
 	MemSet(errbuf, 0, sizeof(errbuf));
 
-	if (Debug_cancel_print || DEBUG4 >= log_min_messages)
+	if (Debug_cancel_print || gp_log_gang >= GPVARS_VERBOSITY_DEBUG)
 		write_log("Calling PQcancel for %s", segdbDesc->whoami);
 
 	/*
@@ -1155,7 +1129,7 @@ cdbdisp_signalQE(SegmentDatabaseDescriptor * segdbDesc,
 	else
 		write_log("unknown waitMode: %d", waitMode);
 
-	if (ret == 0 && (Debug_cancel_print || LOG >= log_min_messages))
+	if (ret == 0 && (Debug_cancel_print || gp_log_gang >= GPVARS_VERBOSITY_DEBUG))
 		write_log("Unable to cancel: %s", errbuf);
 
 	PQfreeCancel(cn);
