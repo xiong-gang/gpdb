@@ -102,13 +102,17 @@ cdbdisp_makeResult(struct CdbDispatchResults *meleeResults,
 	dispatchResult->meleeIndex = meleeIndex;
 	dispatchResult->segdbDesc = segdbDesc;
 	dispatchResult->resultbuf = createPQExpBuffer();
-	dispatchResult->error_message = NULL;
+	dispatchResult->error_message = createPQExpBuffer();
 	dispatchResult->numrowsrejected = 0;
 
-	if (PQExpBufferBroken(dispatchResult->resultbuf))
+	if (PQExpBufferBroken(dispatchResult->resultbuf) ||
+		PQExpBufferBroken(dispatchResult->error_message))
 	{
 		destroyPQExpBuffer(dispatchResult->resultbuf);
 		dispatchResult->resultbuf = NULL;
+
+		destroyPQExpBuffer(dispatchResult->error_message);
+		dispatchResult->error_message = NULL;
 		/*
 		 * caller is responsible for cleanup -- can't elog(ERROR, ...) from here. 
 		 */
@@ -293,7 +297,7 @@ cdbdisp_seterrcode(int errcode, /* ERRCODE_xxx or 0 */
  */
 void
 cdbdisp_appendMessage(CdbDispatchResult * dispatchResult,
-					  int elevel, int errcode, const char *fmt, ...)
+					  int elevel, const char *fmt, ...)
 {
 	va_list	args;
 	int	msgoff;
@@ -301,27 +305,14 @@ cdbdisp_appendMessage(CdbDispatchResult * dispatchResult,
 	/*
 	 * Remember first error.
 	 */
-	cdbdisp_seterrcode(errcode, -1, dispatchResult);
+	cdbdisp_seterrcode(ERRCODE_GP_INTERCONNECTION_ERROR, -1, dispatchResult);
 
 	/*
 	 * Allocate buffer if first message.
 	 * Insert newline between previous message and new one.
 	 */
-	if (!dispatchResult->error_message)
-	{
-		dispatchResult->error_message = createPQExpBuffer();
-
-		if (PQExpBufferBroken(dispatchResult->error_message))
-		{
-			destroyPQExpBuffer(dispatchResult->error_message);
-			dispatchResult->error_message = NULL;
-
-			write_log ("cdbdisp_appendMessage: allocation failed, can't save error-message.");
-			return;
-		}
-	}
-	else
-		oneTrailingNewlinePQ(dispatchResult->error_message);
+	Assert(dispatchResult->error_message != NULL);
+	oneTrailingNewlinePQ(dispatchResult->error_message);
 
 	msgoff = dispatchResult->error_message->len;
 
@@ -334,7 +325,7 @@ cdbdisp_appendMessage(CdbDispatchResult * dispatchResult,
 
 	/*
 	 * Display the message on stderr for debugging, if requested.
-	 * * This helps to clarify the actual timing of threaded events.
+	 * This helps to clarify the actual timing of threaded events.
 	 */
 	if (elevel >= log_min_messages)
 	{
