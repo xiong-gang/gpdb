@@ -105,14 +105,14 @@ fillSliceVector(SliceTable *sliceTable,
 				int len);
 
 static char *
-buildGpQueryString(MemoryContext cxt,
-				   DispatchCommandParms * pParms,
+buildGpQueryString(struct CdbDispatcherState *ds,
 				   DispatchCommandQueryParms * pQueryParms,
 				   int *finalLen);
 
-static void
-cdbdisp_queryParmsInit(struct CdbDispatcherState *ds,
-					   DispatchCommandQueryParms * pQueryParms);
+static char*
+cdbdisp_makeDispatchContent(struct CdbDispatcherState *ds,
+							DispatchCommandQueryParms * pQueryParms,
+							int *queryTextLength);
 
 static void
 cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
@@ -186,7 +186,7 @@ cdbdisp_dispatchPlan(struct QueryDesc *queryDesc,
 	CdbComponentDatabaseInfo *qdinfo;
 
 	ds->primaryResults = NULL;
-	ds->dispatchThreads = NULL;
+	ds->dispatchParams = NULL;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 	Assert(queryDesc != NULL && queryDesc->estate != NULL);
@@ -512,6 +512,8 @@ cdbdisp_dispatchCommand(const char *strCommand,
 	DispatchCommandQueryParms queryParms;
 	Gang *primaryGang;
 	CdbComponentDatabaseInfo *qdinfo;
+	char *queryText = NULL;
+	int queryTextLength = 0;
 
 	if (log_dispatch_stats)
 		ResetUsage();
@@ -558,9 +560,9 @@ cdbdisp_dispatchCommand(const char *strCommand,
 	 * Dispatch the command.
 	 */
 	ds->primaryResults = NULL;
-	ds->dispatchThreads = NULL;
-	cdbdisp_makeDispatcherState(ds, /*slice count*/1, cancelOnError);
-	cdbdisp_queryParmsInit(ds, &queryParms);
+	ds->dispatchParams = NULL;
+	queryText = cdbdisp_makeDispatchContent(ds, &queryParms, &queryTextLength);
+	cdbdisp_makeDispatcherState(ds, /*slice count*/1, cancelOnError, queryText, queryTextLength);
 	ds->primaryResults->writer_gang = primaryGang;
 
 	cdbdisp_dispatchToGang(ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
@@ -767,20 +769,14 @@ CdbDispatchUtilityStatement_NoTwoPhase(struct Node *stmt,
  *
  * Also, we free the DispatchCommandQueryParms memory.
  */
-static void
-cdbdisp_queryParmsInit(struct CdbDispatcherState *ds,
-					   DispatchCommandQueryParms *pQueryParms)
+static char*
+cdbdisp_makeDispatchContent(struct CdbDispatcherState *ds,
+							DispatchCommandQueryParms *pQueryParms,
+							int *queryLength)
 {
-	int	i = 0;
-	int	len = 0;
-
-	CdbDispatchCmdThreads *dThreads = ds->dispatchThreads;
-	DispatchCommandParms *pParms = &dThreads->dispatchCommandParmsAr[0];
-
 	Assert(pQueryParms->strCommand != NULL);
 
-	char *queryText = buildGpQueryString(ds->dispatchStateContext,
-										 pParms, pQueryParms, &len);
+	char *queryText = buildGpQueryString(ds, pQueryParms, queryLength);
 
 	if (pQueryParms->serializedQuerytree != NULL)
 	{
@@ -824,12 +820,7 @@ cdbdisp_queryParmsInit(struct CdbDispatcherState *ds,
 		pQueryParms->sliceIndexGangIdMap = NULL;
 	}
 
-	for (i = 0; i < dThreads->dispatchCommandParmsArSize; i++)
-	{
-		pParms = &dThreads->dispatchCommandParmsAr[i];
-		pParms->query_text = queryText;
-		pParms->query_text_len = len;
-	}
+	return queryText;
 }
 
 /*
@@ -1006,8 +997,9 @@ fillSliceVector(SliceTable *sliceTbl, int rootIdx,
  * Build a query string to be dispatched to QE.
  */
 static char *
-buildGpQueryString(MemoryContext cxt, DispatchCommandParms *pParms,
-				   DispatchCommandQueryParms *pQueryParms, int *finalLen)
+buildGpQueryString(struct CdbDispatcherState *ds,
+				   DispatchCommandQueryParms *pQueryParms,
+				   int *finalLen)
 {
 	const char *command = pQueryParms->strCommand;
 	int command_len = strlen(pQueryParms->strCommand) + 1;
@@ -1070,7 +1062,14 @@ buildGpQueryString(MemoryContext cxt, DispatchCommandParms *pParms,
 		sizeof(numSlices) +
 		sizeof(int) * numSlices;
 
-	shared_query = MemoryContextAlloc(cxt, total_query_len);
+	if (ds->dispatchStateContext == NULL)
+		ds->dispatchStateContext = AllocSetContextCreate(TopMemoryContext,
+														 "Dispatch Context",
+														 ALLOCSET_DEFAULT_MINSIZE,
+														 ALLOCSET_DEFAULT_INITSIZE,
+														 ALLOCSET_DEFAULT_MAXSIZE);
+
+	shared_query = MemoryContextAlloc(ds->dispatchStateContext, total_query_len);
 
 	pos = shared_query;
 
@@ -1244,6 +1243,8 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 	int nTotalSlices = 1; /* total slices in sliceTbl*/
 	int iSlice;
 	int rootIdx = pQueryParms->rootIdx;
+	char       *queryText = NULL;
+	int         queryTextLength = 0;
 
 	if (log_dispatch_stats)
 		ResetUsage();
@@ -1269,10 +1270,9 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 	 * Allocate result array with enough slots for QEs of primary gangs.
 	 */
 	ds->primaryResults = NULL;
-	ds->dispatchThreads = NULL;
-
-	cdbdisp_makeDispatcherState(ds, nSlices, cancelOnError);
-	cdbdisp_queryParmsInit(ds, pQueryParms);
+	ds->dispatchParams = NULL;
+	queryText = cdbdisp_makeDispatchContent(ds, pQueryParms, &queryTextLength);
+	cdbdisp_makeDispatcherState(ds, nSlices, cancelOnError, queryText, queryTextLength);
 
 	cdb_total_plans++;
 	cdb_total_slices += nSlices;
@@ -1439,7 +1439,8 @@ cdbdisp_dispatchSetCommandToAllGangs(const char *strCommand,
 	List *idleReaderGangs;
 	List *allocatedReaderGangs;
 	ListCell *le;
-
+	char *queryText = NULL;
+	int queryTextLength;
 	int	gangCount;
 
 	MemSet(&queryParms, 0, sizeof(queryParms));
@@ -1475,9 +1476,9 @@ cdbdisp_dispatchSetCommandToAllGangs(const char *strCommand,
 	gangCount = 1 + list_length(idleReaderGangs) + list_length(allocatedReaderGangs);
 
 	ds->primaryResults = NULL;
-	ds->dispatchThreads = NULL;
-	cdbdisp_makeDispatcherState(ds, gangCount, cancelOnError);
-	cdbdisp_queryParmsInit(ds, &queryParms);
+	ds->dispatchParams = NULL;
+	queryText = cdbdisp_makeDispatchContent(ds, &queryParms, &queryTextLength);
+	cdbdisp_makeDispatcherState(ds, gangCount, cancelOnError, queryText, queryTextLength);
 	ds->primaryResults->writer_gang = primaryGang;
 
 	cdbdisp_dispatchToGang(ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
