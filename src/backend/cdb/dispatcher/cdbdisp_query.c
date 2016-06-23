@@ -764,8 +764,8 @@ CdbDispatchUtilityStatement_NoTwoPhase(struct Node *stmt,
 /*
  * Initialize CdbDispatcherState using DispatchCommandQueryParms
  *
- * Allocate query text in memory context, initialize it and assign it to
- * all DispatchCommandQueryParms in this dispatcher state.
+ * Allocate query text in dispatcher state memory context and return
+ * to caller.
  *
  * Also, we free the DispatchCommandQueryParms memory.
  */
