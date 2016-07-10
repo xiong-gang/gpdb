@@ -139,7 +139,15 @@ public class ConnectorUtil
 					break;
 				}
 			}
-		} catch (LoginException | InterruptedException e) {
+		} catch (LoginException e) {
+			if ( kinitDisabled ) {
+				SecurityUtil.login(conf,HADOOP_SECURITY_USER_KEYTAB_FILE,HADOOP_SECURITY_USERNAME);
+				return;
+			}
+			/* if kinit is not disabled then do nothing because we will request a new TGT and update the ticket cache
+			* regardless if login or kinit refresh failed initially
+			*/
+		} catch (InterruptedException e) {
 			if ( kinitDisabled ) {
 				SecurityUtil.login(conf,HADOOP_SECURITY_USER_KEYTAB_FILE,HADOOP_SECURITY_USERNAME);
 				return;
@@ -148,6 +156,8 @@ public class ConnectorUtil
 			* regardless if login or kinit refresh failed initially
 			*/
 		}
+
+
 
 		// fail back to securityutil if kinit is disabled
 		if ( kinitDisabled ) { // login from keytab

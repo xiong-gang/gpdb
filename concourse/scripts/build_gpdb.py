@@ -19,7 +19,7 @@ def unittest():
 def main():
     parser = optparse.OptionParser()
     parser.add_option("--build_type", dest="build_type", default="RELEASE")
-    parser.add_option("--mode", choices=['orca', 'codegen', 'orca_codegen'], default="orca_codegen")
+    parser.add_option("--mode", choices=['orca', 'codegen', 'orca_codegen', 'master'], default="master")
     parser.add_option("--compiler", dest="compiler")
     parser.add_option("--cxxflags", dest="cxxflags")
     parser.add_option("--output_dir", dest="output_dir", default="install")
@@ -30,6 +30,8 @@ def main():
         ciCommon = GpcodegenBuild()
     elif options.mode == 'orca_codegen':
         ciCommon = GporcacodegenBuild()
+    elif options.mode == 'master':
+        ciCommon = GpmasterBuild()
 
     status = ciCommon.install_system_deps()
     if status:

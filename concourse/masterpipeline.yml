@@ -1,0 +1,19 @@
+resources:
+  - name: gpdb_src
+    type: git
+    source:
+      uri: https://github.com/xiong-gang/gpdb 
+      branch: gphdfs
+
+jobs:
+  - name: build_without_orca
+    plan:
+      - aggregate:
+        - get: gpdb_src
+          params:
+            submodules: none
+          trigger: true
+      - task: build_without_orca
+        file: gpdb_src/concourse/build_without_orca.yml
+      - task: package_tarball
+        file: gpdb_src/concourse/package_tarball.yml
