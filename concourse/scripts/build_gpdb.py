@@ -3,7 +3,7 @@
 import optparse
 import subprocess
 import sys
-from builds import GporcaBuild, GpcodegenBuild, GporcacodegenBuild
+from builds import GporcaBuild, GpcodegenBuild, GporcacodegenBuild, GpnoorcaBuild
 
 def make(num_cpus):
     return subprocess.call("make -j %d" % (num_cpus), cwd="gpdb_src", shell=True)
@@ -19,7 +19,7 @@ def unittest():
 def main():
     parser = optparse.OptionParser()
     parser.add_option("--build_type", dest="build_type", default="RELEASE")
-    parser.add_option("--mode", choices=['orca', 'codegen', 'orca_codegen'], default="orca_codegen")
+    parser.add_option("--mode", choices=['orca', 'codegen', 'orca_codegen', 'no_orca'], default="no_orca")
     parser.add_option("--compiler", dest="compiler")
     parser.add_option("--cxxflags", dest="cxxflags")
     parser.add_option("--output_dir", dest="output_dir", default="install")
@@ -30,6 +30,8 @@ def main():
         ciCommon = GpcodegenBuild()
     elif options.mode == 'orca_codegen':
         ciCommon = GporcacodegenBuild()
+    elif options.mode == 'no_orca':
+        ciCommon = GpnoorcaBuild()
 
     status = ciCommon.install_system_deps()
     if status:

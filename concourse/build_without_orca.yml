@@ -1,5 +1,10 @@
 platform: linux
-image: docker:///yolo/gpdbdev#centos6
+image_resource:
+    type: docker-image
+    source:
+        repository: 192.168.99.100:5000/centos6-gpdb-dev 
+        insecure_registries: ["192.168.99.100:5000"]
+
 inputs:
   - name: gpdb_src
 run:
