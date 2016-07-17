@@ -43,6 +43,7 @@ setup_gpadmin_user() {
   usermod -a -G supergroup gpadmin
   setup_ssh_for_user gpadmin
   transfer_ownership
+  chmod u+s `which ping`
 }
 
 setup_sshd() {

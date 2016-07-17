@@ -4,7 +4,7 @@ import optparse
 import subprocess
 import sys
 import shutil
-from builds import GporcaBuild, GpcodegenBuild, GporcacodegenBuild
+from builds import GporcaBuild, GpcodegenBuild, GporcacodegenBuild, GpnoorcaBuild
 
 def install_gpdb(dependency_name):
     status = subprocess.call("mkdir -p /usr/local/gpdb", shell=True)
@@ -28,13 +28,13 @@ def copy_output():
 def main():
     parser = optparse.OptionParser()
     parser.add_option("--build_type", dest="build_type", default="RELEASE")
-    parser.add_option("--mode",  choices=['orca', 'codegen', 'orca_codegen'])
+    parser.add_option("--mode",  choices=['orca', 'codegen', 'orca_codegen', 'orca_optimizer_off'])
     parser.add_option("--compiler", dest="compiler")
     parser.add_option("--cxxflags", dest="cxxflags")
     parser.add_option("--output_dir", dest="output_dir", default="install")
     parser.add_option("--gpdb_name", dest="gpdb_name")
     (options, args) = parser.parse_args()
-    if options.mode == 'orca':
+    if options.mode == 'orca' or options.mode == 'orca_optimizer_off':
         ciCommon = GporcaBuild()
     elif options.mode == 'codegen':
         ciCommon = GpcodegenBuild()
@@ -57,7 +57,12 @@ def main():
     status = create_gpadmin_user()
     if status:
         return status
-    status = ciCommon.icg()
+
+    if options.mode == 'orca_optimizer_off':
+        status = ciCommon.icg_optimizer_off()
+    else:
+        status = ciCommon.icg()
+
     if status:
         copy_output()
     return status

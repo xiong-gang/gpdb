@@ -5,7 +5,132 @@ resources:
       uri: https://github.com/xiong-gang/gpdb 
       branch: master_concourse 
 
+  - name: xerces_patch
+    type: git
+    source:
+      uri: https://github.com/xiong-gang/gporca 
+      branch: master
+
+  - name: gpos_github_release
+    type: github-release
+    source:
+      user: greenplum-db
+      repository: gpos
+
+  - name: orca_github_release
+    type: github-release
+    source:
+      user: greenplum-db
+      repository: gporca
+
+  - name: bin_xerces
+    type: s3
+    source:
+      access_key_id: {{aws-access-key-id}}
+      bucket: {{bucket-name}}
+      region_name: {{aws-region}}
+      secret_access_key: {{aws-secret-access-key}}
+      versioned_file: bin_xerces_centos6.tar.gz
+
+  - name: bin_gpdb_without_orca
+    type: s3
+    source:
+      access_key_id: {{aws-access-key-id}}
+      bucket: {{bucket-name}}
+      region_name: {{aws-region}}
+      secret_access_key: {{aws-secret-access-key}}
+      versioned_file: bin_gpdb_without_orca_centos6.tar.gz
+
+  - name: bin_gpdb
+    type: s3
+    source:
+      access_key_id: {{aws-access-key-id}}
+      bucket: {{bucket-name}}
+      region_name: {{aws-region}}
+      secret_access_key: {{aws-secret-access-key}}
+      versioned_file: bin_gpdb_orca_centos6.tar.gz
+
+  - name: regression_diffs
+    type: s3
+    source:
+       access_key_id: {{aws-access-key-id}}
+       bucket: {{bucket-name}}
+       region_name: {{aws-region}}
+       secret_access_key: {{aws-secret-access-key}}
+       versioned_file: regression.diffs
+
+  - name: regression_out
+    type: s3
+    source:
+       access_key_id: {{aws-access-key-id}}
+       bucket: {{bucket-name}}
+       region_name: {{aws-region}}
+       secret_access_key: {{aws-secret-access-key}}
+       versioned_file: regression.out
+
+  - name: regression_diffs_opt_off
+    type: s3
+    source:
+       access_key_id: {{aws-access-key-id}}
+       bucket: {{bucket-name}}
+       region_name: {{aws-region}}
+       secret_access_key: {{aws-secret-access-key}}
+       versioned_file: regression_opt_off.diffs
+
+  - name: regression_out_opt_off
+    type: s3
+    source:
+       access_key_id: {{aws-access-key-id}}
+       bucket: {{bucket-name}}
+       region_name: {{aws-region}}
+       secret_access_key: {{aws-secret-access-key}}
+       versioned_file: regression_opt_off.out
+
+
 jobs:
+  - name: build_xerces_centos6
+    max_in_flight: 2
+    plan:
+      - get: xerces_patch
+        trigger: true
+      - task: build
+        file: xerces_patch/concourse/xerces-c/build_xerces_centos6.yml
+      - task: package_tarball
+        file: xerces_patch/concourse/xerces-c/package_tarball_centos6.yml
+      - put: bin_xerces
+        params:
+          from: package_tarball_centos6/bin_xerces_centos6.tar.gz
+
+  - name: build_with_orca
+    plan:
+      - aggregate:
+        - get: gpos_github_release
+          params:
+            globs:
+              - bin_gpos_centos5_release.tar.gz
+        - get: orca_github_release
+          params:
+            globs:
+              - bin_orca_centos5_release.tar.gz
+        - get: bin_xerces
+          passed:
+            - build_xerces_centos6 
+        - get: gpdb_src
+          params:
+            submodules: none
+          trigger: true
+      - task: build_with_orca
+        file: gpdb_src/concourse/build_with_orca.yml
+        input_mapping:
+          bin_orca: orca_github_release
+          bin_gpos: gpos_github_release
+      - task: package_tarball
+        file: gpdb_src/concourse/package_tarball.yml
+      - put: bin_gpdb
+        params:
+          file: package_tarball/bin_gpdb.tar.gz
+
+
   - name: build_without_orca
     plan:
       - aggregate:
@@ -16,4 +141,77 @@ jobs:
       - task: build_without_orca
         file: gpdb_src/concourse/build_without_orca.yml
       - task: package_tarball
-        file: gpdb_src/concourse/package_tarball.yml
+        file: gpdb_src/concourse/package_tarball_master.yml
+      - put: bin_gpdb_without_orca
+        params:
+          file: package_tarball/bin_gpdb.tar.gz
+
+  - name: icg
+    plan:
+      - aggregate:
+        - get: gpos_github_release
+          params:
+            globs:
+              - bin_gpos_centos5_release.tar.gz
+        - get: orca_github_release
+          params:
+            globs:
+              - bin_orca_centos5_release.tar.gz
+        - get: bin_xerces
+          passed:
+            - build_xerces_centos6 
+        - get: bin_gpdb
+          passed:
+            - build_with_orca
+        - get: gpdb_src
+          trigger: true
+          passed:
+            - build_with_orca
+          params:
+            submodules: none
+      - task: icg
+        file: gpdb_src/concourse/test_with_orca.yml
+        timeout: 2h30m
+        on_failure:
+          aggregate:
+          - put: regression_diffs
+            params:
+              file: icg_output/regression.diffs
+          - put: regression_out
+            params:
+              file: icg_output/regression.out
+
+  - name: icg_optimizer_off
+    plan:
+      - aggregate:
+        - get: gpos_github_release
+          params:
+            globs:
+              - bin_gpos_centos5_release.tar.gz
+        - get: orca_github_release
+          params:
+            globs:
+              - bin_orca_centos5_release.tar.gz
+        - get: bin_xerces
+          passed:
+            - build_xerces_centos6 
+        - get: bin_gpdb
+          passed:
+            - build_with_orca
+        - get: gpdb_src
+          trigger: true
+          passed:
+            - build_with_orca
+          params:
+            submodules: none
+      - task: icg
+        file: gpdb_src/concourse/test_with_orca_optimizer_off.yml
+        timeout: 2h30m
+        on_failure:
+          aggregate:
+          - put: regression_diffs_opt_off
+            params:
+              file: icg_output/regression.diffs
+          - put: regression_out_opt_off
+            params:
+              file: icg_output/regression.out

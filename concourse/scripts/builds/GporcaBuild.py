@@ -10,6 +10,7 @@ class GporcaBuild(GpdbBuildBase):
     def configure(self):
         return subprocess.call(["./configure",
                                 "--enable-orca",
+                                "--enable-cassert",
                                 "--enable-mapreduce",
                                 "--with-perl",
                                 "--with-libxml",
@@ -33,3 +34,18 @@ class GporcaBuild(GpdbBuildBase):
             && source gpAux/gpdemo/gpdemo-env.sh && PGOPTIONS='-c optimizer=on' \
             make installcheck-good\""], cwd="gpdb_src", shell=True)
     
+    def icg_optimizer_off(self):
+        status = subprocess.call(
+            "printf '\nLD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib\nexport \
+            LD_LIBRARY_PATH' >> /usr/local/gpdb/greenplum_path.sh", shell=True)
+        if status:
+            return status
+        status = subprocess.call([
+            "runuser gpadmin -c \"source /usr/local/gpdb/greenplum_path.sh \
+            && make cluster\""], cwd="gpdb_src/gpAux/gpdemo", shell=True)
+        if status:
+            return status
+        return subprocess.call([
+            "runuser gpadmin -c \"source /usr/local/gpdb/greenplum_path.sh \
+            && source gpAux/gpdemo/gpdemo-env.sh && PGOPTIONS='-c optimizer=off' \
+            make installcheck-good\""], cwd="gpdb_src", shell=True)

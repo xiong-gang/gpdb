@@ -4,6 +4,7 @@ image_resource:
     source:
         repository: 192.168.99.100:5000/centos6-gpdb-dev 
         insecure_registries: ["192.168.99.100:5000"]
+
 inputs:
   - name: bin_orca
   - name: bin_gpos
@@ -15,7 +16,7 @@ outputs:
 run:
   path: gpdb_src/concourse/scripts/test_gpdb.py
   args:
-    - --mode=orca
+    - --mode=orca_optimizer_off
     - --gpdb_name=bin_gpdb
     - bin_orca
     - bin_gpos

@@ -10,6 +10,7 @@ class GpnoorcaBuild(GpdbBuildBase):
     def configure(self):
         return subprocess.call(["./configure",
                                 "--enable-mapreduce",
+                                "--enable-cassert",
                                 "--with-perl",
                                 "--with-libxml",
                                 "--with-python",
@@ -30,5 +31,5 @@ class GpnoorcaBuild(GpdbBuildBase):
         return subprocess.call([
             "runuser gpadmin -c \"source /usr/local/gpdb/greenplum_path.sh \
             && source gpAux/gpdemo/gpdemo-env.sh \
-            make installcheck-good\""], cwd="gpdb_src", shell=True)
+            && PGOPTIONS='-c optimizer=off' make installcheck-good\""], cwd="gpdb_src", shell=True)
     
