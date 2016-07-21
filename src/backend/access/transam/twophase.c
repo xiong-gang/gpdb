@@ -599,7 +599,7 @@ MarkAsPreparing(TransactionId xid,
 	gxact->proc.inDropTransaction = false;
 	gxact->proc.lwWaiting = false;
 	gxact->proc.lwExclusive = false;
-	gxact->proc.lwWaitLink = NULL;
+	DLInitElem(&gxact->proc.lwWaitLink, (void*)(&gxact->proc));
 	gxact->proc.waitLock = NULL;
 	gxact->proc.waitProcLock = NULL;
 

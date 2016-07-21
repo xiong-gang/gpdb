@@ -21,6 +21,7 @@
 #include "storage/spin.h"
 #include "storage/pg_sema.h"
 #include "access/xlog.h"
+#include "lib/dllist.h"
 
 #include "cdb/cdblocaldistribxact.h"  /* LocalDistribXactData */
 
@@ -120,7 +121,7 @@ struct PGPROC
 	/* Info about LWLock the process is currently waiting for, if any. */
 	bool		lwWaiting;		/* true if waiting for an LW lock */
 	bool		lwExclusive;	/* true if waiting for exclusive access */
-	struct PGPROC *lwWaitLink;	/* next waiter for same LW lock */
+	Dlelem		lwWaitLink;	/* next waiter for same LW lock */
 
 	/* Info about lock the process is currently waiting for, if any. */
 	/* waitLock and waitProcLock are NULL if not currently waiting. */
