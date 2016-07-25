@@ -30,7 +30,6 @@ extern void TimeSliceCheck(const char *file, int line);
 
 #if defined(__i386) || defined(__x86_64__)
 
-#define USE_TEST_UTILS_X86   1
 
 /* detect database-lightweight lock conflict */
 extern void LWLockHeldDetect(const void *locktag, int lockmode);
