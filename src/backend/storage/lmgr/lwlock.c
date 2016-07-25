@@ -96,6 +96,8 @@ static int	num_held_lwlocks = 0;
 static LWLockId held_lwlocks[MAX_SIMUL_LWLOCKS];
 static bool held_lwlocks_exclusive[MAX_SIMUL_LWLOCKS];
 
+#undef USE_TEST_UTILS_X86
+
 #ifdef USE_TEST_UTILS_X86
 static void *held_lwlocks_addresses[MAX_SIMUL_LWLOCKS][MAX_FRAME_DEPTH];
 static int32 held_lwlocks_depth[MAX_SIMUL_LWLOCKS];
