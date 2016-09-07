@@ -119,6 +119,7 @@
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "xmanager.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/fork_process.h"
@@ -265,6 +266,7 @@ static pid_t StartupPID = 0,
 			AutoVacPID = 0,
 			PgArchPID = 0,
 			PgStatPID = 0,
+			XManagerPID = 0,
 			SysLoggerPID = 0,
 			FilerepPID = 0,
 			FilerepPeerResetPID = 0;
@@ -2532,6 +2534,18 @@ ServerLoop(void)
 
 			}
 
+			if (XManagerPID == 0 &&
+			    pmState > PM_STARTUP_PASS4 &&
+			    pmState < PM_CHILD_STOP_BEGIN)
+			{
+				XManagerPID = xmanager_start();
+				if (Debug_print_server_processes)
+					elog(LOG,"restarted 'QX mamager process' as pid %ld",
+						 (long)XManagerPID);
+
+			}
+
+
 			/* MPP: If we have lost one of our servers, try to start a new one */
 			for (s=0; s < MaxPMSubType; s++)
 			{
@@ -4012,6 +4026,7 @@ SIGHUP_handler(SIGNAL_ARGS)
 		}
 		signal_child_if_up(SysLoggerPID, SIGHUP);
 		signal_child_if_up(PgStatPID, SIGHUP);
+		signal_child_if_up(XManagerPID, SIGHUP);
 
 		/* Reload authentication config files too */
 		if (!load_hba())
@@ -4122,6 +4137,7 @@ pmdie(SIGNAL_ARGS)
             signal_child_if_up(AutoVacPID, SIGQUIT);
             signal_child_if_up(PgArchPID, SIGQUIT);
             signal_child_if_up(PgStatPID, SIGQUIT);
+            signal_child_if_up(XManagerPID, SIGQUIT);
             signal_child_if_up(FilerepPeerResetPID, SIGQUIT);
 
             /* if you add more processes here then also update do_immediate_shutdown_reaper */
@@ -4212,6 +4228,7 @@ do_immediate_shutdown_reaper(void)
         zeroIfPidEqual(pid, &AutoVacPID);
         zeroIfPidEqual(pid, &PgArchPID);
         zeroIfPidEqual(pid, &PgStatPID);
+        zeroIfPidEqual(pid, &XManagerPID);
         zeroIfPidEqual(pid, &FilerepPeerResetPID);
     }
 }
@@ -4284,6 +4301,16 @@ static bool CommenceNormalOperations(void)
 			{
 				elog(LOG,"on startup successful: started 'statistics collector process' as pid %ld",
 					 (long)PgStatPID);
+				didServiceProcessWork = true;
+			}
+		}
+		if (XManagerPID == 0)
+		{
+			XManagerPID = xmanager_start();
+			if (Debug_print_server_processes)
+			{
+				elog(LOG,"on startup successful: started 'QX manager process' as pid %ld",
+					 (long)XManagerPID);
 				didServiceProcessWork = true;
 			}
 		}
@@ -4673,6 +4700,15 @@ static void do_reaper()
 				didServiceProcessWork = true;
 			}
 
+			if (XManagerPID == 0)
+			{
+				XManagerPID = xmanager_start();
+				if (Debug_print_server_processes)
+					elog(LOG,"on startup successful: started 'QX manager process' as pid %ld",
+						 (long)XManagerPID);
+				didServiceProcessWork = true;
+			}
+
 			/*
 			 * Startup succeeded, commence normal operations
 			 */
@@ -4970,6 +5006,25 @@ static void do_reaper()
 			continue;
 		}
 
+		if (pid == XManagerPID)
+		{
+			XManagerPID = 0;
+			if (!EXIT_STATUS_0(exitstatus))
+				LogChildExit(LOG, _("QX manager process"),
+							 pid, exitstatus);
+			if (pmState == PM_RUN)
+            {
+				XManagerPID = xmanager_start();
+				if (Debug_print_server_processes)
+				{
+					elog(LOG,"restarted 'QX manager process' as pid %ld",
+						 (long)XManagerPID);
+					didServiceProcessWork = true;
+				}
+			}
+			continue;
+		}
+
 		/* Was it the system logger?  If so, try to start a new one */
 		if (pid == SysLoggerPID)
 		{
@@ -5175,6 +5230,8 @@ GetServerProcessTitle(int pid)
 		return "autovacuum process";
 	else if (pid == PgStatPID)
 		return "statistics collector process";
+	else if (pid == XManagerPID)
+		return "qx manager process";
 	else if (pid == PgArchPID)
 		return "archiver process";
 	else if (pid == SysLoggerPID)
@@ -5532,6 +5589,16 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 		allow_immediate_pgstat_restart();
 	}
 
+	if (XManagerPID != 0 && !FatalError)
+	{
+		ereport((Debug_print_server_processes ? LOG : DEBUG2),
+				(errmsg_internal("sending %s to process %d",
+								 "SIGQUIT",
+								 (int) XManagerPID)));
+		signal_child(XManagerPID, SIGQUIT);
+		//allow_immediate_pgstat_restart();
+	}
+
 	if (pid == FilerepPeerResetPID)
 		FilerepPeerResetPID = 0;
 	else if (FilerepPeerResetPID != 0 && !FatalError)
@@ -5829,6 +5896,7 @@ static PMState StateMachineCheck_WaitPostBgWriter(void)
     else if ( FilerepPID  != 0 ||
         PgArchPID  != 0 ||
         PgStatPID  != 0 ||
+		XManagerPID  != 0 ||
         FilerepPeerResetPID != 0)
     {
         moveToNextState = false;
@@ -5946,6 +6014,7 @@ static void StateMachineTransition_ShutdownPostBgWriter(void)
     signal_filerep_to_shutdown(SegmentStateShutdown);
     signal_child_if_up(PgArchPID, SIGQUIT);
     signal_child_if_up(PgStatPID, SIGQUIT);
+    signal_child_if_up(XManagerPID, SIGQUIT);
 
     /* this process is probably not running,
      * but the shutdown sequence may have been started in the middle of our reset */
@@ -7405,6 +7474,9 @@ sigusr1_handler(SIGNAL_ARGS)
 		 */
 		Assert(PgStatPID == 0);
 		PgStatPID = pgstat_start();
+
+		Assert(XManagerPID == 0);
+		XManagerPID = xmanager_start();
 
 		/* XXX at this point we could accept read-only connections */
 		ereport(DEBUG1,
