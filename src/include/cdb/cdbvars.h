@@ -964,6 +964,8 @@ extern int gp_workfile_type_hashjoin;
 extern bool gp_mapreduce_define;
 extern bool coredump_on_memerror;
 
+extern bool gp_use_xm;
+
 /* Autostats feature for MPP-4082. */
 typedef enum
 {

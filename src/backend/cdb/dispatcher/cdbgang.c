@@ -42,7 +42,7 @@
 #include "gp-libpq-int.h"
 #include "libpq/libpq-be.h"
 #include "libpq/ip.h"
-
+#include <arpa/inet.h>
 #include "utils/guc_tables.h"
 
 #define MAX_CACHED_1_GANGS 1
@@ -72,6 +72,7 @@ static List *availableReaderGangsN = NIL;
 static List *allocatedReaderGangs1 = NIL;
 static List *availableReaderGangs1 = NIL;
 static Gang *primaryWriterGang = NULL;
+static GangNew *primaryWriterGangNew = NULL;
 
 /*
  * Every gang created must have a unique identifier
@@ -93,6 +94,9 @@ static CdbComponentDatabaseInfo *findDatabaseInfoBySegIndex(
 		CdbComponentDatabases *cdbs, int segIndex);
 static void addGangToAllocated(Gang *gp);
 static Gang *getAvailableGang(GangType type, int size, int content);
+
+static GangNew *
+buildGangDefinitionNew(GangType type, int gang_id, int size);
 
 /*
  * Create a reader gang.
@@ -275,6 +279,373 @@ static Gang *
 createGang(GangType type, int gang_id, int size, int content)
 {
 	return pCreateGangFunc(type, gang_id, size, content);
+}
+
+typedef struct XMRequestQE
+{
+	int type;
+	int count;
+	int segIndex;
+	int sessionId;
+	int gangIdStart;
+	char hostip[100];
+	char database[100];
+	char user[100];
+} XMRequestQE;
+
+typedef struct XMQE
+{
+	int port;
+	int pid;
+} XMQE;
+
+typedef struct XMResponseQE
+{
+	int type;
+	int count;
+	struct XMQE qeArray[0];
+} XMResponseQE;
+
+typedef struct XMConnection
+{
+	int sock;
+	int segIndex;
+	char *hostip;
+}XMConnection;
+
+typedef struct XMGang
+{
+	int size;
+	XMConnection conns[0];
+}XMGang;
+
+XMGang *g_xmGang = NULL;
+
+static void
+createXMConnection(CdbComponentDatabaseInfo *cdbinfo, XMConnection *conn)
+{
+	int sock;
+	struct sockaddr_in address;
+
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock == 0)
+		elog(ERROR, "Failed to create socket");
+
+	memset(&address, 0, sizeof(struct sockaddr_in));
+	address.sin_family = AF_INET;
+	address.sin_port = htons(cdbinfo->port + 55);
+	if (inet_pton(AF_INET, (char *) cdbinfo->hostip, &address.sin_addr) <= 0)
+		elog(ERROR, "inet_pton error occured");
+
+	int retVal = connect(sock, (struct sockaddr *) &address, sizeof(address));
+	if (retVal != 0)
+		elog(ERROR, "Failed to connect QX Manager");
+
+	if (fcntl(sock, F_SETFL, O_NONBLOCK) == -1)
+		elog(ERROR, "fcntl(F_SETFL, O_NONBLOCK) failed");
+
+	conn->sock = sock;
+	conn->segIndex = cdbinfo->segindex;
+	conn->hostip = pstrdup(cdbinfo->hostip);
+}
+
+static XMGang*
+createXMGang(void)
+{
+	int size = getgpsegmentCount() + 1;
+	XMGang *gang = (XMGang *)palloc(sizeof(XMGang) + size * sizeof(XMConnection));
+	gang->size = size;
+
+	/* read gp_segment_configuration and build CdbComponentDatabases */
+	CdbComponentDatabases *cdb_component_dbs = getComponentDatabases();
+
+	if (cdb_component_dbs == NULL ||
+		cdb_component_dbs->total_segments <= 0 ||
+		cdb_component_dbs->total_segment_dbs <= 0)
+		insist_log(false, "schema not populated while building segworker group");
+
+	/* if mirroring is not configured */
+	if (cdb_component_dbs->total_segment_dbs
+			== cdb_component_dbs->total_segments)
+	{
+		ELOG_DISPATCHER_DEBUG("building Gang: mirroring not configured");
+		disableFTS();
+	}
+
+	int segIndex;
+	for (segIndex = 0; segIndex < cdb_component_dbs->total_segment_dbs; segIndex++)
+	{
+
+		CdbComponentDatabaseInfo *cdbinfo = &cdb_component_dbs->segment_db_info[segIndex];
+		XMConnection *conn = &gang->conns[cdbinfo->segindex];
+
+		if (!SEGMENT_IS_ACTIVE_PRIMARY(cdbinfo))
+			continue;
+
+		createXMConnection(cdbinfo, conn);
+	}
+
+	createXMConnection(cdb_component_dbs->entry_db_info, &gang->conns[gang->size - 1]);
+	return gang;
+}
+
+static void sendXMRequestQE(XMConnection *conn, XMRequestQE *request)
+{
+	int tmp = 0;
+	int len = 0;
+	int totalLen = 1 + sizeof(len) + sizeof(request->count) + sizeof(request->segIndex) +
+			sizeof(request->sessionId) + sizeof(request->hostip) +
+			sizeof(request->database) + sizeof(request->user);
+	char* buf = palloc(totalLen);
+	char* pos = buf;
+
+	*pos++ = request->type;
+
+	pos += sizeof(len); /* placeholder for message length */
+
+	tmp = htonl(request->count);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(request->segIndex);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(request->sessionId);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(request->gangIdStart);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	memcpy(pos, request->hostip, sizeof(request->hostip));
+	pos += sizeof(request->hostip);
+
+	memcpy(pos, request->database, sizeof(request->database));
+	pos += sizeof(request->database);
+
+	memcpy(pos, request->user, sizeof(request->user));
+	pos += sizeof(request->user);
+
+	len = pos - buf - 1;
+	tmp = htonl(len);
+	memcpy(buf + 1, &tmp, sizeof(tmp));
+
+	int bytes = totalLen;
+	while (bytes > 0)
+	{
+		int sent = send(conn->sock, buf, bytes, 0);
+		if (sent == -1)
+		{
+			if (errno == EINTR)
+				continue;
+			close(conn->sock);
+			elog(ERROR, "Failed to send");
+		}
+		bytes -= sent;
+		buf += sent;
+	}
+}
+
+static XMResponseQE*
+recvXMResponseQE(XMConnection *conn, XMRequestQE *request)
+{
+	int count = request->count;
+	int len = sizeof(XMResponseQE) + count * sizeof(XMQE);
+	XMResponseQE *response = (XMResponseQE*) palloc(len);
+	response->count = count;
+
+	char *p = (char*) response->qeArray;
+	char *q = p + count * sizeof(XMQE);
+	while (p < q)
+	{
+		int n = recv(conn->sock, p, q - p, 0);
+		if (n == -1)
+		{
+			if (errno == EINTR || errno == EAGAIN)
+				continue;
+			close(conn->sock);
+			elog(ERROR, "Failed to recv");
+		}
+		p += n;
+	}
+
+	int i;
+	for (i = 0; i < count; i++)
+	{
+		response->qeArray[i].pid = ntohl(response->qeArray[i].pid);
+		response->qeArray[i].port = ntohl(response->qeArray[i].port);
+	}
+
+	return response;
+}
+
+static bool
+allocateQEs(XMConnection *conn, int count, QEInfo **ppQEs)
+{
+	if (count <= 0)
+		return true;
+
+	int segIndex = conn->segIndex;
+
+	XMRequestQE request;
+	request.count = count;
+	request.type = 'a';
+	request.segIndex = segIndex;
+	request.sessionId = gp_session_id;
+	request.gangIdStart = gang_id_counter;
+	strcpy(request.hostip, conn->hostip);
+	strcpy(request.database, MyProcPort->database_name);
+	strcpy(request.user, MyProcPort->user_name);
+	sendXMRequestQE(conn, &request);
+	XMResponseQE *response = recvXMResponseQE(conn, &request);
+
+	int i;
+	for (i = 0; i < count; i++)
+	{
+		ppQEs[segIndex][i].pid = response->qeArray[i].pid;
+		ppQEs[segIndex][i].port = response->qeArray[i].port;
+		ppQEs[segIndex][i].segIndex = response->qeArray[i].port;
+		ppQEs[segIndex][i].hostip = pstrdup(conn->hostip);
+	}
+
+	return true;
+}
+
+
+bool
+sendCommandToAllXM(const char *buf, int len)
+{
+	int i;
+	for (i = 0; i < g_xmGang->size; i++)
+	{
+		XMConnection *conn = &g_xmGang->conns[i];
+		int bytes = len;
+		const char *ptr = buf;
+		while (bytes > 0)
+		{
+			int sent = send(conn->sock, ptr, bytes, 0);
+			if (sent == -1)
+			{
+				if (errno == EINTR)
+					continue;
+				close(conn->sock);
+				elog(ERROR, "Failed to send");
+			}
+			bytes -= sent;
+			ptr += sent;
+		}
+	}
+	return true;
+}
+
+
+GangNew **
+allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1,
+		int nReaderGangEntryDB)
+{
+	int segmentCount = getgpsegmentCount();
+	int *vec = palloc(sizeof(int) * (segmentCount + 1));
+	int segIndex = 0;
+	int qeIndex = 0;
+	int gangIndex = 0;
+	int i;
+
+	if (GangContext == NULL)
+	{
+		GangContext = AllocSetContextCreate(TopMemoryContext, "Gang Context",
+		ALLOCSET_DEFAULT_MINSIZE,
+		ALLOCSET_DEFAULT_INITSIZE,
+		ALLOCSET_DEFAULT_MAXSIZE);
+	}
+	Assert(GangContext != NULL);
+
+	if (g_xmGang == NULL)
+		g_xmGang = createXMGang();
+
+	for (segIndex = 0; segIndex < segmentCount; segIndex++)
+		vec[segIndex] = primaryWriterGang == NULL ? nWriterGang + nReaderGangN : nReaderGangN;
+
+	vec[gp_singleton_segindex] += nReaderGang1;
+
+	/* entry db */
+	vec[segmentCount] = nReaderGangEntryDB;
+
+	QEInfo **ppQEs = palloc(sizeof(QEInfo*) * (segmentCount + 1));
+	for (i = 0; i <= segmentCount; i++)
+		ppQEs[i] = (QEInfo*)palloc(sizeof(QEInfo) * vec[i]);
+
+	for (segIndex = 0; segIndex <= segmentCount; segIndex++)
+	{
+		XMConnection *conn = &g_xmGang->conns[segIndex];
+		allocateQEs(conn, vec[segIndex], ppQEs);
+	}
+
+	int nGangs = nWriterGang + nReaderGangN + nReaderGang1 + nReaderGangEntryDB;
+	GangNew **ppGangs = palloc(sizeof(GangNew*) * nGangs);
+
+	if (primaryWriterGangNew != NULL)
+	{
+		ppGangs[gangIndex++] = primaryWriterGangNew;
+	}
+	else
+	{
+		GangNew *gp = buildGangDefinitionNew(GANGTYPE_PRIMARY_WRITER,
+				gang_id_counter++, segmentCount);
+
+		for (segIndex = 0; segIndex < segmentCount; segIndex++)
+		{
+			gp->qes[segIndex].pid = ppQEs[segIndex][qeIndex].pid;
+			gp->qes[segIndex].port = ppQEs[segIndex][qeIndex].port;
+			gp->qes[segIndex].segIndex = ppQEs[segIndex][qeIndex].segIndex;
+			gp->qes[segIndex].hostip = pstrdup(ppQEs[segIndex][qeIndex].hostip);
+		}
+		ppGangs[gangIndex++] = gp;
+		qeIndex++;
+	}
+
+	for (i = 0; i < nReaderGangN; i++)
+	{
+		GangNew *gp = buildGangDefinitionNew(GANGTYPE_PRIMARY_READER,
+				gang_id_counter++, segmentCount);
+		for (segIndex = 0; segIndex < segmentCount; segIndex++)
+		{
+			gp->qes[segIndex].pid = ppQEs[segIndex][qeIndex].pid;
+			gp->qes[segIndex].port = ppQEs[segIndex][qeIndex].port;
+			gp->qes[segIndex].segIndex = ppQEs[segIndex][qeIndex].segIndex;
+			gp->qes[segIndex].hostip = pstrdup(ppQEs[segIndex][qeIndex].hostip);
+		}
+		ppGangs[gangIndex++] = gp;
+		qeIndex++;
+	}
+
+	for (i = 0; i < nReaderGang1; i++)
+	{
+		GangNew *gp = buildGangDefinitionNew(GANGTYPE_SINGLETON_READER, gang_id_counter++, 1);
+
+		gp->qes[0].pid = ppQEs[gp_singleton_segindex][qeIndex].pid;
+		gp->qes[0].port = ppQEs[gp_singleton_segindex][qeIndex].port;
+		gp->qes[0].segIndex = ppQEs[gp_singleton_segindex][qeIndex].segIndex;
+		gp->qes[0].hostip = pstrdup(ppQEs[gp_singleton_segindex][qeIndex].hostip);
+
+		ppGangs[gangIndex++] = gp;
+		qeIndex++;
+	}
+
+	for (i = 0; i < nReaderGangEntryDB; i++)
+	{
+		GangNew *gp = buildGangDefinitionNew(GANGTYPE_ENTRYDB_READER, gang_id_counter++, 1);
+
+		gp->qes[0].pid = ppQEs[segmentCount][i].pid;
+		gp->qes[0].port = ppQEs[segmentCount][i].port;
+		gp->qes[0].segIndex = ppQEs[segmentCount][i].segIndex;
+		gp->qes[0].hostip = pstrdup(ppQEs[segmentCount][i].hostip);
+
+		ppGangs[gangIndex++] = gp;
+	}
+
+	return ppGangs;
 }
 
 /*
@@ -542,6 +913,30 @@ buildGangDefinition(GangType type, int gang_id, int size, int content)
 	return newGangDefinition;
 }
 
+static GangNew *
+buildGangDefinitionNew(GangType type, int gang_id, int size)
+{
+	GangNew *newGangDefinition = NULL;
+
+	ELOG_DISPATCHER_DEBUG("buildGangDefinition:Starting %d qExec processes for %s gang",
+			size, gangTypeToString(type));
+
+	Assert(size == 1 || size == getgpsegmentCount());
+
+	/* allocate a gang */
+	newGangDefinition = (GangNew *) palloc0(sizeof(GangNew));
+	newGangDefinition->type = type;
+	newGangDefinition->size = size;
+	newGangDefinition->gang_id = gang_id;
+	newGangDefinition->allocated = false;
+	newGangDefinition->noReuse = false;
+	newGangDefinition->dispatcherActive = false;
+	newGangDefinition->portal_name = NULL;
+	newGangDefinition->qes = (QEInfo*) palloc0(sizeof(QEInfo) * size);
+
+	ELOG_DISPATCHER_DEBUG("buildGangDefinition done");
+	return newGangDefinition;
+}
 /*
  * Add one GUC to the option string.
  */
@@ -910,6 +1305,17 @@ static CdbProcess *makeCdbProcess(SegmentDatabaseDescriptor *segdbDesc)
 	process->contentid = segdbDesc->segindex;
 	return process;
 }
+
+static CdbProcess *makeCdbProcessNew(QEInfo *qe)
+{
+	CdbProcess *process = (CdbProcess *) makeNode(CdbProcess);
+
+	process->listenerAddr = pstrdup(qe->hostip);
+	process->listenerPort = qe->port;
+	process->pid = qe->pid;
+	process->contentid = qe->segIndex;
+	return process;
+}
 /*
  * Create a list of CdbProcess and initialize with Gang information.
  *
@@ -969,6 +1375,54 @@ getCdbProcessList(Gang *gang, int sliceIndex, DirectDispatchInfo *directDispatch
 	return list;
 }
 
+
+List *
+getCdbProcessListNew(GangNew *gang, int sliceIndex, DirectDispatchInfo *directDispatch)
+{
+	List *list = NULL;
+	int i = 0;
+
+	ELOG_DISPATCHER_DEBUG("getCdbProcessList slice%d gangtype=%d gangsize=%d",
+			sliceIndex, gang->type, gang->size);
+
+	Assert(Gp_role == GP_ROLE_DISPATCH);
+	Assert( (gang->type == GANGTYPE_PRIMARY_WRITER && gang->size == getgpsegmentCount()) ||
+			(gang->type == GANGTYPE_PRIMARY_READER && gang->size == getgpsegmentCount()) ||
+			(gang->type == GANGTYPE_ENTRYDB_READER && gang->size == 1) ||
+			(gang->type == GANGTYPE_SINGLETON_READER && gang->size == 1));
+
+
+	if (directDispatch != NULL && directDispatch->isDirectDispatch)
+	{
+		/* Currently, direct dispatch is to one segment db. */
+		Assert(list_length(directDispatch->contentIds) == 1);
+
+		/* initialize a list of NULL */
+		for (i = 0; i < gang->size; i++)
+			list = lappend(list, NULL);
+
+		int directDispatchContentId = linitial_int(directDispatch->contentIds);
+		QEInfo *qe = &gang->qes[directDispatchContentId];
+		CdbProcess *process = makeCdbProcessNew(qe);
+		list_nth_replace(list, directDispatchContentId, process);
+	}
+	else
+	{
+		for (i = 0; i < gang->size; i++)
+		{
+			QEInfo *qe = &gang->qes[i];
+			CdbProcess *process = makeCdbProcessNew(qe);
+
+			list = lappend(list, process);
+
+			ELOG_DISPATCHER_DEBUG("Gang assignment (gang_id %d): slice%d seg%d %s:%d pid=%d",
+					gang->gang_id, sliceIndex, process->contentid,
+					process->listenerAddr, process->listenerPort, process->pid);
+		}
+	}
+
+	return list;
+}
 /*
  * getCdbProcessForQD:	Manufacture a CdbProcess representing the QD,
  * as if it were a worker from the executor factory.

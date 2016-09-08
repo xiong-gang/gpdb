@@ -1654,6 +1654,11 @@ typedef struct SliceReq
 	Gang	  **vecNgangs;
 	Gang	  **vec1gangs_primary_reader;
 	Gang	  **vec1gangs_entrydb_reader;
+
+	GangNew	  **vecNgangsNew;
+	GangNew	  **vec1gangs_primary_readerNew;
+	GangNew	  **vec1gangs_entrydb_readerNew;
+
 	bool		writer;
 
 }	SliceReq;
@@ -1663,6 +1668,7 @@ static void InitSliceReq(SliceReq * req);
 static void AccumSliceReq(SliceReq * inv, SliceReq * req);
 static void InventorySliceTree(Slice ** sliceMap, int sliceIndex, SliceReq * req);
 static void AssociateSlicesToProcesses(Slice ** sliceMap, int sliceIndex, SliceReq * req);
+static void AssociateSlicesToProcessesNew(Slice ** sliceMap, int sliceIndex, SliceReq * req);
 
 
 /*
@@ -1786,6 +1792,136 @@ AssignGangs(QueryDesc *queryDesc)
 		pfree(inv.vec1gangs_entrydb_reader);
 
 }
+
+
+void
+AssignGangsNew(QueryDesc *queryDesc)
+{
+	EState	   *estate = queryDesc->estate;
+	SliceTable *sliceTable = estate->es_sliceTable;
+	ListCell   *cell;
+	Slice	   *slice;
+	int			i,
+				nslices;
+	Slice	  **sliceMap;
+	SliceReq	req,
+				inv;
+
+	/* Make a map so we can access slices quickly by index. */
+	nslices = list_length(sliceTable->slices);
+	sliceMap = (Slice **) palloc(nslices * sizeof(Slice *));
+	i = 0;
+	foreach(cell, sliceTable->slices)
+	{
+		slice = (Slice *) lfirst(cell);
+		Assert(i == slice->sliceIndex);
+		sliceMap[i] = slice;
+		i++;
+	}
+
+	/* Initialize gang requirement inventory */
+	InitSliceReq(&inv);
+
+	/* Capture main slice tree requirement. */
+	InventorySliceTree(sliceMap, 0, &inv);
+
+	/* Capture initPlan slice tree requirements. */
+	for (i = sliceTable->nMotions + 1; i < nslices; i++)
+	{
+		InitSliceReq(&req);
+		InventorySliceTree(sliceMap, i, &req);
+		AccumSliceReq(&inv, &req);
+	}
+
+	/*
+	 * Get the gangs we'll use.
+	 *
+	 * As a general rule the first gang is a writer and the rest are readers.
+	 * If this happens to be an extended query protocol then all gangs are readers.
+	 */
+	{
+		int nWriterGang;
+		int nReaderGangN;
+		int nReaderGang1;
+		int nReaderGangEntryDB;
+		int nGangs;
+
+		if (queryDesc->extended_query)
+			nWriterGang = 0;
+		else
+			nWriterGang = 1;
+
+		nReaderGangN = inv.numNgangs - nWriterGang;
+		nReaderGang1 = inv.num1gangs_primary_reader;
+		nReaderGangEntryDB = inv.num1gangs_entrydb_reader;
+		nGangs = nWriterGang + nReaderGangN + nReaderGang1 + nReaderGangEntryDB;
+
+		GangNew **ppGangs = allocateGangs(nWriterGang, nReaderGangN, nReaderGang1, nReaderGangEntryDB);
+		if(ppGangs == NULL)
+			elog(ERROR, "failed to allocateGangs");
+
+		inv.vecNgangsNew = (GangNew **) palloc(sizeof(GangNew *) * inv.numNgangs);
+		inv.vec1gangs_entrydb_readerNew = (GangNew **) palloc(sizeof(GangNew *) * inv.num1gangs_entrydb_reader);
+		inv.vec1gangs_primary_readerNew = (GangNew **) palloc(sizeof(GangNew *) * inv.num1gangs_primary_reader);
+
+		int i = 0;
+		for (i = 0; i < nGangs; i++)
+		{
+			GangNew *gp = ppGangs[i];
+			Assert(gp != NULL);
+
+			switch (gp->type)
+			{
+			case GANGTYPE_PRIMARY_WRITER:
+				inv.vecNgangsNew[0] = gp;
+				break;
+
+			case GANGTYPE_PRIMARY_READER:
+				nReaderGangN--;
+				inv.vecNgangsNew[nReaderGangN] = gp;
+				break;
+
+			case GANGTYPE_SINGLETON_READER:
+				nReaderGang1--;
+				inv.vec1gangs_primary_readerNew[nReaderGang1 - 1] = gp;
+				break;
+
+			case GANGTYPE_ENTRYDB_READER:
+				nReaderGangEntryDB--;
+				inv.vec1gangs_entrydb_readerNew[nReaderGangEntryDB - 1] = gp;
+				break;
+
+			default:
+				insist_log(false, "unexpected gang type.");
+			}
+		}
+	}
+
+	/* Use the gangs to construct the CdbProcess lists in slices. */
+	inv.nxtNgang = 0;
+    inv.nxt1gang_primary_reader = 0;
+    inv.nxt1gang_entrydb_reader = 0;
+	AssociateSlicesToProcessesNew(sliceMap, 0, &inv);		/* Main tree. */
+
+	for (i = sliceTable->nMotions + 1; i < nslices; i++)
+	{
+		inv.nxtNgang = 0;
+        inv.nxt1gang_primary_reader = 0;
+        inv.nxt1gang_entrydb_reader = 0;
+		AssociateSlicesToProcessesNew(sliceMap, i, &inv);	/* An initPlan */
+	}
+
+	/* Clean up */
+	pfree(sliceMap);
+	if (inv.vecNgangs != NULL)
+		pfree(inv.vecNgangs);
+	if (inv.vec1gangs_primary_reader != NULL)
+		pfree(inv.vec1gangs_primary_reader);
+	if (inv.vec1gangs_entrydb_reader != NULL)
+		pfree(inv.vec1gangs_entrydb_reader);
+
+}
+
 
 void
 ReleaseGangs(QueryDesc *queryDesc)
@@ -1946,6 +2082,62 @@ AssociateSlicesToProcesses(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 	}
 }
 
+
+static void
+AssociateSlicesToProcessesNew(Slice ** sliceMap, int sliceIndex, SliceReq * req)
+{
+	ListCell   *cell;
+	int			childIndex;
+	Slice	   *slice = sliceMap[sliceIndex];
+
+	switch (slice->gangType)
+	{
+		case GANGTYPE_UNALLOCATED:
+			/* Roots that run on the  QD don't need a gang. */
+
+			slice->primaryGang = NULL;
+			slice->primaryProcesses = getCdbProcessesForQD(true);
+			break;
+
+		case GANGTYPE_ENTRYDB_READER:
+			Assert(slice->gangSize == 1);
+			slice->primaryProcesses = getCdbProcessListNew(req->vec1gangs_entrydb_readerNew[req->nxt1gang_entrydb_reader++],
+                                                        slice->sliceIndex,
+														NULL);
+			Assert(sliceCalculateNumSendingProcesses(slice) == countNonNullValues(slice->primaryProcesses));
+			break;
+
+		case GANGTYPE_PRIMARY_WRITER:
+			Assert(slice->gangSize == getgpsegmentCount());
+			Assert(req->numNgangs > 0 && req->nxtNgang == 0 && req->writer);
+			Assert(req->vecNgangs[0] != NULL);
+
+			slice->primaryProcesses = getCdbProcessListNew(req->vecNgangsNew[req->nxtNgang++], slice->sliceIndex, &slice->directDispatch);
+			break;
+
+		case GANGTYPE_SINGLETON_READER:
+			Assert(slice->gangSize == 1);
+			slice->primaryProcesses = getCdbProcessListNew(req->vec1gangs_primary_readerNew[req->nxt1gang_primary_reader++],
+                                                        slice->sliceIndex,
+                                                        &slice->directDispatch);
+			Assert(sliceCalculateNumSendingProcesses(slice) == countNonNullValues(slice->primaryProcesses));
+			break;
+
+		case GANGTYPE_PRIMARY_READER:
+			Assert(slice->gangSize == getgpsegmentCount());
+			slice->primaryProcesses = getCdbProcessListNew(req->vecNgangsNew[req->nxtNgang++],
+                                                        slice->sliceIndex,
+                                                        &slice->directDispatch);
+			Assert(sliceCalculateNumSendingProcesses(slice) == countNonNullValues(slice->primaryProcesses));
+			break;
+	}
+
+	foreach(cell, slice->children)
+	{
+		childIndex = lfirst_int(cell);
+		AssociateSlicesToProcessesNew(sliceMap, childIndex, req);
+	}
+}
 /*
  * Choose the execution identity (who does this executor serve?).
  * There are types:

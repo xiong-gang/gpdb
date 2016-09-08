@@ -22,6 +22,7 @@ extern int sliceCalculateNumSendingProcesses(Slice *slice);
 
 extern void InitRootSlices(QueryDesc *queryDesc);
 extern void AssignGangs(QueryDesc *queryDesc);
+extern void AssignGangsNew(QueryDesc *queryDesc);
 extern void ReleaseGangs(QueryDesc *queryDesc);
 
 #ifdef USE_ASSERT_CHECKING

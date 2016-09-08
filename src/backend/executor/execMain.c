@@ -599,7 +599,10 @@ ExecutorStart(QueryDesc *queryDesc, int eflags)
 				 * On return, gangs have been allocated and CDBProcess lists have
 				 * been filled in in the slice table.)
 				 */
-				AssignGangs(queryDesc);
+				if (gp_use_xm)
+					AssignGangsNew(queryDesc);
+				else
+					AssignGangs(queryDesc);
 			}
 		}
 

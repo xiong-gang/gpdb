@@ -343,6 +343,7 @@ GpAutoStatsModeValue gp_autostats_mode_in_functions;
 char                *gp_autostats_mode_in_functions_string;
 int                  gp_autostats_on_change_threshold = 100000;
 bool				 log_autostats=true;
+bool gp_use_xm = false;
 /* --------------------------------------------------------------------------------------------------
  * Miscellaneous developer use
  */

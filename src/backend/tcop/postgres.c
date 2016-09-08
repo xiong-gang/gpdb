@@ -4998,6 +4998,9 @@ PostgresMain(int argc, char *argv[],
 
 					/* get the client command serial# */
 					gp_command_count = pq_getmsgint(&input_message, 4);
+
+					int session_id = pq_getmsgint(&input_message, 4);
+					Assert(gp_session_id == session_id);
 					
 					elog(DEBUG1, "Message type %c received by from libpq, len = %d", firstchar, input_message.len); /* TODO: Remove this */
 									

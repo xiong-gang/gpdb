@@ -122,6 +122,12 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 				  struct SliceTable *sliceTbl,
 				  struct CdbDispatcherState *ds);
 
+static void
+cdbdisp_dispatchXNew(DispatchCommandQueryParms *pQueryParms,
+				  bool cancelOnError,
+				  struct SliceTable *sliceTbl,
+				  struct CdbDispatcherState *ds);
+
 static int *
 buildSliceIndexGangIdMap(SliceVec *sliceVec, int numSlices, int numTotalSlices);
 
@@ -266,7 +272,10 @@ cdbdisp_dispatchPlan(struct QueryDesc *queryDesc,
 	ds->primaryResults = NULL;
 	ds->dispatchParams = NULL;
 
-	cdbdisp_dispatchX(pQueryParms, cancelOnError, sliceTbl, ds);
+	if (gp_use_xm)
+		cdbdisp_dispatchXNew(pQueryParms, cancelOnError, sliceTbl, ds);
+	else
+		cdbdisp_dispatchX(pQueryParms, cancelOnError, sliceTbl, ds);
 
 	cdbdisp_destroyQueryParms(pQueryParms);
 
@@ -957,7 +966,7 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 
 	total_query_len = 1 /* 'M' */ +
 		sizeof(len) /* message length */ +
-		sizeof(gp_command_count) +
+		sizeof(gp_command_count) + sizeof(gp_session_id) +
 		sizeof(sessionUserId) + 1 /* sessionUserIsSuper */	+
 		sizeof(outerUserId) + 1 /* outerUserIsSuper */	+
 		sizeof(currentUserId) +
@@ -1000,6 +1009,10 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 	tmp = htonl(gp_command_count);
 	memcpy(pos, &tmp, sizeof(gp_command_count));
 	pos += sizeof(gp_command_count);
+
+	tmp = htonl(gp_session_id);
+	memcpy(pos, &tmp, sizeof(gp_session_id));
+	pos += sizeof(gp_session_id);
 
 	tmp = htonl(sessionUserId);
 	memcpy(pos, &tmp, sizeof(sessionUserId));
@@ -1336,6 +1349,58 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 				break;
 		}
 	}
+}
+
+
+static void
+cdbdisp_dispatchXNew(DispatchCommandQueryParms *pQueryParms,
+				  bool cancelOnError,
+				  struct SliceTable *sliceTbl,
+				  struct CdbDispatcherState *ds)
+{
+	SliceVec *sliceVector = NULL;
+	int nSlices = 1; /* slices this dispatch cares about */
+	int nTotalSlices = 1; /* total slices in sliceTbl*/
+
+	int rootIdx = pQueryParms->rootIdx;
+	char *queryText = NULL;
+	int queryTextLength = 0;
+
+	if (log_dispatch_stats)
+		ResetUsage();
+
+	Assert(sliceTbl != NULL);
+	Assert(rootIdx == 0 ||
+		   (rootIdx > sliceTbl->nMotions &&
+			rootIdx <= sliceTbl->nMotions + sliceTbl->nInitPlans));
+
+	/*
+	 * Traverse the slice tree in sliceTbl rooted at rootIdx and build a
+	 * vector of slice indexes specifying the order of [potential] dispatch.
+	 */
+	nTotalSlices = list_length(sliceTbl->slices);
+	sliceVector = palloc0(nTotalSlices * sizeof(SliceVec));
+
+	nSlices = fillSliceVector(sliceTbl, rootIdx, sliceVector, nTotalSlices);
+
+	pQueryParms->numSlices = nTotalSlices;
+	pQueryParms->sliceIndexGangIdMap = buildSliceIndexGangIdMap(sliceVector, nSlices, nTotalSlices);
+
+	/*
+	 * Allocate result array with enough slots for QEs of primary gangs.
+	 */
+	ds->primaryResults = NULL;
+	ds->dispatchParams = NULL;
+	queryText = buildGpQueryString(ds, pQueryParms, &queryTextLength);
+	cdbdisp_makeDispatcherState(ds, nSlices, cancelOnError, queryText, queryTextLength);
+
+	cdb_total_plans++;
+	cdb_total_slices += nSlices;
+	if (nSlices > cdb_max_slices)
+		cdb_max_slices = nSlices;
+
+	sendCommandToAllXM(queryText, queryTextLength);
+	pfree(sliceVector);
 }
 
 /*

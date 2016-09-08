@@ -52,6 +52,38 @@ typedef struct Gang
 	MemoryContext perGangContext;
 } Gang;
 
+typedef struct QEInfo
+{
+	int segIndex;
+	int pid;
+	int port;
+	char *hostip;
+}QEInfo;
+
+typedef struct GangNew
+{
+	GangType type;
+	int	gang_id;
+	int	size;
+
+	/*
+	 * Keep track of dispatcher use for writer gang. (reader gangs already track
+	 * this properly, since they get allocated from a list of available gangs.)
+	 */
+	bool dispatcherActive;
+
+	/* the named portal that owns this gang, NULL if none */
+	char *portal_name;
+
+	/* For debugging purposes only. These do not add any actual functionality. */
+	bool allocated;
+
+	/* should be destroyed if set */
+	bool noReuse;
+
+	QEInfo *qes;
+} GangNew;
+
 extern int qe_gang_id;
 
 extern MemoryContext GangContext;
@@ -61,6 +93,7 @@ extern Gang *allocateReaderGang(GangType type, char *portal_name);
 extern Gang *allocateWriterGang(void);
 
 extern List *getCdbProcessList(Gang *gang, int sliceIndex, struct DirectDispatchInfo *directDispatch);
+extern List *getCdbProcessListNew(GangNew *gang, int sliceIndex, struct DirectDispatchInfo *directDispatch);
 
 extern bool gangOK(Gang *gp);
 
@@ -159,5 +192,11 @@ typedef struct CdbProcess
 typedef Gang *(*CreateGangFunc)(GangType type, int gang_id, int size, int content);
 
 extern void cdbgang_setAsync(bool async);
+
+GangNew **
+allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1, int nReaderGangEntryDB);
+
+bool
+sendCommandToAllXM(const char *buf, int len);
 
 #endif   /* _CDBGANG_H_ */
