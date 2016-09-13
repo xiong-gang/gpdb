@@ -129,7 +129,7 @@ cdbdisp_dispatchXNew(DispatchCommandQueryParms *pQueryParms,
 				  struct CdbDispatcherState *ds);
 
 static int *
-buildSliceIndexGangIdMap(SliceVec *sliceVec, int numSlices, int numTotalSlices);
+buildSliceIndexGangIdMap(SliceVec *sliceVec, int numSlices, int numTotalSlices, bool *haveEntryDBSlice);
 
 /*
  * Compose and dispatch the MPPEXEC commands corresponding to a plan tree
@@ -1198,7 +1198,7 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 	nSlices = fillSliceVector(sliceTbl, rootIdx, sliceVector, nTotalSlices);
 
 	pQueryParms->numSlices = nTotalSlices;
-	pQueryParms->sliceIndexGangIdMap = buildSliceIndexGangIdMap(sliceVector, nSlices, nTotalSlices);
+	pQueryParms->sliceIndexGangIdMap = buildSliceIndexGangIdMap(sliceVector, nSlices, nTotalSlices, NULL);
 
 	/*
 	 * Allocate result array with enough slots for QEs of primary gangs.
@@ -1365,6 +1365,7 @@ cdbdisp_dispatchXNew(DispatchCommandQueryParms *pQueryParms,
 	int rootIdx = pQueryParms->rootIdx;
 	char *queryText = NULL;
 	int queryTextLength = 0;
+	bool haveEntryDBSlice = false;
 
 	if (log_dispatch_stats)
 		ResetUsage();
@@ -1384,7 +1385,7 @@ cdbdisp_dispatchXNew(DispatchCommandQueryParms *pQueryParms,
 	nSlices = fillSliceVector(sliceTbl, rootIdx, sliceVector, nTotalSlices);
 
 	pQueryParms->numSlices = nTotalSlices;
-	pQueryParms->sliceIndexGangIdMap = buildSliceIndexGangIdMap(sliceVector, nSlices, nTotalSlices);
+	pQueryParms->sliceIndexGangIdMap = buildSliceIndexGangIdMap(sliceVector, nSlices, nTotalSlices, &haveEntryDBSlice);
 
 	/*
 	 * Allocate result array with enough slots for QEs of primary gangs.
@@ -1399,7 +1400,7 @@ cdbdisp_dispatchXNew(DispatchCommandQueryParms *pQueryParms,
 	if (nSlices > cdb_max_slices)
 		cdb_max_slices = nSlices;
 
-	sendCommandToAllXM(queryText, queryTextLength);
+	sendCommandToAllXM(queryText, queryTextLength, haveEntryDBSlice);
 	pfree(sliceVector);
 }
 
@@ -1502,7 +1503,7 @@ cdbdisp_dispatchSetCommandToAllGangs(const char *strCommand,
 }
 
 static int *
-buildSliceIndexGangIdMap(SliceVec *sliceVec, int numSlices, int numTotalSlices)
+buildSliceIndexGangIdMap(SliceVec *sliceVec, int numSlices, int numTotalSlices, bool *haveEntryDBSlice)
 {
 	Assert(sliceVec != NULL && numSlices > 0 && numTotalSlices > 0);
 
@@ -1516,10 +1517,13 @@ buildSliceIndexGangIdMap(SliceVec *sliceVec, int numSlices, int numTotalSlices)
 	{
 		slice = sliceVec[index].slice;
 
-		if (slice->primaryGang == NULL)
+		if(haveEntryDBSlice != NULL && slice->gangType == GANGTYPE_ENTRYDB_READER)
+			*haveEntryDBSlice = true;
+
+		if (slice->gangId == 0)
 			continue;
 
-		sliceIndexGangIdMap[slice->sliceIndex] = slice->primaryGang->gang_id;
+		sliceIndexGangIdMap[slice->sliceIndex] = slice->gangId;
 	}
 
 	return sliceIndexGangIdMap;

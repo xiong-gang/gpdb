@@ -102,6 +102,8 @@ typedef struct Slice
 
 	struct Gang *primaryGang;
 
+	int gangId;
+
 	/*
 	 * A list of CDBProcess nodes corresponding to the worker processes
 	 * allocated to implement this plan slice.

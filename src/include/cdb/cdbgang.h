@@ -197,6 +197,6 @@ GangNew **
 allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1, int nReaderGangEntryDB);
 
 bool
-sendCommandToAllXM(const char *buf, int len);
+sendCommandToAllXM(const char *buf, int len, bool includeEntryDB);
 
 #endif   /* _CDBGANG_H_ */

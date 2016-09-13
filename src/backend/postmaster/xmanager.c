@@ -78,6 +78,27 @@ static void xmanager_exit(SIGNAL_ARGS);
 static void xmanager_handler(SIGNAL_ARGS);
 
 #define XM_SELECT_TIMEOUT 5
+
+typedef struct XMQE
+{
+	int port;
+	int pid;
+	int sessionId;
+	bool isWriter;
+	PGconn *conn;
+} XMQE;
+
+typedef struct XMConnection
+{
+	bool isFromQD;
+	char type;
+	int sock;
+	int len;
+	int received;
+	XMQE *qeInfo;
+	StringInfoData buf;
+	PQExpBuffer resultBuf;
+}XMConnection;
 /*
  * pgstat_start() -
  *
@@ -125,15 +146,6 @@ int xmanager_start(void)
 	return 0;
 }
 
-
-typedef struct XMConnection
-{
-	int sock;
-	char type;
-	int len;
-	int received;
-	StringInfoData buf;
-}XMConnection;
 
 static int
 readFromSocket(int sock, char *buf, int len, bool block)
@@ -195,6 +207,8 @@ static void closeConnection(XMConnection *conn)
 	conn->sock = 0;
 	conn->len = 0;
 	conn->received = 0;
+	conn->qeInfo = NULL;
+	conn->isFromQD = false;
 
 	if (conn->buf.data != NULL)
 	{
@@ -203,14 +217,6 @@ static void closeConnection(XMConnection *conn)
 	}
 }
 
-typedef struct XMQE
-{
-	int port;
-	int pid;
-	int sessionId;
-	bool isWriter;
-	PGconn *conn;
-} XMQE;
 
 List *g_qeList = NULL;
 
@@ -374,7 +380,6 @@ requestQEs(int count, int segIndex, int sessionId, int gangIdStart, char *hostip
 		qeInfos[i].conn = conn;
 		qeInfos[i].sessionId = sessionId;
 		qeInfos[i].isWriter = isWriter;
-		g_qeList = lappend(g_qeList, &qeInfos[i]);
 	}
 
 	return qeInfos;
@@ -382,7 +387,7 @@ requestQEs(int count, int segIndex, int sessionId, int gangIdStart, char *hostip
 
 
 static XMQE*
-handleRequestQEs(XMConnection *conn)
+handleRequestQEs(XMConnection *conn, int *pCount)
 {
 	char *ptr = conn->buf.data + 5;
 	char hostname[100];
@@ -395,7 +400,7 @@ handleRequestQEs(XMConnection *conn)
 	int tmp;
 
 	tmp = *(int*)ptr;
-	qeCount = ntohl(tmp);
+	*pCount = qeCount = ntohl(tmp);
 	ptr +=4;
 
 	tmp = *(int*)ptr;
@@ -454,6 +459,137 @@ sendResponse(XMConnection *conn, XMQE *qes, int count)
 
 	send(conn->sock, buf, p-buf, 0);
 }
+
+//static bool
+//processResults(XMConnection * xmConn)
+//{
+//	XMQE *info = xmConn->qeInfo;
+//	char *msg;
+//
+//	/*
+//	 * Receive input from QE.
+//	 */
+//	if (PQconsumeInput(info->conn) == 0)
+//	{
+//		msg = PQerrorMessage(info->conn);
+//		return true;
+//	}
+//
+//	/*
+//	 * If we have received one or more complete messages, process them.
+//	 */
+//	while (!PQisBusy(info->conn))
+//	{
+//		/* loop to call PQgetResult; won't block */
+//		PGresult *pRes;
+//		ExecStatusType resultStatus;
+//		int	resultIndex;
+//
+//		/*
+//		 * PQisBusy() does some error handling, which can
+//		 * cause the connection to die -- we can't just continue on as
+//		 * if the connection is happy without checking first.
+//		 *
+//		 * For example, cdbdisp_numPGresult() will return a completely
+//		 * bogus value!
+//		 */
+//		if (PQstatus(info->conn) == CONNECTION_BAD)
+//		{
+//			return true;
+//		}
+//
+//		/*
+//		 * Get one message.
+//		 */
+//		ELOG_DISPATCHER_DEBUG("PQgetResult");
+//		pRes = PQgetResult(info->conn);
+//
+//		/*
+//		 * Command is complete when PGgetResult() returns NULL. It is critical
+//		 * that for any connection that had an asynchronous command sent thru
+//		 * it, we call PQgetResult until it returns NULL. Otherwise, the next
+//		 * time a command is sent to that connection, it will return an error
+//		 * that there's a command pending.
+//		 */
+//		if (!pRes)
+//		{
+//			/* this is normal end of command */
+//			return true;
+//		}
+//
+//		/*
+//		 * Attach the PGresult object to the CdbDispatchResult object.
+//		 */
+//		resultIndex = cdbdisp_numPGresult(dispatchResult);
+//		cdbdisp_appendResult(dispatchResult, pRes);
+//
+//		/*
+//		 * Did a command complete successfully?
+//		 */
+//		resultStatus = PQresultStatus(pRes);
+//		if (resultStatus == PGRES_COMMAND_OK ||
+//			resultStatus == PGRES_TUPLES_OK ||
+//			resultStatus == PGRES_COPY_IN ||
+//			resultStatus == PGRES_COPY_OUT ||
+//			resultStatus == PGRES_EMPTY_QUERY)
+//		{
+//			ELOG_DISPATCHER_DEBUG("%s -> ok %s",
+//								 segdbDesc->whoami,
+//								 PQcmdStatus(pRes) ? PQcmdStatus(pRes) : "(no cmdStatus)");
+//
+//			if (resultStatus == PGRES_EMPTY_QUERY)
+//				ELOG_DISPATCHER_DEBUG("QE received empty query.");
+//
+//			/*
+//			 * Save the index of the last successful PGresult. Can be given to
+//			 * cdbdisp_getPGresult() to get tuple count, etc.
+//			 */
+//			dispatchResult->okindex = resultIndex;
+//
+//			/*
+//			 * SREH - get number of rows rejected from QE if any
+//			 */
+//			if (pRes->numRejected > 0)
+//				dispatchResult->numrowsrejected += pRes->numRejected;
+//
+//			if (resultStatus == PGRES_COPY_IN ||
+//				resultStatus == PGRES_COPY_OUT)
+//				return true;
+//		}
+//		/*
+//		 * Note QE error. Cancel the whole statement if requested.
+//		 */
+//		else
+//		{
+//			/* QE reported an error */
+//			char	   *sqlstate = PQresultErrorField(pRes, PG_DIAG_SQLSTATE);
+//			int			errcode = 0;
+//
+//			msg = PQresultErrorMessage(pRes);
+//
+//			ELOG_DISPATCHER_DEBUG("%s -> %s %s  %s",
+//								 segdbDesc->whoami,
+//								 PQresStatus(resultStatus),
+//								 sqlstate ? sqlstate : "(no SQLSTATE)",
+//								 msg);
+//
+//			/*
+//			 * Convert SQLSTATE to an error code (ERRCODE_xxx). Use a generic
+//			 * nonzero error code if no SQLSTATE.
+//			 */
+//			if (sqlstate && strlen(sqlstate) == 5)
+//				errcode = sqlstate_to_errcode(sqlstate);
+//
+//			/*
+//			 * Save first error code and the index of its PGresult buffer
+//			 * entry.
+//			 */
+//			cdbdisp_seterrcode(errcode, resultIndex, dispatchResult);
+//		}
+//	}
+//
+//	return false; /* we must keep on monitoring this socket */
+//}
 
 /* ----------
  * PgstatCollectorMain() -
@@ -637,6 +773,10 @@ NON_EXEC_STATIC void XmanagerMain(int argc, char *argv[])
 				if (aliveConn[i].sock == 0)
 				{
 					aliveConn[i].sock = newSock;
+					aliveConn[i].isFromQD = true;
+					aliveConn[i].qeInfo = NULL;
+					aliveConn[i].len = 0;
+					aliveConn[i].received = 0;
 					initStringInfo(&aliveConn[i].buf);
 					break;
 				}
@@ -647,7 +787,10 @@ NON_EXEC_STATIC void XmanagerMain(int argc, char *argv[])
 		{
 			XMConnection *conn = &aliveConn[i];
 			int sock = conn->sock;
-			if (FD_ISSET(sock, &readfds))
+			if (!FD_ISSET(sock, &readfds))
+				continue;
+
+			if (conn->isFromQD)
 			{
 				if (conn->len == 0)
 				{
@@ -684,8 +827,31 @@ NON_EXEC_STATIC void XmanagerMain(int argc, char *argv[])
 					{
 						case 'a':
 						{
-							XMQE *qes = handleRequestQEs(conn);
-							sendResponse(conn, qes, 1);
+							int count = 0;
+							XMQE *qes = handleRequestQEs(conn, &count);
+							sendResponse(conn, qes, count);
+							for (i = 0; i < count; i++)
+							{
+								XMQE *info = &qes[i];
+								g_qeList = lappend(g_qeList, info);
+
+								int j = 0;
+								for (i = 0; i < maxConns; i++)
+								{
+									if (aliveConn[j].sock == 0)
+									{
+										aliveConn[i].sock = info->conn->sock;
+										aliveConn[i].isFromQD = false;
+										aliveConn[i].qeInfo = info;
+										aliveConn[i].len = 0;
+										aliveConn[i].received = 0;
+										initStringInfo(&aliveConn[i].buf);
+										break;
+									}
+								}
+								Assert(j < maxConns);
+							}
+
 							break;
 						}
 
@@ -702,6 +868,11 @@ NON_EXEC_STATIC void XmanagerMain(int argc, char *argv[])
 					conn->len = 0;
 					conn->received = 0;
 				}
+			}
+			else
+			{
+
+
 			}
 		}
 

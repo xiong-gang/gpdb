@@ -2031,12 +2031,14 @@ AssociateSlicesToProcesses(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 			/* Roots that run on the  QD don't need a gang. */
 
 			slice->primaryGang = NULL;
+			slice->gangId = 0;
 			slice->primaryProcesses = getCdbProcessesForQD(true);
 			break;
 
 		case GANGTYPE_ENTRYDB_READER:
 			Assert(slice->gangSize == 1);
 			slice->primaryGang = req->vec1gangs_entrydb_reader[req->nxt1gang_entrydb_reader++];
+			slice->gangId = slice->primaryGang->gang_id;
 			Assert(slice->primaryGang != NULL);
 			slice->primaryProcesses = getCdbProcessList(slice->primaryGang,
                                                         slice->sliceIndex,
@@ -2048,9 +2050,9 @@ AssociateSlicesToProcesses(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 			Assert(slice->gangSize == getgpsegmentCount());
 			Assert(req->numNgangs > 0 && req->nxtNgang == 0 && req->writer);
 			Assert(req->vecNgangs[0] != NULL);
-
 			slice->primaryGang = req->vecNgangs[req->nxtNgang++];
 			Assert(slice->primaryGang != NULL);
+			slice->gangId = slice->primaryGang->gang_id;
 			slice->primaryProcesses = getCdbProcessList(slice->primaryGang, slice->sliceIndex, &slice->directDispatch);
 			break;
 
@@ -2058,6 +2060,7 @@ AssociateSlicesToProcesses(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 			Assert(slice->gangSize == 1);
 			slice->primaryGang = req->vec1gangs_primary_reader[req->nxt1gang_primary_reader++];
 			Assert(slice->primaryGang != NULL);
+			slice->gangId = slice->primaryGang->gang_id;
 			slice->primaryProcesses = getCdbProcessList(slice->primaryGang,
                                                         slice->sliceIndex,
                                                         &slice->directDispatch);
@@ -2068,6 +2071,7 @@ AssociateSlicesToProcesses(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 			Assert(slice->gangSize == getgpsegmentCount());
 			slice->primaryGang = req->vecNgangs[req->nxtNgang++];
 			Assert(slice->primaryGang != NULL);
+			slice->gangId = slice->primaryGang->gang_id;
 			slice->primaryProcesses = getCdbProcessList(slice->primaryGang,
                                                         slice->sliceIndex,
                                                         &slice->directDispatch);
@@ -2101,6 +2105,7 @@ AssociateSlicesToProcessesNew(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 
 		case GANGTYPE_ENTRYDB_READER:
 			Assert(slice->gangSize == 1);
+			slice->gangId = req->vec1gangs_entrydb_readerNew[req->nxt1gang_entrydb_reader]->gang_id;
 			slice->primaryProcesses = getCdbProcessListNew(req->vec1gangs_entrydb_readerNew[req->nxt1gang_entrydb_reader++],
                                                         slice->sliceIndex,
 														NULL);
@@ -2111,12 +2116,13 @@ AssociateSlicesToProcessesNew(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 			Assert(slice->gangSize == getgpsegmentCount());
 			Assert(req->numNgangs > 0 && req->nxtNgang == 0 && req->writer);
 			Assert(req->vecNgangs[0] != NULL);
-
+			slice->gangId = req->vecNgangsNew[req->nxtNgang]->gang_id;
 			slice->primaryProcesses = getCdbProcessListNew(req->vecNgangsNew[req->nxtNgang++], slice->sliceIndex, &slice->directDispatch);
 			break;
 
 		case GANGTYPE_SINGLETON_READER:
 			Assert(slice->gangSize == 1);
+			slice->gangId = req->vec1gangs_primary_readerNew[req->nxt1gang_primary_reader]->gang_id;
 			slice->primaryProcesses = getCdbProcessListNew(req->vec1gangs_primary_readerNew[req->nxt1gang_primary_reader++],
                                                         slice->sliceIndex,
                                                         &slice->directDispatch);
@@ -2125,6 +2131,7 @@ AssociateSlicesToProcessesNew(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 
 		case GANGTYPE_PRIMARY_READER:
 			Assert(slice->gangSize == getgpsegmentCount());
+			slice->gangId = req->vecNgangsNew[req->nxtNgang]->gang_id;
 			slice->primaryProcesses = getCdbProcessListNew(req->vecNgangsNew[req->nxtNgang++],
                                                         slice->sliceIndex,
                                                         &slice->directDispatch);

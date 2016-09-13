@@ -295,8 +295,8 @@ typedef struct XMRequestQE
 
 typedef struct XMQE
 {
-	int port;
 	int pid;
+	int port;
 } XMQE;
 
 typedef struct XMResponseQE
@@ -324,27 +324,129 @@ XMGang *g_xmGang = NULL;
 static void
 createXMConnection(CdbComponentDatabaseInfo *cdbinfo, XMConnection *conn)
 {
-	int sock;
-	struct sockaddr_in address;
+//	int sock;
+//	struct sockaddr_in address;
+//
+//	sock = socket(AF_INET, SOCK_STREAM, 0);
+//	if (sock == 0)
+//		elog(ERROR, "Failed to create socket");
+//
+//	memset(&address, 0, sizeof(struct sockaddr_in));
+//	address.sin_family = AF_INET;
+//	address.sin_port = htons(cdbinfo->port + 55);
+//	if (inet_pton(AF_INET, (char *) cdbinfo->hostip, &address.sin_addr) <= 0)
+//		elog(ERROR, "inet_pton error occured");
+//
+//	int retVal = connect(sock, (struct sockaddr *) &address, sizeof(address));
+//	if (retVal != 0)
+//		elog(ERROR, "Failed to connect QX Manager");
+//
+//	if (fcntl(sock, F_SETFL, O_NONBLOCK) == -1)
+//		elog(ERROR, "fcntl(F_SETFL, O_NONBLOCK) failed");
+//
+//	conn->sock = sock;
+//	conn->segIndex = cdbinfo->segindex;
+//	conn->hostip = pstrdup(cdbinfo->hostip);
+//
 
-	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock == 0)
-		elog(ERROR, "Failed to create socket");
+#define MAX_KEYWORDS 10
+#define MAX_INT_STRING_LEN 20
+	const char *keywords[MAX_KEYWORDS];
+	const char *values[MAX_KEYWORDS];
+	char portstr[MAX_INT_STRING_LEN];
+	char timeoutstr[MAX_INT_STRING_LEN];
+	int nkeywords = 0;
 
-	memset(&address, 0, sizeof(struct sockaddr_in));
-	address.sin_family = AF_INET;
-	address.sin_port = htons(cdbinfo->port + 55);
-	if (inet_pton(AF_INET, (char *) cdbinfo->hostip, &address.sin_addr) <= 0)
-		elog(ERROR, "inet_pton error occured");
+	/*
+	 * For entry DB connection, we make sure both "hostaddr" and "host" are empty string.
+	 * Or else, it will fall back to environment variables and won't use domain socket
+	 * in function connectDBStart.
+	 *
+	 * For other QE connections, we set "hostaddr". "host" is not used.
+	 */
+	Assert(cdbinfo->hostip != NULL);
+	keywords[nkeywords] = "hostaddr";
+	values[nkeywords] = cdbinfo->hostip;
+	nkeywords++;
 
-	int retVal = connect(sock, (struct sockaddr *) &address, sizeof(address));
-	if (retVal != 0)
-		elog(ERROR, "Failed to connect QX Manager");
+	keywords[nkeywords] = "host";
+	values[nkeywords] = "";
+	nkeywords++;
 
-	if (fcntl(sock, F_SETFL, O_NONBLOCK) == -1)
-		elog(ERROR, "fcntl(F_SETFL, O_NONBLOCK) failed");
+	snprintf(portstr, sizeof(portstr), "%u", cdbinfo->port+55);
+	keywords[nkeywords] = "port";
+	values[nkeywords] = portstr;
+	nkeywords++;
 
-	conn->sock = sock;
+	snprintf(timeoutstr, sizeof(timeoutstr), "%d", gp_segment_connect_timeout);
+	keywords[nkeywords] = "connect_timeout";
+	values[nkeywords] = timeoutstr;
+	nkeywords++;
+
+	keywords[nkeywords] = NULL;
+	values[nkeywords] = NULL;
+
+	Assert(nkeywords < MAX_KEYWORDS);
+
+	PGconn *pgconn = PQconnectStartParams(keywords, values, false);
+	if (pgconn == NULL || pgconn->status == CONNECTION_BAD)
+		elog(ERROR, "Failed to connect");
+
+	PostgresPollingStatusType flag = PGRES_POLLING_WRITING;
+	time_t		finish_time = ((time_t) -1);
+
+	/*
+	 * Set up a time limit, if connect_timeout isn't zero.
+	 */
+	if (pgconn->connect_timeout != NULL)
+	{
+		int	timeout = atoi(pgconn->connect_timeout);
+
+		if (timeout > 0)
+		{
+			/*
+			 * Rounding could cause connection to fail; need at least 2 secs
+			 */
+			if (timeout < 2)
+				timeout = 2;
+			/* calculate the finish time based on start + timeout */
+			finish_time = time(NULL) + timeout;
+		}
+	}
+
+	for (;;)
+	{
+		/*
+		 * Wait, if necessary.	Note that the initial state (just after
+		 * PQconnectStart) is to wait for the socket to select for writing.
+		 */
+		if (PQstatus(pgconn)  == CONNECTION_MADE)
+			break;
+
+		switch (flag)
+		{
+			case PGRES_POLLING_WRITING:
+				if (pqWaitTimed(0, 1, pgconn, finish_time))
+				{
+					pgconn->status = CONNECTION_BAD;
+					elog(ERROR, "Failed to connect");
+				}
+				break;
+
+			default:
+				/* Just in case we failed to set it in PQconnectPoll */
+				elog(ERROR, "Failed to connect");
+		}
+
+		/*
+		 * Now try to advance the state machine.
+		 */
+		flag = PQconnectPoll(pgconn);
+	}
+	if (PQstatus(pgconn) == CONNECTION_BAD)
+		elog(ERROR, "Failed to connect");
+
+	conn->sock = pgconn->sock;
 	conn->segIndex = cdbinfo->segindex;
 	conn->hostip = pstrdup(cdbinfo->hostip);
 }
@@ -394,7 +496,7 @@ static void sendXMRequestQE(XMConnection *conn, XMRequestQE *request)
 	int tmp = 0;
 	int len = 0;
 	int totalLen = 1 + sizeof(len) + sizeof(request->count) + sizeof(request->segIndex) +
-			sizeof(request->sessionId) + sizeof(request->hostip) +
+			sizeof(request->sessionId) + sizeof(request->gangIdStart) + sizeof(request->hostip) +
 			sizeof(request->database) + sizeof(request->user);
 	char* buf = palloc(totalLen);
 	char* pos = buf;
@@ -506,7 +608,7 @@ allocateQEs(XMConnection *conn, int count, QEInfo **ppQEs)
 	{
 		ppQEs[segIndex][i].pid = response->qeArray[i].pid;
 		ppQEs[segIndex][i].port = response->qeArray[i].port;
-		ppQEs[segIndex][i].segIndex = response->qeArray[i].port;
+		ppQEs[segIndex][i].segIndex = segIndex;
 		ppQEs[segIndex][i].hostip = pstrdup(conn->hostip);
 	}
 
@@ -515,11 +617,14 @@ allocateQEs(XMConnection *conn, int count, QEInfo **ppQEs)
 
 
 bool
-sendCommandToAllXM(const char *buf, int len)
+sendCommandToAllXM(const char *buf, int len, bool includeEntryDB)
 {
 	int i;
 	for (i = 0; i < g_xmGang->size; i++)
 	{
+		if (!includeEntryDB && i == g_xmGang->size - 1)
+			continue;
+
 		XMConnection *conn = &g_xmGang->conns[i];
 		int bytes = len;
 		const char *ptr = buf;
@@ -561,11 +666,13 @@ allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1,
 	}
 	Assert(GangContext != NULL);
 
+	MemoryContext oldContext = MemoryContextSwitchTo(GangContext);
+
 	if (g_xmGang == NULL)
 		g_xmGang = createXMGang();
 
 	for (segIndex = 0; segIndex < segmentCount; segIndex++)
-		vec[segIndex] = primaryWriterGang == NULL ? nWriterGang + nReaderGangN : nReaderGangN;
+		vec[segIndex] = primaryWriterGangNew == NULL ? nWriterGang + nReaderGangN : nReaderGangN;
 
 	vec[gp_singleton_segindex] += nReaderGang1;
 
@@ -601,7 +708,7 @@ allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1,
 			gp->qes[segIndex].segIndex = ppQEs[segIndex][qeIndex].segIndex;
 			gp->qes[segIndex].hostip = pstrdup(ppQEs[segIndex][qeIndex].hostip);
 		}
-		ppGangs[gangIndex++] = gp;
+		ppGangs[gangIndex++] = primaryWriterGangNew = gp;
 		qeIndex++;
 	}
 
@@ -644,6 +751,8 @@ allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1,
 
 		ppGangs[gangIndex++] = gp;
 	}
+
+	MemoryContextSwitchTo(oldContext);
 
 	return ppGangs;
 }
