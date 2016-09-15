@@ -199,4 +199,9 @@ allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1, int nReaderGa
 bool
 sendCommandToAllXM(const char *buf, int len, bool includeEntryDB);
 
+struct pg_result **
+getResultFromAllXM(bool includeEntryDB, int *resultCount);
+
+void checkResultNew(bool includeEntryDB);
+
 #endif   /* _CDBGANG_H_ */

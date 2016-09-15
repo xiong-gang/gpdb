@@ -973,35 +973,28 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 	}
 	else
 	{
-		if (gp_use_xm)
+		if (Gp_segment == -1 && Gp_role == GP_ROLE_EXECUTE && !Gp_is_writer)
 		{
-			SharedLocalSnapshotSlot = &dummySnapshot;
+			/*
+			 * Entry db singleton QE is a user of the shared snapshot -- not a creator.
+			 * The lookup will occur once the distributed snapshot has been received.
+			 */
+			lookupSharedSnapshot("Entry DB Singleton", "Query Dispatcher", gp_session_id);
 		}
-		else
+		else if (Gp_role == GP_ROLE_EXECUTE)
 		{
-		    if (Gp_segment == -1 && Gp_role == GP_ROLE_EXECUTE && !Gp_is_writer)
-		    {
-				/*
-				 * Entry db singleton QE is a user of the shared snapshot -- not a creator.
-				 * The lookup will occur once the distributed snapshot has been received.
-				 */
-				lookupSharedSnapshot("Entry DB Singleton", "Query Dispatcher", gp_session_id);
-		    }
-		    else if (Gp_role == GP_ROLE_EXECUTE)
+			if (Gp_is_writer)
 			{
-				if (Gp_is_writer)
-				{
-					addSharedSnapshot("Writer qExec", gp_session_id);
-				}
-				else
-				{
-					/*
-					 * NOTE: This assumes that the Slot has already been
-					 *       allocated by the writer.  Need to make sure we
-					 *       always allocate the writer qExec first.
-					 */
-					lookupSharedSnapshot("Reader qExec", "Writer qExec", gp_session_id);
-				}
+				addSharedSnapshot("Writer qExec", gp_session_id);
+			}
+			else
+			{
+				/*
+				 * NOTE: This assumes that the Slot has already been
+				 *       allocated by the writer.  Need to make sure we
+				 *       always allocate the writer qExec first.
+				 */
+				lookupSharedSnapshot("Reader qExec", "Writer qExec", gp_session_id);
 			}
 		}
 	}

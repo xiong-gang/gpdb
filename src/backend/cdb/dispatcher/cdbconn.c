@@ -507,23 +507,23 @@ cdbconn_doConnectComplete(SegmentDatabaseDescriptor *segdbDesc)
 	}
 }
 
-//PGconn*
-//createXMConnection(CdbComponentDatabaseInfo *cdbinfo)
-//{
-//#define MAX_KEYWORDS 10
-//#define MAX_INT_STRING_LEN 20
-//	const char *keywords[MAX_KEYWORDS];
-//	const char *values[MAX_KEYWORDS];
-//	char portstr[MAX_INT_STRING_LEN];
-//	int nkeywords = 0;
-//
-//	/*
-//	 * For entry DB connection, we make sure both "hostaddr" and "host" are empty string.
-//	 * Or else, it will fall back to environment variables and won't use domain socket
-//	 * in function connectDBStart.
-//	 *
-//	 * For other QE connections, we set "hostaddr". "host" is not used.
-//	 */
+PGconn*
+cdbconn_createXMConnection(CdbComponentDatabaseInfo *cdbinfo)
+{
+#define MAX_KEYWORDS 10
+#define MAX_INT_STRING_LEN 20
+	const char *keywords[MAX_KEYWORDS];
+	const char *values[MAX_KEYWORDS];
+	char portstr[MAX_INT_STRING_LEN];
+	int nkeywords = 0;
+
+	/*
+	 * For entry DB connection, we make sure both "hostaddr" and "host" are empty string.
+	 * Or else, it will fall back to environment variables and won't use domain socket
+	 * in function connectDBStart.
+	 *
+	 * For other QE connections, we set "hostaddr". "host" is not used.
+	 */
 //	if (cdbinfo->segindex == MASTER_CONTENT_ID &&
 //		GpIdentity.segindex == MASTER_CONTENT_ID)
 //	{
@@ -532,69 +532,69 @@ cdbconn_doConnectComplete(SegmentDatabaseDescriptor *segdbDesc)
 //		nkeywords++;
 //	}
 //	else
-//	{
-//		Assert(cdbinfo->hostip != NULL);
-//		keywords[nkeywords] = "hostaddr";
-//		values[nkeywords] = cdbinfo->hostip;
-//		nkeywords++;
-//	}
-//
-//	keywords[nkeywords] = "host";
-//	values[nkeywords] = "";
-//	nkeywords++;
-//
-//	snprintf(portstr, sizeof(portstr), "%u", cdbinfo->port+55);
-//	keywords[nkeywords] = "port";
-//	values[nkeywords] = portstr;
-//	nkeywords++;
-//
-//	keywords[nkeywords] = NULL;
-//	values[nkeywords] = NULL;
-//
-//	Assert(nkeywords < MAX_KEYWORDS);
-//
-//	PGconn *pgconn = PQconnectStartParams(keywords, values, false);
-//	if (pgconn == NULL || pgconn->status == CONNECTION_BAD)
-//		elog(ERROR, "Failed to connect");
-//
-//	PostgresPollingStatusType flag = PGRES_POLLING_WRITING;
-//	time_t finish_time = time(NULL) + gp_segment_connect_timeout;
-//
-//	for (;;)
-//	{
-//		/*
-//		 * Wait, if necessary.	Note that the initial state (just after
-//		 * PQconnectStart) is to wait for the socket to select for writing.
-//		 */
-//		if (PQstatus(pgconn)  == CONNECTION_MADE)
-//			break;
-//
-//		switch (flag)
-//		{
-//			case PGRES_POLLING_WRITING:
-//				if (pqWaitTimed(0, 1, pgconn, finish_time))
-//				{
-//					pgconn->status = CONNECTION_BAD;
-//					elog(ERROR, "Failed to connect");
-//				}
-//				break;
-//
-//			default:
-//				/* Just in case we failed to set it in PQconnectPoll */
-//				elog(ERROR, "Failed to connect");
-//		}
-//
-//		/*
-//		 * Now try to advance the state machine.
-//		 */
-//		flag = PQconnectPoll(pgconn);
-//	}
-//
-//	if (PQstatus(pgconn) == CONNECTION_BAD)
-//		elog(ERROR, "Failed to connect");
-//
-//	return pgconn;
-//}
+	{
+		Assert(cdbinfo->hostip != NULL);
+		keywords[nkeywords] = "hostaddr";
+		values[nkeywords] = cdbinfo->hostip;
+		nkeywords++;
+	}
+
+	keywords[nkeywords] = "host";
+	values[nkeywords] = "";
+	nkeywords++;
+
+	snprintf(portstr, sizeof(portstr), "%u", cdbinfo->port+55);
+	keywords[nkeywords] = "port";
+	values[nkeywords] = portstr;
+	nkeywords++;
+
+	keywords[nkeywords] = NULL;
+	values[nkeywords] = NULL;
+
+	Assert(nkeywords < MAX_KEYWORDS);
+
+	PGconn *pgconn = PQconnectStartParams(keywords, values, false);
+	if (pgconn == NULL || pgconn->status == CONNECTION_BAD)
+		elog(ERROR, "Failed to connect");
+
+	PostgresPollingStatusType flag = PGRES_POLLING_WRITING;
+	time_t finish_time = time(NULL) + gp_segment_connect_timeout;
+
+	for (;;)
+	{
+		/*
+		 * Wait, if necessary.	Note that the initial state (just after
+		 * PQconnectStart) is to wait for the socket to select for writing.
+		 */
+		if (PQstatus(pgconn)  == CONNECTION_MADE)
+			break;
+
+		switch (flag)
+		{
+			case PGRES_POLLING_WRITING:
+				if (pqWaitTimed(0, 1, pgconn, finish_time))
+				{
+					pgconn->status = CONNECTION_BAD;
+					elog(ERROR, "Failed to connect");
+				}
+				break;
+
+			default:
+				/* Just in case we failed to set it in PQconnectPoll */
+				elog(ERROR, "Failed to connect");
+		}
+
+		/*
+		 * Now try to advance the state machine.
+		 */
+		flag = PQconnectPoll(pgconn);
+	}
+
+	if (PQstatus(pgconn) == CONNECTION_BAD)
+		elog(ERROR, "Failed to connect");
+
+	return pgconn;
+}
 
 
 /* Disconnect from QE */

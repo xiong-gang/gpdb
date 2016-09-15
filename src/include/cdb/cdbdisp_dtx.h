@@ -39,6 +39,17 @@ cdbdisp_dispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 								   CdbDispatchDirectDesc *direct,
 								   char *argument, int argumentLength );
 
+struct pg_result **
+cdbdisp_dispatchDtxProtocolCommandNew(DtxProtocolCommand dtxProtocolCommand,
+								   int flags,
+								   char	*dtxProtocolCommandLoggingStr,
+								   char	*gid,
+								   DistributedTransactionId	gxid,
+								   StringInfo errmsgbuf,
+								   int *resultCount,
+								   bool* badGangs,
+								   CdbDispatchDirectDesc *direct,
+								   char *argument, int argumentLength );
 
 /*
  * used to take the current Transaction Snapshot and serialized a version of it

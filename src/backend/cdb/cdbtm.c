@@ -2212,11 +2212,19 @@ doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand, int flags,
 				 direct->directed_dispatch ? direct->content[0] : -1);
 
 	initStringInfo(&errbuf);
-	results = cdbdisp_dispatchDtxProtocolCommand(dtxProtocolCommand, flags,
-												 dtxProtocolCommandStr,
-												 gid, gxid,
-												 &errbuf, &resultCount, badGangs, direct,
-												 serializedDtxContextInfo, serializedDtxContextInfoLen);
+
+	if (gp_use_xm)
+		results = cdbdisp_dispatchDtxProtocolCommandNew(dtxProtocolCommand, flags,
+													 dtxProtocolCommandStr,
+													 gid, gxid,
+													 &errbuf, &resultCount, badGangs, direct,
+													 serializedDtxContextInfo, serializedDtxContextInfoLen);
+	else
+		results = cdbdisp_dispatchDtxProtocolCommand(dtxProtocolCommand, flags,
+													 dtxProtocolCommandStr,
+													 gid, gxid,
+													 &errbuf, &resultCount, badGangs, direct,
+													 serializedDtxContextInfo, serializedDtxContextInfoLen);
 
 	if (errbuf.len > 0)
 	{

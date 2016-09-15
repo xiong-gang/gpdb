@@ -89,8 +89,8 @@ cdbconn_doConnectStart(SegmentDatabaseDescriptor *segdbDesc,
 void
 cdbconn_doConnectComplete(SegmentDatabaseDescriptor *segdbDesc);
 
-//PGconn*
-//createXMConnection(CdbComponentDatabaseInfo *cdbinfo);
+PGconn*
+cdbconn_createXMConnection(struct CdbComponentDatabaseInfo *cdbinfo);
 
 /* Disconnect from QE */
 void cdbconn_disconnect(SegmentDatabaseDescriptor *segdbDesc);

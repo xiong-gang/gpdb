@@ -2115,7 +2115,6 @@ AssociateSlicesToProcessesNew(Slice ** sliceMap, int sliceIndex, SliceReq * req)
 		case GANGTYPE_PRIMARY_WRITER:
 			Assert(slice->gangSize == getgpsegmentCount());
 			Assert(req->numNgangs > 0 && req->nxtNgang == 0 && req->writer);
-			Assert(req->vecNgangs[0] != NULL);
 			slice->gangId = req->vecNgangsNew[req->nxtNgang]->gang_id;
 			slice->primaryProcesses = getCdbProcessListNew(req->vecNgangsNew[req->nxtNgang++], slice->sliceIndex, &slice->directDispatch);
 			break;

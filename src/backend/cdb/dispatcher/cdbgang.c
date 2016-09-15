@@ -269,6 +269,7 @@ allocateWriterGang()
 	return writerGang;
 }
 
+
 /*
  * Creates a new gang by logging on a session to each segDB involved.
  *
@@ -311,6 +312,8 @@ typedef struct XMConnection
 	int sock;
 	int segIndex;
 	char *hostip;
+	PGconn *pgconn;
+	bool finished;
 }XMConnection;
 
 typedef struct XMGang
@@ -324,131 +327,35 @@ XMGang *g_xmGang = NULL;
 static void
 createXMConnection(CdbComponentDatabaseInfo *cdbinfo, XMConnection *conn)
 {
-	int sock;
-	struct sockaddr_in address;
-
-	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock == 0)
-		elog(ERROR, "Failed to create socket");
-
-	memset(&address, 0, sizeof(struct sockaddr_in));
-	address.sin_family = AF_INET;
-	address.sin_port = htons(cdbinfo->port + 55);
-	if (inet_pton(AF_INET, (char *) cdbinfo->hostip, &address.sin_addr) <= 0)
-		elog(ERROR, "inet_pton error occured");
-
-	int retVal = connect(sock, (struct sockaddr *) &address, sizeof(address));
-	if (retVal != 0)
-		elog(ERROR, "Failed to connect QX Manager");
-
-	if (fcntl(sock, F_SETFL, O_NONBLOCK) == -1)
-		elog(ERROR, "fcntl(F_SETFL, O_NONBLOCK) failed");
-
-	conn->sock = sock;
-	conn->segIndex = cdbinfo->segindex;
-	conn->hostip = pstrdup(cdbinfo->hostip);
+//	int sock;
+//	struct sockaddr_in address;
 //
+//	sock = socket(AF_INET, SOCK_STREAM, 0);
+//	if (sock == 0)
+//		elog(ERROR, "Failed to create socket");
 //
-//#define MAX_KEYWORDS 10
-//#define MAX_INT_STRING_LEN 20
-//	const char *keywords[MAX_KEYWORDS];
-//	const char *values[MAX_KEYWORDS];
-//	char portstr[MAX_INT_STRING_LEN];
-//	char timeoutstr[MAX_INT_STRING_LEN];
-//	int nkeywords = 0;
+//	memset(&address, 0, sizeof(struct sockaddr_in));
+//	address.sin_family = AF_INET;
+//	address.sin_port = htons(cdbinfo->port + 55);
+//	if (inet_pton(AF_INET, (char *) cdbinfo->hostip, &address.sin_addr) <= 0)
+//		elog(ERROR, "inet_pton error occured");
 //
-//	/*
-//	 * For entry DB connection, we make sure both "hostaddr" and "host" are empty string.
-//	 * Or else, it will fall back to environment variables and won't use domain socket
-//	 * in function connectDBStart.
-//	 *
-//	 * For other QE connections, we set "hostaddr". "host" is not used.
-//	 */
-//	Assert(cdbinfo->hostip != NULL);
-//	keywords[nkeywords] = "hostaddr";
-//	values[nkeywords] = cdbinfo->hostip;
-//	nkeywords++;
+//	int retVal = connect(sock, (struct sockaddr *) &address, sizeof(address));
+//	if (retVal != 0)
+//		elog(ERROR, "Failed to connect QX Manager");
 //
-//	keywords[nkeywords] = "host";
-//	values[nkeywords] = "";
-//	nkeywords++;
+//	if (fcntl(sock, F_SETFL, O_NONBLOCK) == -1)
+//		elog(ERROR, "fcntl(F_SETFL, O_NONBLOCK) failed");
 //
-//	snprintf(portstr, sizeof(portstr), "%u", cdbinfo->port+55);
-//	keywords[nkeywords] = "port";
-//	values[nkeywords] = portstr;
-//	nkeywords++;
-//
-//	snprintf(timeoutstr, sizeof(timeoutstr), "%d", gp_segment_connect_timeout);
-//	keywords[nkeywords] = "connect_timeout";
-//	values[nkeywords] = timeoutstr;
-//	nkeywords++;
-//
-//	keywords[nkeywords] = NULL;
-//	values[nkeywords] = NULL;
-//
-//	Assert(nkeywords < MAX_KEYWORDS);
-//
-//	PGconn *pgconn = PQconnectStartParams(keywords, values, false);
-//	if (pgconn == NULL || pgconn->status == CONNECTION_BAD)
-//		elog(ERROR, "Failed to connect");
-//
-//	PostgresPollingStatusType flag = PGRES_POLLING_WRITING;
-//	time_t		finish_time = ((time_t) -1);
-//
-//	/*
-//	 * Set up a time limit, if connect_timeout isn't zero.
-//	 */
-//	if (pgconn->connect_timeout != NULL)
-//	{
-//		int	timeout = atoi(pgconn->connect_timeout);
-//
-//		if (timeout > 0)
-//		{
-//			/*
-//			 * Rounding could cause connection to fail; need at least 2 secs
-//			 */
-//			if (timeout < 2)
-//				timeout = 2;
-//			/* calculate the finish time based on start + timeout */
-//			finish_time = time(NULL) + timeout;
-//		}
-//	}
-//
-//	for (;;)
-//	{
-//		/*
-//		 * Wait, if necessary.	Note that the initial state (just after
-//		 * PQconnectStart) is to wait for the socket to select for writing.
-//		 */
-//		if (PQstatus(pgconn)  == CONNECTION_MADE)
-//			break;
-//
-//		switch (flag)
-//		{
-//			case PGRES_POLLING_WRITING:
-//				if (pqWaitTimed(0, 1, pgconn, finish_time))
-//				{
-//					pgconn->status = CONNECTION_BAD;
-//					elog(ERROR, "Failed to connect");
-//				}
-//				break;
-//
-//			default:
-//				/* Just in case we failed to set it in PQconnectPoll */
-//				elog(ERROR, "Failed to connect");
-//		}
-//
-//		/*
-//		 * Now try to advance the state machine.
-//		 */
-//		flag = PQconnectPoll(pgconn);
-//	}
-//	if (PQstatus(pgconn) == CONNECTION_BAD)
-//		elog(ERROR, "Failed to connect");
-//
-//	conn->sock = pgconn->sock;
+//	conn->sock = sock;
 //	conn->segIndex = cdbinfo->segindex;
 //	conn->hostip = pstrdup(cdbinfo->hostip);
+
+	PGconn *pgconn = cdbconn_createXMConnection(cdbinfo);
+	conn->pgconn = pgconn;
+	conn->sock = pgconn->sock;
+	conn->segIndex = cdbinfo->segindex;
+	conn->hostip = pstrdup(cdbinfo->hostip);
 }
 
 static XMGang*
@@ -641,10 +548,221 @@ sendCommandToAllXM(const char *buf, int len, bool includeEntryDB)
 			bytes -= sent;
 			ptr += sent;
 		}
+		conn->finished = false;
 	}
 	return true;
 }
 
+
+static bool
+processResults(XMConnection *conn, PQExpBufferData *buffer, int *count)
+{
+	char *msg;
+	PGconn *pgconn = conn->pgconn;
+	/*
+	 * Receive input from QE.
+	 */
+	if (PQconsumeInput(pgconn) == 0)
+	{
+		msg = PQerrorMessage(pgconn);
+		return true;
+	}
+
+	/*
+	 * If we have received one or more complete messages, process them.
+	 */
+	while (!PQisBusy(pgconn))
+	{
+		/* loop to call PQgetResult; won't block */
+		PGresult *pRes;
+		ExecStatusType resultStatus;
+
+		/*
+		 * PQisBusy() does some error handling, which can
+		 * cause the connection to die -- we can't just continue on as
+		 * if the connection is happy without checking first.
+		 *
+		 * For example, cdbdisp_numPGresult() will return a completely
+		 * bogus value!
+		 */
+		if (PQstatus(pgconn) == CONNECTION_BAD)
+		{
+			return true;
+		}
+
+		/*
+		 * Get one message.
+		 */
+		ELOG_DISPATCHER_DEBUG("PQgetResult");
+		pRes = PQgetResult(pgconn);
+
+		/*
+		 * Command is complete when PGgetResult() returns NULL. It is critical
+		 * that for any connection that had an asynchronous command sent thru
+		 * it, we call PQgetResult until it returns NULL. Otherwise, the next
+		 * time a command is sent to that connection, it will return an error
+		 * that there's a command pending.
+		 */
+		if (!pRes)
+		{
+			/* this is normal end of command */
+			return true;
+		}
+
+		/*
+		 * Attach the PGresult object to the CdbDispatchResult object.
+		 */
+		appendBinaryPQExpBuffer(buffer, (char*)&pRes, sizeof(pRes));
+		(*count)++;
+
+		/*
+		 * Did a command complete successfully?
+		 */
+		resultStatus = PQresultStatus(pRes);
+		if (resultStatus == PGRES_COMMAND_OK ||
+			resultStatus == PGRES_TUPLES_OK ||
+			resultStatus == PGRES_COPY_IN ||
+			resultStatus == PGRES_COPY_OUT ||
+			resultStatus == PGRES_EMPTY_QUERY)
+		{
+			if (resultStatus == PGRES_COPY_IN ||
+				resultStatus == PGRES_COPY_OUT)
+				return true;
+		}
+		/*
+		 * Note QE error. Cancel the whole statement if requested.
+		 */
+		else
+		{
+//			/* QE reported an error */
+//			char	   *sqlstate = PQresultErrorField(pRes, PG_DIAG_SQLSTATE);
+//			int			errcode = 0;
+//
+//			msg = PQresultErrorMessage(pRes);
+
+		}
+	}
+
+	return false; /* we must keep on monitoring this socket */
+}
+
+
+struct pg_result **
+getResultFromAllXM(bool includeEntryDB, int *resCount)
+{
+	fd_set readfds;
+	int nfd;
+	int i;
+	PQExpBufferData *buffer = createPQExpBuffer();
+
+	*resCount = 0;
+
+	for(;;)
+	{
+		int maxfd = 0;
+		FD_ZERO(&readfds);
+		for (i = 0; i < g_xmGang->size; i++)
+		{
+			if (!includeEntryDB && i == g_xmGang->size - 1)
+				continue;
+			XMConnection *conn = &g_xmGang->conns[i];
+			int sock = conn->sock;
+
+			if (conn->finished)
+				continue;
+
+			if (sock != 0)
+				FD_SET(sock, &readfds);
+
+			if (sock > maxfd)
+				maxfd = sock;
+		}
+
+		if (maxfd == 0)
+			break;
+
+		nfd = select(maxfd + 1, &readfds, NULL, NULL, NULL);
+
+		if (nfd < 0 && errno != EINTR)
+		{
+			elog(LOG, "select error");
+			continue;
+		}
+
+		for (i = 0; i < g_xmGang->size; i++)
+		{
+			if (!includeEntryDB && i == g_xmGang->size - 1)
+				continue;
+			XMConnection *conn = &g_xmGang->conns[i];
+			if (FD_ISSET(conn->sock, &readfds))
+			{
+				conn->pgconn->asyncStatus = PGASYNC_BUSY;
+				if (processResults(conn, buffer, resCount))
+					conn->finished = true;
+			}
+		}
+	}
+
+	return (struct pg_result**)buffer->data;
+}
+
+void checkResultNew(bool includeEntryDB)
+{
+	fd_set readfds;
+	int nfd;
+	int i;
+	PQExpBufferData *buffer = createPQExpBuffer();
+	int resCount;
+
+	for(;;)
+	{
+		int maxfd = 0;
+		FD_ZERO(&readfds);
+
+		for (i = 0; i < g_xmGang->size; i++)
+		{
+			if (!includeEntryDB && i == g_xmGang->size - 1)
+				continue;
+			XMConnection *conn = &g_xmGang->conns[i];
+			int sock = conn->sock;
+
+			if (conn->finished)
+				continue;
+
+			if (sock != 0)
+				FD_SET(sock, &readfds);
+
+			if (sock > maxfd)
+				maxfd = sock;
+		}
+
+		if (maxfd == 0)
+			break;
+
+		nfd = select(maxfd + 1, &readfds, NULL, NULL, NULL);
+
+		if (nfd < 0 && errno != EINTR)
+		{
+			elog(LOG, "select error");
+			continue;
+		}
+
+		for (i = 0; i < g_xmGang->size; i++)
+		{
+			if (!includeEntryDB && i == g_xmGang->size - 1)
+				continue;
+			XMConnection *conn = &g_xmGang->conns[i];
+			if (FD_ISSET(conn->sock, &readfds))
+			{
+				conn->pgconn->asyncStatus = PGASYNC_BUSY;
+				if (processResults(conn, buffer, &resCount))
+					conn->finished = true;
+			}
+		}
+	}
+
+	return;
+}
 
 GangNew **
 allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1,

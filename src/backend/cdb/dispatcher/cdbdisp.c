@@ -114,7 +114,11 @@ CdbCheckDispatchResult(struct CdbDispatcherState *ds,
 {
 	PG_TRY();
 	{
-		(pDispatchFuncs->checkResults)(ds, waitMode);
+		if (gp_use_xm)
+			checkResultNew(false);
+		else
+			(pDispatchFuncs->checkResults)(ds, waitMode);
+
 	}
 	PG_CATCH();
 	{

@@ -54,6 +54,10 @@ buildGpDtxProtocolCommand(struct CdbDispatcherState *ds,
 						  DispatchCommandDtxProtocolParms * pDtxProtocolParms,
 						  int *finalLen);
 
+static char *
+buildGpDtxProtocolCommandNew(DispatchCommandDtxProtocolParms * pDtxProtocolParms,
+							 int *finalLen);
+
 /*
  * cdbdisp_dispatchDtxProtocolCommand:
  * Sends a non-cancelable command to all segment dbs
@@ -167,6 +171,67 @@ cdbdisp_dispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	*numresults = cdb_pgresults.numResults;
 	return cdb_pgresults.pg_results;
 }
+
+struct pg_result **
+cdbdisp_dispatchDtxProtocolCommandNew(DtxProtocolCommand dtxProtocolCommand,
+								   int flags,
+								   char *dtxProtocolCommandLoggingStr,
+								   char *gid,
+								   DistributedTransactionId gxid,
+								   StringInfo errmsgbuf,
+								   int *numresults,
+								   bool *badGangs,
+								   CdbDispatchDirectDesc *direct,
+								   char *serializedDtxContextInfo,
+								   int serializedDtxContextInfoLen)
+{
+	DispatchCommandDtxProtocolParms dtxProtocolParms;
+	GangNew *primaryGang;
+	char *queryText = NULL;
+	int queryTextLen = 0;
+
+	elog((Debug_print_full_dtm ? LOG : DEBUG5),
+		 "cdbdisp_dispatchDtxProtocolCommand: %s for gid = %s, direct content #: %d",
+		 dtxProtocolCommandLoggingStr, gid,
+		 direct->directed_dispatch ? direct->content[0] : -1);
+
+	*badGangs = false;
+
+	MemSet(&dtxProtocolParms, 0, sizeof(dtxProtocolParms));
+	dtxProtocolParms.dtxProtocolCommand = dtxProtocolCommand;
+	dtxProtocolParms.flags = flags;
+	dtxProtocolParms.dtxProtocolCommandLoggingStr =
+		dtxProtocolCommandLoggingStr;
+	if (strlen(gid) >= TMGIDSIZE)
+		elog(PANIC, "Distribute transaction identifier too long (%d)", (int) strlen(gid));
+	memcpy(dtxProtocolParms.gid, gid, TMGIDSIZE);
+	dtxProtocolParms.gxid = gxid;
+	dtxProtocolParms.serializedDtxContextInfo = serializedDtxContextInfo;
+	dtxProtocolParms.serializedDtxContextInfoLen = serializedDtxContextInfoLen;
+
+	/*
+	 * Allocate a primary QE for every available segDB in the system.
+	 */
+	GangNew **ppGangs = allocateGangs(1, 0, 0, 0);
+	primaryGang = ppGangs[0];
+
+	Assert(primaryGang);
+
+	if (primaryGang->dispatcherActive)
+	{
+		elog(LOG, "cdbdisp_dispatchDtxProtocolCommand: primary gang marked active re-marking");
+		primaryGang->dispatcherActive = false;
+	}
+
+	/*
+	 * Dispatch the command.
+	 */
+
+	queryText = buildGpDtxProtocolCommandNew(&dtxProtocolParms, &queryTextLen);
+	sendCommandToAllXM(queryText, queryTextLen, false);
+	return getResultFromAllXM(false, numresults);
+}
+
 
 char *
 qdSerializeDtxContextInfo(int *size, bool wantSnapshot, bool inCursor,
@@ -362,6 +427,95 @@ buildGpDtxProtocolCommand(struct CdbDispatcherState *ds,
 														 ALLOCSET_DEFAULT_MAXSIZE);
 
 	shared_query = MemoryContextAlloc(ds->dispatchStateContext, total_query_len);
+	pos = shared_query;
+
+	*pos++ = 'T';
+
+	pos += sizeof(len); /* placeholder for message length */
+
+	tmp = htonl(dtxProtocolCommand);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(flags);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(loggingStrLen);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	memcpy(pos, dtxProtocolCommandLoggingStr, loggingStrLen);
+	pos += loggingStrLen;
+
+	tmp = htonl(gidLen);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	memcpy(pos, gid, gidLen);
+	pos += gidLen;
+
+	tmp = htonl(gxid);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(serializedDtxContextInfoLen);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	if (serializedDtxContextInfoLen > 0)
+	{
+		memcpy(pos, serializedDtxContextInfo, serializedDtxContextInfoLen);
+		pos += serializedDtxContextInfoLen;
+	}
+
+	len = pos - shared_query - 1;
+
+	/*
+	 * fill in length placeholder
+	 */
+	tmp = htonl(len);
+	memcpy(shared_query + 1, &tmp, sizeof(tmp));
+
+	if (finalLen)
+		*finalLen = len + 1;
+
+	return shared_query;
+}
+
+
+static char *
+buildGpDtxProtocolCommandNew(DispatchCommandDtxProtocolParms * pDtxProtocolParms,
+							 int *finalLen)
+{
+	int	dtxProtocolCommand = (int) pDtxProtocolParms->dtxProtocolCommand;
+	int	flags = pDtxProtocolParms->flags;
+	char *dtxProtocolCommandLoggingStr = pDtxProtocolParms->dtxProtocolCommandLoggingStr;
+	char *gid = pDtxProtocolParms->gid;
+	int	gxid = pDtxProtocolParms->gxid;
+	char *serializedDtxContextInfo = pDtxProtocolParms->serializedDtxContextInfo;
+	int	serializedDtxContextInfoLen = pDtxProtocolParms->serializedDtxContextInfoLen;
+	int	tmp = 0;
+	int	len = 0;
+
+	int	loggingStrLen = strlen(dtxProtocolCommandLoggingStr) + 1;
+	int	gidLen = strlen(gid) + 1;
+	int	total_query_len = 1 /* 'T' */ +
+		sizeof(len) +
+		sizeof(dtxProtocolCommand) +
+		sizeof(flags) +
+		sizeof(loggingStrLen) +
+		loggingStrLen +
+		sizeof(gidLen) +
+		gidLen +
+		sizeof(gxid) +
+		sizeof(serializedDtxContextInfoLen) +
+		serializedDtxContextInfoLen;
+
+	char *shared_query = NULL;
+	char *pos = NULL;
+
+	shared_query = palloc(total_query_len);
 	pos = shared_query;
 
 	*pos++ = 'T';

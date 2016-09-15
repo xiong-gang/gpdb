@@ -100,6 +100,11 @@ typedef struct XMConnection
 	int qeCount;
 	List *qes;
 }XMConnection;
+
+
+List *g_qeList = NULL;
+
+
 /*
  * pgstat_start() -
  *
@@ -147,62 +152,7 @@ int xmanager_start(void)
 	return 0;
 }
 
-
-static int
-readFromSocket(int sock, char *buf, int len, bool block)
-{
-	char *p = buf;
-	char *q = p + len;
-	while (p < q)
-	{
-		int n = recv(sock, p, q - p, 0);
-		if (n == -1)
-		{
-			if (errno == EINTR)
-				continue;
-
-			if (errno == EAGAIN || errno == EINPROGRESS)
-			{
-				if (block)
-					continue;
-				else
-					break;
-			}
-
-			elog(WARNING, "Error when receive from %d, errno:%d", sock, errno);
-			return -1;
-		}
-		else if (n == 0)
-			return -1;
-		else
-			p += n;
-	}
-
-	return p - buf;
-}
-
-static int
-peekHeader(int sock)
-{
-	char buf[5];
-	int ret = recv(sock, &buf, 5, MSG_PEEK | MSG_DONTWAIT);
-
-	if (ret == 0)
-		return -1;
-	else if (ret == -1)
-	{
-		if (errno == EAGAIN || errno == EINPROGRESS)
-			return 0;
-		else if (errno == EINTR)
-			return 0;
-		else
-			return -1;
-	}
-	else
-		return ret;
-}
-
-static void destroyQE(XMQE *qe)
+static void resetQE(XMQE *qe)
 {
 	return;
 }
@@ -217,7 +167,8 @@ static void closeConnection(XMConnection *conn)
 	foreach(cell, conn->qes)
 	{
 		XMQE *qe = (XMQE*)lfirst(cell);
-		destroyQE(qe);
+		resetQE(qe);
+		g_qeList = lappend(g_qeList, qe);
 	}
 
 	conn->qeCount = 0;
@@ -230,8 +181,6 @@ static void closeConnection(XMConnection *conn)
 	}
 }
 
-
-List *g_qeList = NULL;
 
 static PGconn*
 connectPostMaster(const char *gpqeid, const char *hostip, const char *database, const char *user,
@@ -351,7 +300,7 @@ buildqeid(char *buf, int bufsz, int segIndex, int sessionId, bool is_writer, int
 }
 
 static XMQE*
-findQEBySessionId(int sessionId, bool findWriter)
+findWriterQEBySessionId(int sessionId)
 {
 	ListCell *cell;
 	foreach(cell, g_qeList)
@@ -359,7 +308,7 @@ findQEBySessionId(int sessionId, bool findWriter)
 		XMQE *info = lfirst(cell);
 		if (info->sessionId == sessionId)
 		{
-			if (findWriter && !info->isWriter)
+			if (!info->isWriter)
 				continue;
 
 			return info;
@@ -373,12 +322,7 @@ static XMQE*
 requestQEs(XMConnection *conn, int segIndex, int sessionId, int gangIdStart, char *hostip, char *database, char*user)
 {
 	char gpqeid[100];
-	bool isWriter = false;
 	int count = conn->qeCount;
-
-	XMQE *info = findQEBySessionId(sessionId, false);
-	if (info == NULL)
-		isWriter = true;
 
 	int i = 0;
 	XMQE *qeInfos = palloc(count * sizeof(XMQE));
@@ -386,6 +330,13 @@ requestQEs(XMConnection *conn, int segIndex, int sessionId, int gangIdStart, cha
 	{
 		int port;
 		int pid;
+		bool isWriter;
+
+		if (conn->qes == NULL)
+			isWriter = true;
+		else
+			isWriter = false;
+
 		buildqeid(gpqeid, sizeof(gpqeid), segIndex, sessionId, isWriter, gangIdStart++);
 		PGconn *pgconn = connectPostMaster(gpqeid, hostip, database, user, NULL, &port, &pid);
 
@@ -456,10 +407,29 @@ static void forwardPlan(XMConnection *conn)
 	foreach(cell, conn->qes)
 	{
 		XMQE *info = lfirst(cell);
+		info->finished = false;
 		Assert(info->sessionId == sessionId);
 		PQsendGpQuery_shared(info->conn, conn->buf.data, totalLen);
 	}
 }
+
+static void forwardDtxCommand(XMConnection *conn)
+{
+	int totalLen = conn->len + 1;
+
+	ListCell *cell;
+	foreach(cell, conn->qes)
+	{
+		XMQE *info = lfirst(cell);
+		info->finished = false;
+
+		if (!info->isWriter)
+			continue;
+
+		PQsendGpQuery_shared(info->conn, conn->buf.data, totalLen);
+	}
+}
+
 
 static bool
 processResults(XMQE *info)
@@ -555,14 +525,15 @@ processResults(XMQE *info)
 }
 
 
+//todo
 static void handleQEResults(XMConnection *conn)
 {
 	fd_set readfds;
 	int nfd;
-	int maxfd = 0;
 
 	for(;;)
 	{
+		int maxfd = 0;
 		FD_ZERO(&readfds);
 		ListCell *cell;
 		foreach(cell, conn->qes)
@@ -597,11 +568,97 @@ static void handleQEResults(XMConnection *conn)
 			if (FD_ISSET(qe->conn->sock, &readfds))
 			{
 				if (processResults(qe))
+				{
+					send(conn->sock, qe->conn->inBuffer, qe->conn->inEnd, 0);
 					qe->finished = true;
+				}
 			}
 		}
 	}
 }
+
+static bool readDtxResult(XMQE *info)
+{
+	while (!PQisBusy(info->conn))
+	{
+		/* loop to call PQgetResult; won't block */
+		PGresult *pRes;
+		ExecStatusType resultStatus;
+
+		/*
+		 * PQisBusy() does some error handling, which can
+		 * cause the connection to die -- we can't just continue on as
+		 * if the connection is happy without checking first.
+		 *
+		 * For example, cdbdisp_numPGresult() will return a completely
+		 * bogus value!
+		 */
+		if (PQstatus(info->conn) == CONNECTION_BAD)
+			return false;
+
+		pRes = PQgetResult(info->conn);
+
+		if (!pRes)
+			return true;
+	}
+
+	return false;
+}
+
+static XMQE *
+getWriterQE(XMConnection *conn)
+{
+	ListCell *cell;
+	foreach(cell, conn->qes)
+	{
+		XMQE *qe = (XMQE*)lfirst(cell);
+		if (qe->isWriter)
+			return qe;
+	}
+	return NULL;
+}
+
+static void
+handleDtxResult(XMConnection *conn)
+{
+	XMQE *qe = getWriterQE(conn);
+	Assert(qe != NULL);
+
+	fd_set readfds;
+	int nfd;
+	int sock = qe->conn->sock;
+
+	for(;;)
+	{
+		FD_ZERO(&readfds);
+		FD_SET(sock, &readfds);
+
+		nfd = select(sock + 1, &readfds, NULL, NULL, NULL);
+		if (nfd < 0)
+		{
+			if(errno == EINTR)
+				continue;
+
+			elog(ERROR, "select error");
+		}
+
+		if (!FD_ISSET(sock, &readfds))
+			continue;
+
+		if (PQconsumeInput(qe->conn) == 0)
+			continue;
+
+		if (!readDtxResult(qe))
+			elog(WARNING, "dtx command failed");
+		else
+			break;
+	}
+
+	qe->finished = true;
+	int bytesSent = send(conn->sock, qe->conn->inBuffer, qe->conn->inEnd, 0);
+	elog(LOG, "send DTX result. %d of %d bytes sent", bytesSent, qe->conn->inEnd);
+}
+
 
 static void
 sendResponse(XMConnection *conn, XMQE *qes)
@@ -633,7 +690,10 @@ handleIncomingConnection(void *arg)
 
 	for(;;)
 	{
-		read(pConn->sock, pConn->buf.data, 1);
+		int n = read(pConn->sock, pConn->buf.data, 1);
+		if (n != 1)
+			break;
+
 		pConn->type = *pConn->buf.data;
 
 		switch (pConn->type)
@@ -660,12 +720,26 @@ handleIncomingConnection(void *arg)
 					handleQEResults(pConn);
 					break;
 
+				case 'T':
+					read(pConn->sock, pConn->buf.data+1, 4);
+					memcpy(&pConn->len, pConn->buf.data+1, 4);
+					pConn->len = ntohl(pConn->len);
+					read(pConn->sock, pConn->buf.data + 5, pConn->len - 4);
+
+					forwardDtxCommand(pConn);
+					handleDtxResult(pConn);
+					break;
+
 				default:
 					elog(WARNING, "received unexpected request");
 					closeConnection(pConn);
 					return (NULL);
 		}
 	}
+
+
+	closeConnection(pConn);
+
 	return (NULL);
 }
 
