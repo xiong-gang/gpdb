@@ -85,19 +85,20 @@ typedef struct XMQE
 	int pid;
 	int sessionId;
 	bool isWriter;
+	bool finished;
 	PGconn *conn;
+	PQExpBufferData *buffer;
 } XMQE;
 
 typedef struct XMConnection
 {
-	bool isFromQD;
 	char type;
 	int sock;
 	int len;
-	int received;
-	XMQE *qeInfo;
 	StringInfoData buf;
-	PQExpBuffer resultBuf;
+	pthread_t thread;
+	int qeCount;
+	List *qes;
 }XMConnection;
 /*
  * pgstat_start() -
@@ -201,15 +202,27 @@ peekHeader(int sock)
 		return ret;
 }
 
+static void destroyQE(XMQE *qe)
+{
+	return;
+}
+
 static void closeConnection(XMConnection *conn)
 {
 	close(conn->sock);
 	conn->sock = 0;
 	conn->len = 0;
-	conn->received = 0;
-	conn->qeInfo = NULL;
-	conn->isFromQD = false;
 
+	ListCell *cell;
+	foreach(cell, conn->qes)
+	{
+		XMQE *qe = (XMQE*)lfirst(cell);
+		destroyQE(qe);
+	}
+
+	conn->qeCount = 0;
+	conn->qes = NULL;
+	conn->type = 0;
 	if (conn->buf.data != NULL)
 	{
 		pfree(conn->buf.data);
@@ -357,10 +370,11 @@ findQEBySessionId(int sessionId, bool findWriter)
 }
 
 static XMQE*
-requestQEs(int count, int segIndex, int sessionId, int gangIdStart, char *hostip, char *database, char*user)
+requestQEs(XMConnection *conn, int segIndex, int sessionId, int gangIdStart, char *hostip, char *database, char*user)
 {
 	char gpqeid[100];
 	bool isWriter = false;
+	int count = conn->qeCount;
 
 	XMQE *info = findQEBySessionId(sessionId, false);
 	if (info == NULL)
@@ -373,13 +387,16 @@ requestQEs(int count, int segIndex, int sessionId, int gangIdStart, char *hostip
 		int port;
 		int pid;
 		buildqeid(gpqeid, sizeof(gpqeid), segIndex, sessionId, isWriter, gangIdStart++);
-		PGconn *conn = connectPostMaster(gpqeid, hostip, database, user, NULL, &port, &pid);
+		PGconn *pgconn = connectPostMaster(gpqeid, hostip, database, user, NULL, &port, &pid);
 
 		qeInfos[i].pid = pid;
 		qeInfos[i].port = port;
-		qeInfos[i].conn = conn;
+		qeInfos[i].conn = pgconn;
 		qeInfos[i].sessionId = sessionId;
 		qeInfos[i].isWriter = isWriter;
+		qeInfos[i].buffer = createPQExpBuffer();
+		qeInfos[i].finished = false;
+		conn->qes = lappend(conn->qes, &qeInfos[i]);
 	}
 
 	return qeInfos;
@@ -387,20 +404,19 @@ requestQEs(int count, int segIndex, int sessionId, int gangIdStart, char *hostip
 
 
 static XMQE*
-handleRequestQEs(XMConnection *conn, int *pCount)
+handleRequestQEs(XMConnection *conn)
 {
 	char *ptr = conn->buf.data + 5;
 	char hostname[100];
 	char database[100];
 	char user[100];
-	int qeCount;
 	int segIndex;
 	int sessionId;
 	int gangIdStart;
 	int tmp;
 
 	tmp = *(int*)ptr;
-	*pCount = qeCount = ntohl(tmp);
+	conn->qeCount = ntohl(tmp);
 	ptr +=4;
 
 	tmp = *(int*)ptr;
@@ -423,31 +439,177 @@ handleRequestQEs(XMConnection *conn, int *pCount)
 
 	memcpy(user, ptr, 100);
 
-	return requestQEs(qeCount, segIndex, sessionId, gangIdStart, hostname, database, user);
+	return requestQEs(conn, segIndex, sessionId, gangIdStart, hostname, database, user);
 }
 
 static void forwardPlan(XMConnection *conn)
 {
 	char *ptr = conn->buf.data + 5;
-	int totalLen = conn->len + 5;
+	int totalLen = conn->len + 1;
 
 	ptr += sizeof(int);
 	int sessionId;
 	memcpy(&sessionId, ptr, sizeof(int));
 	sessionId = ntohl(sessionId);
 
-	XMQE *qe = findQEBySessionId(sessionId, true);
+	ListCell *cell;
+	foreach(cell, conn->qes)
+	{
+		XMQE *info = lfirst(cell);
+		Assert(info->sessionId == sessionId);
+		PQsendGpQuery_shared(info->conn, conn->buf.data, totalLen);
+	}
+}
 
-	PQsendGpQuery_shared(qe->conn, conn->buf.data, totalLen);
+static bool
+processResults(XMQE *info)
+{
+	char *msg;
+
+	/*
+	 * Receive input from QE.
+	 */
+	if (PQconsumeInput(info->conn) == 0)
+	{
+		msg = PQerrorMessage(info->conn);
+		return true;
+	}
+
+	/*
+	 * If we have received one or more complete messages, process them.
+	 */
+	while (!PQisBusy(info->conn))
+	{
+		/* loop to call PQgetResult; won't block */
+		PGresult *pRes;
+		ExecStatusType resultStatus;
+		int	resultIndex;
+
+		/*
+		 * PQisBusy() does some error handling, which can
+		 * cause the connection to die -- we can't just continue on as
+		 * if the connection is happy without checking first.
+		 *
+		 * For example, cdbdisp_numPGresult() will return a completely
+		 * bogus value!
+		 */
+		if (PQstatus(info->conn) == CONNECTION_BAD)
+		{
+			return true;
+		}
+
+		/*
+		 * Get one message.
+		 */
+		ELOG_DISPATCHER_DEBUG("PQgetResult");
+		pRes = PQgetResult(info->conn);
+
+		/*
+		 * Command is complete when PGgetResult() returns NULL. It is critical
+		 * that for any connection that had an asynchronous command sent thru
+		 * it, we call PQgetResult until it returns NULL. Otherwise, the next
+		 * time a command is sent to that connection, it will return an error
+		 * that there's a command pending.
+		 */
+		if (!pRes)
+		{
+			/* this is normal end of command */
+			return true;
+		}
+
+		/*
+		 * Attach the PGresult object to the CdbDispatchResult object.
+		 */
+		resultIndex = info->buffer->len / sizeof(PGresult *);
+		appendBinaryPQExpBuffer(info->buffer, (char*)&pRes, sizeof(pRes));
+
+		/*
+		 * Did a command complete successfully?
+		 */
+		resultStatus = PQresultStatus(pRes);
+		if (resultStatus == PGRES_COMMAND_OK ||
+			resultStatus == PGRES_TUPLES_OK ||
+			resultStatus == PGRES_COPY_IN ||
+			resultStatus == PGRES_COPY_OUT ||
+			resultStatus == PGRES_EMPTY_QUERY)
+		{
+			if (resultStatus == PGRES_COPY_IN ||
+				resultStatus == PGRES_COPY_OUT)
+				return true;
+		}
+		/*
+		 * Note QE error. Cancel the whole statement if requested.
+		 */
+		else
+		{
+//			/* QE reported an error */
+//			char	   *sqlstate = PQresultErrorField(pRes, PG_DIAG_SQLSTATE);
+//			int			errcode = 0;
+//
+//			msg = PQresultErrorMessage(pRes);
+
+		}
+	}
+
+	return false; /* we must keep on monitoring this socket */
+}
+
+
+static void handleQEResults(XMConnection *conn)
+{
+	fd_set readfds;
+	int nfd;
+	int maxfd = 0;
+
+	for(;;)
+	{
+		FD_ZERO(&readfds);
+		ListCell *cell;
+		foreach(cell, conn->qes)
+		{
+			XMQE *qe = (XMQE*)lfirst(cell);
+			int sock = qe->conn->sock;
+
+			if (qe->finished)
+				continue;
+
+			if (sock != 0)
+				FD_SET(sock, &readfds);
+
+			if (sock > maxfd)
+				maxfd = sock;
+		}
+
+		if (maxfd == 0)
+			break;
+
+		nfd = select(maxfd + 1, &readfds, NULL, NULL, NULL);
+
+		if (nfd < 0 && errno != EINTR)
+		{
+			elog(LOG, "select error");
+			continue;
+		}
+
+		foreach(cell, conn->qes)
+		{
+			XMQE *qe = (XMQE*)lfirst(cell);
+			if (FD_ISSET(qe->conn->sock, &readfds))
+			{
+				if (processResults(qe))
+					qe->finished = true;
+			}
+		}
+	}
 }
 
 static void
-sendResponse(XMConnection *conn, XMQE *qes, int count)
+sendResponse(XMConnection *conn, XMQE *qes)
 {
 	char buf[100];
 	int i;
 	char *p = buf;
-	for (i = 0; i < count; i++)
+	for (i = 0; i < conn->qeCount; i++)
 	{
 		int tmp = htonl(qes[i].pid);
 		memcpy(p, &tmp, sizeof(tmp));
@@ -460,136 +622,53 @@ sendResponse(XMConnection *conn, XMQE *qes, int count)
 	send(conn->sock, buf, p-buf, 0);
 }
 
-//static bool
-//processResults(XMConnection * xmConn)
-//{
-//	XMQE *info = xmConn->qeInfo;
-//	char *msg;
-//
-//	/*
-//	 * Receive input from QE.
-//	 */
-//	if (PQconsumeInput(info->conn) == 0)
-//	{
-//		msg = PQerrorMessage(info->conn);
-//		return true;
-//	}
-//
-//	/*
-//	 * If we have received one or more complete messages, process them.
-//	 */
-//	while (!PQisBusy(info->conn))
-//	{
-//		/* loop to call PQgetResult; won't block */
-//		PGresult *pRes;
-//		ExecStatusType resultStatus;
-//		int	resultIndex;
-//
-//		/*
-//		 * PQisBusy() does some error handling, which can
-//		 * cause the connection to die -- we can't just continue on as
-//		 * if the connection is happy without checking first.
-//		 *
-//		 * For example, cdbdisp_numPGresult() will return a completely
-//		 * bogus value!
-//		 */
-//		if (PQstatus(info->conn) == CONNECTION_BAD)
-//		{
-//			return true;
-//		}
-//
-//		/*
-//		 * Get one message.
-//		 */
-//		ELOG_DISPATCHER_DEBUG("PQgetResult");
-//		pRes = PQgetResult(info->conn);
-//
-//		/*
-//		 * Command is complete when PGgetResult() returns NULL. It is critical
-//		 * that for any connection that had an asynchronous command sent thru
-//		 * it, we call PQgetResult until it returns NULL. Otherwise, the next
-//		 * time a command is sent to that connection, it will return an error
-//		 * that there's a command pending.
-//		 */
-//		if (!pRes)
-//		{
-//			/* this is normal end of command */
-//			return true;
-//		}
-//
-//		/*
-//		 * Attach the PGresult object to the CdbDispatchResult object.
-//		 */
-//		resultIndex = cdbdisp_numPGresult(dispatchResult);
-//		cdbdisp_appendResult(dispatchResult, pRes);
-//
-//		/*
-//		 * Did a command complete successfully?
-//		 */
-//		resultStatus = PQresultStatus(pRes);
-//		if (resultStatus == PGRES_COMMAND_OK ||
-//			resultStatus == PGRES_TUPLES_OK ||
-//			resultStatus == PGRES_COPY_IN ||
-//			resultStatus == PGRES_COPY_OUT ||
-//			resultStatus == PGRES_EMPTY_QUERY)
-//		{
-//			ELOG_DISPATCHER_DEBUG("%s -> ok %s",
-//								 segdbDesc->whoami,
-//								 PQcmdStatus(pRes) ? PQcmdStatus(pRes) : "(no cmdStatus)");
-//
-//			if (resultStatus == PGRES_EMPTY_QUERY)
-//				ELOG_DISPATCHER_DEBUG("QE received empty query.");
-//
-//			/*
-//			 * Save the index of the last successful PGresult. Can be given to
-//			 * cdbdisp_getPGresult() to get tuple count, etc.
-//			 */
-//			dispatchResult->okindex = resultIndex;
-//
-//			/*
-//			 * SREH - get number of rows rejected from QE if any
-//			 */
-//			if (pRes->numRejected > 0)
-//				dispatchResult->numrowsrejected += pRes->numRejected;
-//
-//			if (resultStatus == PGRES_COPY_IN ||
-//				resultStatus == PGRES_COPY_OUT)
-//				return true;
-//		}
-//		/*
-//		 * Note QE error. Cancel the whole statement if requested.
-//		 */
-//		else
-//		{
-//			/* QE reported an error */
-//			char	   *sqlstate = PQresultErrorField(pRes, PG_DIAG_SQLSTATE);
-//			int			errcode = 0;
-//
-//			msg = PQresultErrorMessage(pRes);
-//
-//			ELOG_DISPATCHER_DEBUG("%s -> %s %s  %s",
-//								 segdbDesc->whoami,
-//								 PQresStatus(resultStatus),
-//								 sqlstate ? sqlstate : "(no SQLSTATE)",
-//								 msg);
-//
-//			/*
-//			 * Convert SQLSTATE to an error code (ERRCODE_xxx). Use a generic
-//			 * nonzero error code if no SQLSTATE.
-//			 */
-//			if (sqlstate && strlen(sqlstate) == 5)
-//				errcode = sqlstate_to_errcode(sqlstate);
-//
-//			/*
-//			 * Save first error code and the index of its PGresult buffer
-//			 * entry.
-//			 */
-//			cdbdisp_seterrcode(errcode, resultIndex, dispatchResult);
-//		}
-//	}
-//
-//	return false; /* we must keep on monitoring this socket */
-//}
+
+
+static void *
+handleIncomingConnection(void *arg)
+{
+	XMConnection *pConn = (XMConnection *) arg;
+
+	gp_set_thread_sigmasks();
+
+	for(;;)
+	{
+		read(pConn->sock, pConn->buf.data, 1);
+		pConn->type = *pConn->buf.data;
+
+		switch (pConn->type)
+		{
+				case 'a':
+				{
+					read(pConn->sock, pConn->buf.data+1, 4);
+					memcpy(&pConn->len, pConn->buf.data+1, 4);
+					pConn->len = ntohl(pConn->len);
+					read(pConn->sock, pConn->buf.data + 5, pConn->len - 4);
+
+					XMQE *qes = handleRequestQEs(pConn);
+					sendResponse(pConn, qes);
+					break;
+				}
+
+				case 'M':
+					read(pConn->sock, pConn->buf.data+1, 4);
+					memcpy(&pConn->len, pConn->buf.data+1, 4);
+					pConn->len = ntohl(pConn->len);
+					read(pConn->sock, pConn->buf.data + 5, pConn->len - 4);
+
+					forwardPlan(pConn);
+					handleQEResults(pConn);
+					break;
+
+				default:
+					elog(WARNING, "received unexpected request");
+					closeConnection(pConn);
+					return (NULL);
+		}
+	}
+	return (NULL);
+}
+
 
 /* ----------
  * PgstatCollectorMain() -
@@ -690,7 +769,6 @@ NON_EXEC_STATIC void XmanagerMain(int argc, char *argv[])
 	{
 		aliveConn[i].sock = 0;
 		aliveConn[i].len = 0;
-		aliveConn[i].received = 0;
 	}
 
 	/*
@@ -759,12 +837,6 @@ NON_EXEC_STATIC void XmanagerMain(int argc, char *argv[])
 				exit(EXIT_FAILURE);
 			}
 
-			if (fcntl(newSock, F_SETFL, O_NONBLOCK) == -1)
-			{
-				elog(WARNING, "fcntl(F_SETFL, O_NONBLOCK) failed");
-				exit(EXIT_FAILURE);
-			}
-
 			elog(DEBUG1, "New connection, socket fd is %d, ip is : %s, port : %d \n" ,
 					newSock, inet_ntoa(address.sin_addr), ntohs(address.sin_port));
 
@@ -773,106 +845,18 @@ NON_EXEC_STATIC void XmanagerMain(int argc, char *argv[])
 				if (aliveConn[i].sock == 0)
 				{
 					aliveConn[i].sock = newSock;
-					aliveConn[i].isFromQD = true;
-					aliveConn[i].qeInfo = NULL;
+					aliveConn[i].qes = NULL;
 					aliveConn[i].len = 0;
-					aliveConn[i].received = 0;
 					initStringInfo(&aliveConn[i].buf);
 					break;
 				}
 			}
-		}
 
-		for (i = 0; i < maxConns; i++)
-		{
-			XMConnection *conn = &aliveConn[i];
-			int sock = conn->sock;
-			if (!FD_ISSET(sock, &readfds))
-				continue;
-
-			if (conn->isFromQD)
+			int pthread_err = gp_pthread_create(&aliveConn[i].thread, handleIncomingConnection, (void*)&aliveConn[i], "xmConnection");
+			if (pthread_err != 0)
 			{
-				if (conn->len == 0)
-				{
-					int ret = peekHeader(sock);
-					if (ret == -1)
-					{
-						closeConnection(conn);
-						continue;
-					}
-					if (ret != 5)
-						continue;
-
-					char *buf = conn->buf.data;
-					ret = readFromSocket(sock, buf, 5, true);
-					if (ret == -1)
-					{
-						closeConnection(conn);
-						continue;
-					}
-					else
-					{
-						conn->type = buf[0];
-
-						int len;
-						memcpy(&len, &buf[1], 4);
-						conn->len = ntohl(len) - 4;
-					}
-				}
-
-				conn->received += readFromSocket(sock, conn->buf.data + 5 + conn->received, conn->len - conn->received, false);
-				if (conn->received == conn->len)
-				{
-					switch (conn->type)
-					{
-						case 'a':
-						{
-							int count = 0;
-							XMQE *qes = handleRequestQEs(conn, &count);
-							sendResponse(conn, qes, count);
-							for (i = 0; i < count; i++)
-							{
-								XMQE *info = &qes[i];
-								g_qeList = lappend(g_qeList, info);
-
-								int j = 0;
-								for (i = 0; i < maxConns; i++)
-								{
-									if (aliveConn[j].sock == 0)
-									{
-										aliveConn[i].sock = info->conn->sock;
-										aliveConn[i].isFromQD = false;
-										aliveConn[i].qeInfo = info;
-										aliveConn[i].len = 0;
-										aliveConn[i].received = 0;
-										initStringInfo(&aliveConn[i].buf);
-										break;
-									}
-								}
-								Assert(j < maxConns);
-							}
-
-							break;
-						}
-
-						case 'M':
-							forwardPlan(conn);
-							break;
-
-						default:
-							elog(WARNING, "received unexpected request");
-							closeConnection(conn);
-							break;
-					}
-
-					conn->len = 0;
-					conn->received = 0;
-				}
-			}
-			else
-			{
-
-
+				closeConnection(&aliveConn[i]);
+				elog(ERROR, "Failed to create thread");
 			}
 		}
 

@@ -324,131 +324,131 @@ XMGang *g_xmGang = NULL;
 static void
 createXMConnection(CdbComponentDatabaseInfo *cdbinfo, XMConnection *conn)
 {
-//	int sock;
-//	struct sockaddr_in address;
-//
-//	sock = socket(AF_INET, SOCK_STREAM, 0);
-//	if (sock == 0)
-//		elog(ERROR, "Failed to create socket");
-//
-//	memset(&address, 0, sizeof(struct sockaddr_in));
-//	address.sin_family = AF_INET;
-//	address.sin_port = htons(cdbinfo->port + 55);
-//	if (inet_pton(AF_INET, (char *) cdbinfo->hostip, &address.sin_addr) <= 0)
-//		elog(ERROR, "inet_pton error occured");
-//
-//	int retVal = connect(sock, (struct sockaddr *) &address, sizeof(address));
-//	if (retVal != 0)
-//		elog(ERROR, "Failed to connect QX Manager");
-//
-//	if (fcntl(sock, F_SETFL, O_NONBLOCK) == -1)
-//		elog(ERROR, "fcntl(F_SETFL, O_NONBLOCK) failed");
-//
-//	conn->sock = sock;
-//	conn->segIndex = cdbinfo->segindex;
-//	conn->hostip = pstrdup(cdbinfo->hostip);
-//
+	int sock;
+	struct sockaddr_in address;
 
-#define MAX_KEYWORDS 10
-#define MAX_INT_STRING_LEN 20
-	const char *keywords[MAX_KEYWORDS];
-	const char *values[MAX_KEYWORDS];
-	char portstr[MAX_INT_STRING_LEN];
-	char timeoutstr[MAX_INT_STRING_LEN];
-	int nkeywords = 0;
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock == 0)
+		elog(ERROR, "Failed to create socket");
 
-	/*
-	 * For entry DB connection, we make sure both "hostaddr" and "host" are empty string.
-	 * Or else, it will fall back to environment variables and won't use domain socket
-	 * in function connectDBStart.
-	 *
-	 * For other QE connections, we set "hostaddr". "host" is not used.
-	 */
-	Assert(cdbinfo->hostip != NULL);
-	keywords[nkeywords] = "hostaddr";
-	values[nkeywords] = cdbinfo->hostip;
-	nkeywords++;
+	memset(&address, 0, sizeof(struct sockaddr_in));
+	address.sin_family = AF_INET;
+	address.sin_port = htons(cdbinfo->port + 55);
+	if (inet_pton(AF_INET, (char *) cdbinfo->hostip, &address.sin_addr) <= 0)
+		elog(ERROR, "inet_pton error occured");
 
-	keywords[nkeywords] = "host";
-	values[nkeywords] = "";
-	nkeywords++;
+	int retVal = connect(sock, (struct sockaddr *) &address, sizeof(address));
+	if (retVal != 0)
+		elog(ERROR, "Failed to connect QX Manager");
 
-	snprintf(portstr, sizeof(portstr), "%u", cdbinfo->port+55);
-	keywords[nkeywords] = "port";
-	values[nkeywords] = portstr;
-	nkeywords++;
+	if (fcntl(sock, F_SETFL, O_NONBLOCK) == -1)
+		elog(ERROR, "fcntl(F_SETFL, O_NONBLOCK) failed");
 
-	snprintf(timeoutstr, sizeof(timeoutstr), "%d", gp_segment_connect_timeout);
-	keywords[nkeywords] = "connect_timeout";
-	values[nkeywords] = timeoutstr;
-	nkeywords++;
-
-	keywords[nkeywords] = NULL;
-	values[nkeywords] = NULL;
-
-	Assert(nkeywords < MAX_KEYWORDS);
-
-	PGconn *pgconn = PQconnectStartParams(keywords, values, false);
-	if (pgconn == NULL || pgconn->status == CONNECTION_BAD)
-		elog(ERROR, "Failed to connect");
-
-	PostgresPollingStatusType flag = PGRES_POLLING_WRITING;
-	time_t		finish_time = ((time_t) -1);
-
-	/*
-	 * Set up a time limit, if connect_timeout isn't zero.
-	 */
-	if (pgconn->connect_timeout != NULL)
-	{
-		int	timeout = atoi(pgconn->connect_timeout);
-
-		if (timeout > 0)
-		{
-			/*
-			 * Rounding could cause connection to fail; need at least 2 secs
-			 */
-			if (timeout < 2)
-				timeout = 2;
-			/* calculate the finish time based on start + timeout */
-			finish_time = time(NULL) + timeout;
-		}
-	}
-
-	for (;;)
-	{
-		/*
-		 * Wait, if necessary.	Note that the initial state (just after
-		 * PQconnectStart) is to wait for the socket to select for writing.
-		 */
-		if (PQstatus(pgconn)  == CONNECTION_MADE)
-			break;
-
-		switch (flag)
-		{
-			case PGRES_POLLING_WRITING:
-				if (pqWaitTimed(0, 1, pgconn, finish_time))
-				{
-					pgconn->status = CONNECTION_BAD;
-					elog(ERROR, "Failed to connect");
-				}
-				break;
-
-			default:
-				/* Just in case we failed to set it in PQconnectPoll */
-				elog(ERROR, "Failed to connect");
-		}
-
-		/*
-		 * Now try to advance the state machine.
-		 */
-		flag = PQconnectPoll(pgconn);
-	}
-	if (PQstatus(pgconn) == CONNECTION_BAD)
-		elog(ERROR, "Failed to connect");
-
-	conn->sock = pgconn->sock;
+	conn->sock = sock;
 	conn->segIndex = cdbinfo->segindex;
 	conn->hostip = pstrdup(cdbinfo->hostip);
+//
+//
+//#define MAX_KEYWORDS 10
+//#define MAX_INT_STRING_LEN 20
+//	const char *keywords[MAX_KEYWORDS];
+//	const char *values[MAX_KEYWORDS];
+//	char portstr[MAX_INT_STRING_LEN];
+//	char timeoutstr[MAX_INT_STRING_LEN];
+//	int nkeywords = 0;
+//
+//	/*
+//	 * For entry DB connection, we make sure both "hostaddr" and "host" are empty string.
+//	 * Or else, it will fall back to environment variables and won't use domain socket
+//	 * in function connectDBStart.
+//	 *
+//	 * For other QE connections, we set "hostaddr". "host" is not used.
+//	 */
+//	Assert(cdbinfo->hostip != NULL);
+//	keywords[nkeywords] = "hostaddr";
+//	values[nkeywords] = cdbinfo->hostip;
+//	nkeywords++;
+//
+//	keywords[nkeywords] = "host";
+//	values[nkeywords] = "";
+//	nkeywords++;
+//
+//	snprintf(portstr, sizeof(portstr), "%u", cdbinfo->port+55);
+//	keywords[nkeywords] = "port";
+//	values[nkeywords] = portstr;
+//	nkeywords++;
+//
+//	snprintf(timeoutstr, sizeof(timeoutstr), "%d", gp_segment_connect_timeout);
+//	keywords[nkeywords] = "connect_timeout";
+//	values[nkeywords] = timeoutstr;
+//	nkeywords++;
+//
+//	keywords[nkeywords] = NULL;
+//	values[nkeywords] = NULL;
+//
+//	Assert(nkeywords < MAX_KEYWORDS);
+//
+//	PGconn *pgconn = PQconnectStartParams(keywords, values, false);
+//	if (pgconn == NULL || pgconn->status == CONNECTION_BAD)
+//		elog(ERROR, "Failed to connect");
+//
+//	PostgresPollingStatusType flag = PGRES_POLLING_WRITING;
+//	time_t		finish_time = ((time_t) -1);
+//
+//	/*
+//	 * Set up a time limit, if connect_timeout isn't zero.
+//	 */
+//	if (pgconn->connect_timeout != NULL)
+//	{
+//		int	timeout = atoi(pgconn->connect_timeout);
+//
+//		if (timeout > 0)
+//		{
+//			/*
+//			 * Rounding could cause connection to fail; need at least 2 secs
+//			 */
+//			if (timeout < 2)
+//				timeout = 2;
+//			/* calculate the finish time based on start + timeout */
+//			finish_time = time(NULL) + timeout;
+//		}
+//	}
+//
+//	for (;;)
+//	{
+//		/*
+//		 * Wait, if necessary.	Note that the initial state (just after
+//		 * PQconnectStart) is to wait for the socket to select for writing.
+//		 */
+//		if (PQstatus(pgconn)  == CONNECTION_MADE)
+//			break;
+//
+//		switch (flag)
+//		{
+//			case PGRES_POLLING_WRITING:
+//				if (pqWaitTimed(0, 1, pgconn, finish_time))
+//				{
+//					pgconn->status = CONNECTION_BAD;
+//					elog(ERROR, "Failed to connect");
+//				}
+//				break;
+//
+//			default:
+//				/* Just in case we failed to set it in PQconnectPoll */
+//				elog(ERROR, "Failed to connect");
+//		}
+//
+//		/*
+//		 * Now try to advance the state machine.
+//		 */
+//		flag = PQconnectPoll(pgconn);
+//	}
+//	if (PQstatus(pgconn) == CONNECTION_BAD)
+//		elog(ERROR, "Failed to connect");
+//
+//	conn->sock = pgconn->sock;
+//	conn->segIndex = cdbinfo->segindex;
+//	conn->hostip = pstrdup(cdbinfo->hostip);
 }
 
 static XMGang*
