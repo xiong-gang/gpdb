@@ -917,7 +917,8 @@ fillSliceVector(SliceTable *sliceTbl, int rootIdx,
 	 */
 	top_count = 1 + count_dependent_children(sliceTbl, rootIdx, sliceVector, nTotalSlices);
 
-	qsort(sliceVector, nTotalSlices, sizeof(SliceVec), compare_slice_order);
+	if (!gp_use_xm)
+		qsort(sliceVector, nTotalSlices, sizeof(SliceVec), compare_slice_order);
 
 	return top_count;
 }

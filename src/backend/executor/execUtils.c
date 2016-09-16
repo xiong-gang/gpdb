@@ -1865,6 +1865,9 @@ AssignGangsNew(QueryDesc *queryDesc)
 		inv.vec1gangs_primary_readerNew = (GangNew **) palloc(sizeof(GangNew *) * inv.num1gangs_primary_reader);
 
 		int i = 0;
+		int nGangsN = 0;
+		nReaderGang1 = 0;
+		nReaderGangEntryDB = 0;
 		for (i = 0; i < nGangs; i++)
 		{
 			GangNew *gp = ppGangs[i];
@@ -1873,22 +1876,19 @@ AssignGangsNew(QueryDesc *queryDesc)
 			switch (gp->type)
 			{
 			case GANGTYPE_PRIMARY_WRITER:
-				inv.vecNgangsNew[0] = gp;
+				inv.vecNgangsNew[nGangsN++] = gp;
 				break;
 
 			case GANGTYPE_PRIMARY_READER:
-				nReaderGangN--;
-				inv.vecNgangsNew[nReaderGangN] = gp;
+				inv.vecNgangsNew[nGangsN++] = gp;
 				break;
 
 			case GANGTYPE_SINGLETON_READER:
-				nReaderGang1--;
-				inv.vec1gangs_primary_readerNew[nReaderGang1 - 1] = gp;
+				inv.vec1gangs_primary_readerNew[nReaderGang1++] = gp;
 				break;
 
 			case GANGTYPE_ENTRYDB_READER:
-				nReaderGangEntryDB--;
-				inv.vec1gangs_entrydb_readerNew[nReaderGangEntryDB - 1] = gp;
+				inv.vec1gangs_entrydb_readerNew[nReaderGangEntryDB++] = gp;
 				break;
 
 			default:

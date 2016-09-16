@@ -285,7 +285,8 @@ createGang(GangType type, int gang_id, int size, int content)
 typedef struct XMRequestQE
 {
 	int type;
-	int count;
+	int readerCount;
+	int writerCount;
 	int segIndex;
 	int sessionId;
 	int gangIdStart;
@@ -402,9 +403,9 @@ static void sendXMRequestQE(XMConnection *conn, XMRequestQE *request)
 {
 	int tmp = 0;
 	int len = 0;
-	int totalLen = 1 + sizeof(len) + sizeof(request->count) + sizeof(request->segIndex) +
-			sizeof(request->sessionId) + sizeof(request->gangIdStart) + sizeof(request->hostip) +
-			sizeof(request->database) + sizeof(request->user);
+	int totalLen = 1 + sizeof(len) + sizeof(request->writerCount) + sizeof(request->readerCount) +
+			sizeof(request->segIndex) + sizeof(request->sessionId) + sizeof(request->gangIdStart) +
+			sizeof(request->hostip) + sizeof(request->database) + sizeof(request->user);
 	char* buf = palloc(totalLen);
 	char* pos = buf;
 
@@ -412,7 +413,11 @@ static void sendXMRequestQE(XMConnection *conn, XMRequestQE *request)
 
 	pos += sizeof(len); /* placeholder for message length */
 
-	tmp = htonl(request->count);
+	tmp = htonl(request->writerCount);
+	memcpy(pos, &tmp, sizeof(tmp));
+	pos += sizeof(tmp);
+
+	tmp = htonl(request->readerCount);
 	memcpy(pos, &tmp, sizeof(tmp));
 	pos += sizeof(tmp);
 
@@ -460,7 +465,7 @@ static void sendXMRequestQE(XMConnection *conn, XMRequestQE *request)
 static XMResponseQE*
 recvXMResponseQE(XMConnection *conn, XMRequestQE *request)
 {
-	int count = request->count;
+	int count = request->writerCount + request->readerCount;
 	int len = sizeof(XMResponseQE) + count * sizeof(XMQE);
 	XMResponseQE *response = (XMResponseQE*) palloc(len);
 	response->count = count;
@@ -491,15 +496,18 @@ recvXMResponseQE(XMConnection *conn, XMRequestQE *request)
 }
 
 static bool
-allocateQEs(XMConnection *conn, int count, QEInfo **ppQEs)
+allocateQEs(XMConnection *conn, int writerCount, bool readerCount, QEInfo **ppQEs)
 {
+	int count = writerCount + readerCount;
+
 	if (count <= 0)
 		return true;
 
 	int segIndex = conn->segIndex;
 
 	XMRequestQE request;
-	request.count = count;
+	request.writerCount = writerCount;
+	request.readerCount = readerCount;
 	request.type = 'a';
 	request.segIndex = segIndex;
 	request.sessionId = gp_session_id;
@@ -790,7 +798,7 @@ allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1,
 		g_xmGang = createXMGang();
 
 	for (segIndex = 0; segIndex < segmentCount; segIndex++)
-		vec[segIndex] = primaryWriterGangNew == NULL ? nWriterGang + nReaderGangN : nReaderGangN;
+		vec[segIndex] = nReaderGangN;
 
 	vec[gp_singleton_segindex] += nReaderGang1;
 
@@ -798,13 +806,14 @@ allocateGangs(int nWriterGang, int nReaderGangN, int nReaderGang1,
 	vec[segmentCount] = nReaderGangEntryDB;
 
 	QEInfo **ppQEs = palloc(sizeof(QEInfo*) * (segmentCount + 1));
-	for (i = 0; i <= segmentCount; i++)
-		ppQEs[i] = (QEInfo*)palloc(sizeof(QEInfo) * vec[i]);
 
 	for (segIndex = 0; segIndex <= segmentCount; segIndex++)
 	{
 		XMConnection *conn = &g_xmGang->conns[segIndex];
-		allocateQEs(conn, vec[segIndex], ppQEs);
+		int writerCount = (primaryWriterGangNew == NULL && segIndex != segmentCount) ? nWriterGang : 0;
+
+		ppQEs[segIndex] = (QEInfo*)palloc(sizeof(QEInfo) * (vec[segIndex] + writerCount));
+		allocateQEs(conn, writerCount, vec[segIndex], ppQEs);
 	}
 
 	int nGangs = nWriterGang + nReaderGangN + nReaderGang1 + nReaderGangEntryDB;

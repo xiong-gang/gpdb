@@ -152,8 +152,22 @@ int xmanager_start(void)
 	return 0;
 }
 
-static void resetQE(XMQE *qe)
+static void resetQE(XMQE *qe, int gangId)
 {
+	StringInfoData buf;
+
+	pq_beginmessage(&buf, 'R');
+	pq_sendint(&buf, gangId, 4);
+
+	char type = (char)buf.cursor;
+	send(qe->conn->sock, &type, 1, 0);
+
+	uint32		n32;
+	n32 = htonl((uint32) (buf.len + 4));
+	send(qe->conn->sock, (char *) &n32, 4, 0);
+
+	send(qe->conn->sock, buf.data, buf.len, 0);
+	pfree(buf.data);
 	return;
 }
 
@@ -167,7 +181,7 @@ static void closeConnection(XMConnection *conn)
 	foreach(cell, conn->qes)
 	{
 		XMQE *qe = (XMQE*)lfirst(cell);
-		resetQE(qe);
+		//resetQE(qe);
 		g_qeList = lappend(g_qeList, qe);
 	}
 
@@ -300,17 +314,15 @@ buildqeid(char *buf, int bufsz, int segIndex, int sessionId, bool is_writer, int
 }
 
 static XMQE*
-findWriterQEBySessionId(int sessionId)
+getAvailableQE(XMConnection *conn, int isWriter)
 {
 	ListCell *cell;
-	foreach(cell, g_qeList)
+	foreach(cell, conn->qes)
 	{
 		XMQE *info = lfirst(cell);
-		if (info->sessionId == sessionId)
+		if (info->isWriter == isWriter)
 		{
-			if (!info->isWriter)
-				continue;
-
+			conn->qes = list_delete_ptr(conn->qes, info);
 			return info;
 		}
 	}
@@ -319,23 +331,40 @@ findWriterQEBySessionId(int sessionId)
 }
 
 static XMQE*
-requestQEs(XMConnection *conn, int segIndex, int sessionId, int gangIdStart, char *hostip, char *database, char*user)
+requestQEs(XMConnection *conn, int writerCount, int readerCount,
+		int segIndex, int sessionId, int gangIdStart, char *hostip, char *database, char*user, int *retCount)
 {
 	char gpqeid[100];
-	int count = conn->qeCount;
-
+	int count = writerCount + readerCount;
 	int i = 0;
 	XMQE *qeInfos = palloc(count * sizeof(XMQE));
+
 	for (i = 0; i < count; i++)
 	{
 		int port;
 		int pid;
 		bool isWriter;
 
-		if (conn->qes == NULL)
+		if (i == 0 && (writerCount-- != 0))
 			isWriter = true;
 		else
 			isWriter = false;
+
+		XMQE *qe = getAvailableQE(conn, isWriter);
+
+		if (qe != NULL)
+		{
+			qeInfos[i].pid = qe->pid;
+			qeInfos[i].port = qe->port;
+			qeInfos[i].conn = qe->conn;
+			qeInfos[i].sessionId = qe->sessionId;
+			qeInfos[i].isWriter = qe->isWriter;
+			qeInfos[i].buffer = qe->buffer;
+			qeInfos[i].finished = false;
+
+			resetQE(qe, gangIdStart++);
+			continue;
+		}
 
 		buildqeid(gpqeid, sizeof(gpqeid), segIndex, sessionId, isWriter, gangIdStart++);
 		PGconn *pgconn = connectPostMaster(gpqeid, hostip, database, user, NULL, &port, &pid);
@@ -347,15 +376,19 @@ requestQEs(XMConnection *conn, int segIndex, int sessionId, int gangIdStart, cha
 		qeInfos[i].isWriter = isWriter;
 		qeInfos[i].buffer = createPQExpBuffer();
 		qeInfos[i].finished = false;
-		conn->qes = lappend(conn->qes, &qeInfos[i]);
 	}
 
+	for (i = 0; i < count; i++)
+		conn->qes = lappend(conn->qes, &qeInfos[i]);
+
+	conn->qeCount = list_length(conn->qes);
+	*retCount = count;
 	return qeInfos;
 }
 
 
 static XMQE*
-handleRequestQEs(XMConnection *conn)
+handleRequestQEs(XMConnection *conn, int *retCount)
 {
 	char *ptr = conn->buf.data + 5;
 	char hostname[100];
@@ -364,10 +397,17 @@ handleRequestQEs(XMConnection *conn)
 	int segIndex;
 	int sessionId;
 	int gangIdStart;
+	int writerCount;
+	int readerCount;
 	int tmp;
 
+
 	tmp = *(int*)ptr;
-	conn->qeCount = ntohl(tmp);
+	writerCount = ntohl(tmp);
+	ptr +=4;
+
+	tmp = *(int*)ptr;
+	readerCount = ntohl(tmp);
 	ptr +=4;
 
 	tmp = *(int*)ptr;
@@ -390,7 +430,7 @@ handleRequestQEs(XMConnection *conn)
 
 	memcpy(user, ptr, 100);
 
-	return requestQEs(conn, segIndex, sessionId, gangIdStart, hostname, database, user);
+	return requestQEs(conn, writerCount, readerCount, segIndex, sessionId, gangIdStart, hostname, database, user, retCount);
 }
 
 static void forwardPlan(XMConnection *conn)
@@ -569,7 +609,9 @@ static void handleQEResults(XMConnection *conn)
 			{
 				if (processResults(qe))
 				{
-					send(conn->sock, qe->conn->inBuffer, qe->conn->inEnd, 0);
+					//todo: handle error
+					if (qe->isWriter)
+						send(conn->sock, qe->conn->inBuffer, qe->conn->inEnd, 0);
 					qe->finished = true;
 				}
 			}
@@ -583,7 +625,6 @@ static bool readDtxResult(XMQE *info)
 	{
 		/* loop to call PQgetResult; won't block */
 		PGresult *pRes;
-		ExecStatusType resultStatus;
 
 		/*
 		 * PQisBusy() does some error handling, which can
@@ -661,12 +702,12 @@ handleDtxResult(XMConnection *conn)
 
 
 static void
-sendResponse(XMConnection *conn, XMQE *qes)
+sendResponse(XMConnection *conn, XMQE *qes, int count)
 {
 	char buf[100];
 	int i;
 	char *p = buf;
-	for (i = 0; i < conn->qeCount; i++)
+	for (i = 0; i < count; i++)
 	{
 		int tmp = htonl(qes[i].pid);
 		memcpy(p, &tmp, sizeof(tmp));
@@ -705,8 +746,9 @@ handleIncomingConnection(void *arg)
 					pConn->len = ntohl(pConn->len);
 					read(pConn->sock, pConn->buf.data + 5, pConn->len - 4);
 
-					XMQE *qes = handleRequestQEs(pConn);
-					sendResponse(pConn, qes);
+					int count = 0;
+					XMQE *qes = handleRequestQEs(pConn, &count);
+					sendResponse(pConn, qes, count);
 					break;
 				}
 

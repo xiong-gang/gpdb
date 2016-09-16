@@ -487,7 +487,11 @@ SocketBackend(StringInfo inBuf)
 		case 'G':				/* Greenplum Gang Management */
 			doing_extended_query_message = false;
 			break;
-		
+
+		case 'R':				/* Reset QE */
+			doing_extended_query_message = false;
+			break;
+
 		case 'F':				/* fastpath function call */
 			/* we let fastpath.c cope with old-style input of this */
 			doing_extended_query_message = false;
@@ -4930,6 +4934,12 @@ PostgresMain(int argc, char *argv[],
 		
 		switch (firstchar)
 		{
+			case 'R': /* Reset QE */
+				{
+					qe_gang_id = pq_getmsgint(&input_message, 4);
+				}
+				break;
+
 			case 'Q': /* simple query */
 				{
 					const char *query_string = NULL;                    
