@@ -96,6 +96,7 @@
 #include "cdb/cdbfilerep.h"
 #include "postmaster/primary_mirror_mode.h"
 #include "utils/vmem_tracker.h"
+#include "utils/sharedsnapshot.h"
 
 extern int	optind;
 extern char *optarg;
@@ -4318,6 +4319,26 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 	optreset = 1;				/* some systems need this too */
 #endif
 }
+
+static void resetQE(bool isWriter, int gangID, int sessionId, char *options)
+{
+	GucContext	gucctx = PGC_BACKEND;
+	int maxac = 2 + (strlen(options) + 1) / 2;
+	char **av = (char **) palloc(maxac * sizeof(char *));
+	int ac = 0;
+
+	av[ac++] = "postgres";
+	pg_split_opts(av, &ac, options);
+	av[ac] = NULL;
+	Assert(ac < maxac);
+
+	(void) process_postgres_switches(ac, av, gucctx, NULL);
+
+	qe_gang_id = gangID;
+	gp_session_id = sessionId;
+	SharedLocalSnapshotSlot->slotid = sessionId;
+	Gp_is_writer = isWriter;
+}
 /* ----------------------------------------------------------------
  * PostgresMain
  *	   postgres main loop -- all backends, interactive or otherwise start here
@@ -4936,7 +4957,16 @@ PostgresMain(int argc, char *argv[],
 		{
 			case 'R': /* Reset QE */
 				{
-					qe_gang_id = pq_getmsgint(&input_message, 4);
+					//checkQEIsIdle();
+					bool isWriter = false;
+					if(pq_getmsgbyte(&input_message) == 1)
+						isWriter = true;
+					int gangId = pq_getmsgint(&input_message, 4);
+					int sessionId = pq_getmsgint(&input_message, 4);
+					int optionsLen = pq_getmsgint(&input_message, 4);
+					char *options = pstrdup(pq_getmsgbytes(&input_message, optionsLen));
+					resetQE(isWriter, gangId, sessionId, options);
+					pfree(options);
 				}
 				break;
 

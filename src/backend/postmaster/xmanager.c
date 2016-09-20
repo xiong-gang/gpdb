@@ -44,6 +44,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_proc.h"
 #include "libpq/pqsignal.h"
+#include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "executor/instrument.h"
@@ -69,6 +70,7 @@
 
 // for mkdir
 #include "sys/stat.h"
+#include "utils/guc_tables.h"
 
 static volatile bool need_exit = false;
 static volatile bool got_SIGHUP = false;
@@ -152,12 +154,115 @@ int xmanager_start(void)
 	return 0;
 }
 
-static void resetQE(XMQE *qe, int gangId)
+static void addOneOption(StringInfo string, struct config_generic * guc)
+{
+	Assert(guc && (guc->flags & GUC_GPDB_ADDOPT));
+	switch (guc->vartype)
+	{
+	case PGC_BOOL:
+	{
+		struct config_bool *bguc = (struct config_bool *) guc;
+
+		appendStringInfo(string, " -c %s=%s", guc->name, *(bguc->variable) ? "true" : "false");
+		break;
+	}
+	case PGC_INT:
+	{
+		struct config_int *iguc = (struct config_int *) guc;
+
+		appendStringInfo(string, " -c %s=%d", guc->name, *iguc->variable);
+		break;
+	}
+	case PGC_REAL:
+	{
+		struct config_real *rguc = (struct config_real *) guc;
+
+		appendStringInfo(string, " -c %s=%f", guc->name, *rguc->variable);
+		break;
+	}
+	case PGC_STRING:
+	{
+		struct config_string *sguc = (struct config_string *) guc;
+		const char *str = *sguc->variable;
+		int i;
+
+		appendStringInfo(string, " -c %s=", guc->name);
+		/*
+		 * All whitespace characters must be escaped. See
+		 * pg_split_opts() in the backend.
+		 */
+		for (i = 0; str[i] != '\0'; i++)
+		{
+			if (isspace((unsigned char) str[i]))
+				appendStringInfoChar(string, '\\');
+
+			appendStringInfoChar(string, str[i]);
+		}
+		break;
+	}
+	default:
+		Insist(false);
+	}
+}
+
+static char*
+getOptions(void)
+{
+	struct config_generic **gucs = get_guc_variables();
+	int ngucs = get_num_guc_variables();
+	StringInfoData string;
+	int i;
+
+	initStringInfo(&string);
+
+	/*
+	 * Transactions are tricky.
+	 * Here is the copy and pasted code, and we know they are working.
+	 * The problem, is that QE may ends up with different iso level, but
+	 * postgres really does not have read uncommited and repeated read.
+	 * (is this true?) and they are mapped.
+	 *
+	 * Put these two gucs in the generic framework works (pass make installcheck-good)
+	 * if we make assign_defaultxactisolevel and assign_XactIsoLevel correct take
+	 * string "readcommitted" etc.	(space stripped).  However, I do not
+	 * want to change this piece of code unless I know it is broken.
+	 */
+	if (DefaultXactIsoLevel != XACT_READ_COMMITTED)
+	{
+		if (DefaultXactIsoLevel == XACT_SERIALIZABLE)
+			appendStringInfo(&string, " -c default_transaction_isolation=serializable");
+	}
+
+	if (XactIsoLevel != XACT_READ_COMMITTED)
+	{
+		if (XactIsoLevel == XACT_SERIALIZABLE)
+			appendStringInfo(&string, " -c transaction_isolation=serializable");
+	}
+
+	for (i = 0; i < ngucs; ++i)
+	{
+		struct config_generic *guc = gucs[i];
+
+		//TODO: GUC_GPDB_ADDOPT
+		if ((guc->flags & GUC_GPDB_ADDOPT) && (guc->context == PGC_USERSET || guc->context == PGC_SUSET ))
+			addOneOption(&string, guc);
+	}
+
+	return string.data;
+}
+
+static void resetQE(XMQE *qe, bool isWriter, int gangId)
 {
 	StringInfoData buf;
+	char *options = getOptions();
+	int optionLen = strlen(options);
 
 	pq_beginmessage(&buf, 'R');
+	pq_sendbyte(&buf, (char)isWriter);
 	pq_sendint(&buf, gangId, 4);
+	pq_sendint(&buf, gp_session_id, 4);
+	pq_sendint(&buf, optionLen, 4);
+	pq_sendtext(&buf, options, optionLen);
 
 	char type = (char)buf.cursor;
 	send(qe->conn->sock, &type, 1, 0);
@@ -181,7 +286,6 @@ static void closeConnection(XMConnection *conn)
 	foreach(cell, conn->qes)
 	{
 		XMQE *qe = (XMQE*)lfirst(cell);
-		//resetQE(qe);
 		g_qeList = lappend(g_qeList, qe);
 	}
 
@@ -317,9 +421,10 @@ static XMQE*
 getAvailableQE(XMConnection *conn, int isWriter)
 {
 	ListCell *cell;
+	XMQE *info = NULL;
 	foreach(cell, conn->qes)
 	{
-		XMQE *info = lfirst(cell);
+		info = lfirst(cell);
 		if (info->isWriter == isWriter)
 		{
 			conn->qes = list_delete_ptr(conn->qes, info);
@@ -327,7 +432,13 @@ getAvailableQE(XMConnection *conn, int isWriter)
 		}
 	}
 
-	return NULL;
+	if (g_qeList != NULL)
+	{
+		info = (XMQE*)linitial(g_qeList);
+		g_qeList = list_delete_ptr(g_qeList, info);
+	}
+
+	return info;
 }
 
 static XMQE*
@@ -362,7 +473,7 @@ requestQEs(XMConnection *conn, int writerCount, int readerCount,
 			qeInfos[i].buffer = qe->buffer;
 			qeInfos[i].finished = false;
 
-			resetQE(qe, gangIdStart++);
+			resetQE(qe, isWriter, gangIdStart++);
 			continue;
 		}
 
