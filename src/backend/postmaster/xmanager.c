@@ -251,7 +251,7 @@ getOptions(void)
 	return string.data;
 }
 
-static void resetQE(XMQE *qe, bool isWriter, int gangId)
+static void resetQE(XMQE *qe, bool isWriter, int sessionId, int gangId)
 {
 	StringInfoData buf;
 	char *options = getOptions();
@@ -260,7 +260,7 @@ static void resetQE(XMQE *qe, bool isWriter, int gangId)
 	pq_beginmessage(&buf, 'R');
 	pq_sendbyte(&buf, (char)isWriter);
 	pq_sendint(&buf, gangId, 4);
-	pq_sendint(&buf, gp_session_id, 4);
+	pq_sendint(&buf, sessionId, 4);
 	pq_sendint(&buf, optionLen, 4);
 	pq_sendtext(&buf, options, optionLen);
 
@@ -468,12 +468,12 @@ requestQEs(XMConnection *conn, int writerCount, int readerCount,
 			qeInfos[i].pid = qe->pid;
 			qeInfos[i].port = qe->port;
 			qeInfos[i].conn = qe->conn;
-			qeInfos[i].sessionId = qe->sessionId;
-			qeInfos[i].isWriter = qe->isWriter;
 			qeInfos[i].buffer = qe->buffer;
+			qeInfos[i].sessionId = sessionId;
+			qeInfos[i].isWriter = isWriter;
 			qeInfos[i].finished = false;
 
-			resetQE(qe, isWriter, gangIdStart++);
+			resetQE(qe, isWriter, sessionId, gangIdStart++);
 			continue;
 		}
 

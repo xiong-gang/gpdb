@@ -210,6 +210,37 @@ SessionState_Release(SessionState *acquired)
 	LWLockRelease(SessionStateLock);
 }
 
+void
+SessionState_Reset(int sessionId)
+{
+	SessionState *acquired = MySessionState;
+	Assert(NULL != acquired);
+	Assert(sessionStateInited);
+	Assert(isProcessActive);
+	Assert(2 == acquired->pinCount);
+	Assert(acquired->activeProcessCount == 0);
+
+	RunawayCleaner_RunawayCleanupDoneForSession();
+
+	acquired->sessionId = sessionId;
+
+	Assert(acquired->runawayStatus == RunawayStatus_NotRunaway);
+	Assert(CLEANUP_COUNTDOWN_BEFORE_RUNAWAY == acquired->cleanupCountdown);
+	Assert(0 == acquired->activeProcessCount);
+
+	acquired->sessionVmem = 0;
+	acquired->runawayStatus = RunawayStatus_NotRunaway;
+	acquired->sessionVmemRunaway = 0;
+	acquired->commandCountRunaway = 0;
+	acquired->cleanupCountdown = CLEANUP_COUNTDOWN_BEFORE_RUNAWAY;
+	acquired->activeProcessCount = 0;
+
+#ifdef USE_ASSERT_CHECKING
+		acquired->isModifiedSessionId = false;
+#endif
+}
+
+
 /* Returns the size of the SessionState array */
 Size
 SessionState_ShmemSize()

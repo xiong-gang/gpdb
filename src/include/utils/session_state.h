@@ -114,6 +114,7 @@ extern Size SessionState_ShmemSize(void);
 extern void SessionState_ShmemInit(void);
 extern void SessionState_Init(void);
 extern void SessionState_Shutdown(void);
+extern void SessionState_Reset(int sessionId);
 extern bool SessionState_IsAcquired(SessionState *sessionState);
 
 #endif   /* SESSIONSTATE_H */

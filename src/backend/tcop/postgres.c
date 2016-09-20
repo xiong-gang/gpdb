@@ -97,6 +97,7 @@
 #include "postmaster/primary_mirror_mode.h"
 #include "utils/vmem_tracker.h"
 #include "utils/sharedsnapshot.h"
+#include "utils/session_state.h"
 
 extern int	optind;
 extern char *optarg;
@@ -4320,9 +4321,21 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 #endif
 }
 
+static void resetSession(int sessionId)
+{
+	gp_session_id = sessionId;
+	SessionState_Reset(MySessionState, sessionId);
+}
+
+static void resetSharedSnapshot(int sessionId)
+{
+	SharedLocalSnapshotSlot->slotid = sessionId;
+}
+
 static void resetQE(bool isWriter, int gangID, int sessionId, char *options)
 {
-	GucContext	gucctx = PGC_BACKEND;
+	//todo
+	GucContext	gucctx = PGC_SUSET;
 	int maxac = 2 + (strlen(options) + 1) / 2;
 	char **av = (char **) palloc(maxac * sizeof(char *));
 	int ac = 0;
@@ -4335,9 +4348,11 @@ static void resetQE(bool isWriter, int gangID, int sessionId, char *options)
 	(void) process_postgres_switches(ac, av, gucctx, NULL);
 
 	qe_gang_id = gangID;
-	gp_session_id = sessionId;
-	SharedLocalSnapshotSlot->slotid = sessionId;
 	Gp_is_writer = isWriter;
+
+	gp_session_id = sessionId;
+	resetSession(sessionId);
+	resetSharedSnapshot(sessionId);
 }
 /* ----------------------------------------------------------------
  * PostgresMain
