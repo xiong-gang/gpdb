@@ -165,6 +165,7 @@ typedef struct TransactionStateData
 	int			prevSecContext;	/* previous SecurityRestrictionContext */
 	bool		prevXactReadOnly;		/* entry-time xact r/o state */
 	bool		executorSaysXactDoesWrites;	/* GP executor says xact does writes */
+	bool		xactDoesWrites;	/* GP executor says xact does writes */
 	struct TransactionStateData *parent;		/* back link to parent */
 
 	struct TransactionStateData *fastLink;        /* back link to jump to parent for efficient search */
@@ -3607,7 +3608,7 @@ CommitTransaction(void)
 	s->nChildXids = 0;
 	s->maxChildXids = 0;
 	s->executorSaysXactDoesWrites = false;
-
+	s->xactDoesWrites = false;
 	/*
 	 * done with commit processing, set current transaction state back to
 	 * default
@@ -3875,7 +3876,7 @@ PrepareTransaction(void)
 	s->nChildXids = 0;
 	s->maxChildXids = 0;
 	s->executorSaysXactDoesWrites = false;
-
+	s->xactDoesWrites = false;
 	/*
 	 * done with 1st phase commit processing, set current transaction state
 	 * back to default
@@ -4156,7 +4157,7 @@ CleanupTransaction(void)
 	s->nChildXids = 0;
 	s->maxChildXids = 0;
 	s->executorSaysXactDoesWrites = false;
-
+	s->xactDoesWrites = false;
 	/*
 	 * done with abort processing, set current transaction state back to
 	 * default
@@ -5973,6 +5974,23 @@ ExecutorSaysTransactionDoesWrites(void)
 	return TopTransactionStateData.executorSaysXactDoesWrites;
 }
 
+void
+MarkTransactionDoesWrites(void)
+{
+	// UNDONE: Verify we are in transaction...
+	if (!TopTransactionStateData.xactDoesWrites)
+	{
+		elog((Debug_print_full_dtm ? LOG : DEBUG5), "MarkTransactionDoesWrites called");
+		TopTransactionStateData.xactDoesWrites = true;
+	}
+}
+
+bool
+TransactionDoesWrites(void)
+{
+	return TopTransactionStateData.xactDoesWrites;
+}
+
 /*
  * TransactionBlockStatusCode - return status code to send in ReadyForQuery
  */
@@ -6371,6 +6389,7 @@ PushTransaction(void)
 	GetUserIdAndSecContext(&s->prevUser, &s->prevSecContext);
 	s->prevXactReadOnly = XactReadOnly;
 	s->executorSaysXactDoesWrites = false;
+	s->xactDoesWrites = false;
 
 	fastNodeCount++;
 	if (fastNodeCount == NUM_NODES_TO_SKIP_FOR_FAST_SEARCH)

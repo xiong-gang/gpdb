@@ -1198,11 +1198,15 @@ DoCopyInternal(const CopyStmt *stmt, const char *queryString, CopyState cstate)
 						   RelationGetRelationName(cstate->rel));
 
 		/* check read-only transaction */
-		if (XactReadOnly && is_from &&
-			!isTempNamespace(RelationGetNamespace(cstate->rel)))
-			ereport(ERROR,
-					(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
-					 errmsg("transaction is read-only")));
+		if (is_from && !isTempNamespace(RelationGetNamespace(cstate->rel)))
+		{
+			if (XactReadOnly)
+				ereport(ERROR,
+						(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
+						 errmsg("transaction is read-only")));
+
+			MarkTransactionDoesWrites();
+		}
 
 		/* Don't allow COPY w/ OIDs to or from a table without them */
 		if (cstate->oids && !cstate->rel->rd_rel->relhasoids)

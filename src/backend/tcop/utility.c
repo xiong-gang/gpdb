@@ -374,9 +374,6 @@ CommandIsReadOnly(Node *node)
 static void
 check_xact_readonly(Node *parsetree)
 {
-	if (!XactReadOnly)
-		return;
-
 	/*
 	 * Note: Commands that need to do more complicated checking are handled
 	 * elsewhere, in particular COPY and plannable statements do their own
@@ -394,9 +391,11 @@ check_xact_readonly(Node *parsetree)
 				if (createStmt->relation->istemp)
 					return;		// Permit creation of TEMPORARY tables in read-only mode.
 
-				ereport(ERROR,
-						(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
-						 errmsg("transaction is read-only")));
+				if (XactReadOnly)
+					ereport(ERROR,
+							(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
+							 errmsg("transaction is read-only")));
+				MarkTransactionDoesWrites();
 			}
 			break;
 
@@ -418,9 +417,13 @@ check_xact_readonly(Node *parsetree)
 
 					if (dropStmt->removeType != OBJECT_TABLE ||
 					    !RelationToRemoveIsTemp(rel, dropStmt->missing_ok))
-						ereport(ERROR,
-								(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
-								 errmsg("transaction is read-only")));
+					{
+						if (XactReadOnly)
+							ereport(ERROR,
+									(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
+									 errmsg("transaction is read-only")));
+						MarkTransactionDoesWrites();
+					}
 
 				}
 			}
@@ -478,9 +481,11 @@ check_xact_readonly(Node *parsetree)
 		case T_ReassignOwnedStmt:
 		case T_AlterTSDictionaryStmt:
 		case T_AlterTSConfigurationStmt:
-			ereport(ERROR,
-					(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
-					 errmsg("transaction is read-only")));
+			if (XactReadOnly)
+				ereport(ERROR,
+						(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
+						 errmsg("transaction is read-only")));
+			MarkTransactionDoesWrites();
 			break;
 		default:
 			/* do nothing */

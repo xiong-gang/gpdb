@@ -235,6 +235,8 @@ extern bool IsTransactionOrTransactionBlock(void);
 extern void ExecutorMarkTransactionUsesSequences(void);
 extern void ExecutorMarkTransactionDoesWrites(void);
 extern bool ExecutorSaysTransactionDoesWrites(void);
+extern void MarkTransactionDoesWrites(void);
+extern bool TransactionDoesWrites(void);
 extern char TransactionBlockStatusCode(void);
 extern void AbortOutOfAnyTransaction(void);
 extern void PreventTransactionChain(bool isTopLevel, const char *stmtType);

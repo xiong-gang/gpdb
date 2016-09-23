@@ -1368,7 +1368,10 @@ fail:
 				(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
 				 errmsg("transaction is read-only")));
 	else
+	{
+		MarkTransactionDoesWrites();
 		ExecutorMarkTransactionDoesWrites();
+	}
 }
 
 /*
