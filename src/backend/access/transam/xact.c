@@ -4115,7 +4115,7 @@ AbortTransaction(void)
 	 * so that all mem/resource will be freed
 	 */
 	if(elog_geterrcode() == ERRCODE_GP_MEMPROT_KILL)
-		disconnectAndDestroyAllGangs(true);
+		DisconnectAndDestroyAllGangs(true);
 }
 
 /*
