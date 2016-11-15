@@ -5293,6 +5293,15 @@ struct config_string ConfigureNamesString_gp[] =
 	},
 
 	{
+		{"gp_resqueue_cgroup_path", PGC_USERSET, RESOURCES_MGM,
+			gettext_noop("Default weight when one cannot be associated with a statement."),
+			NULL
+		},
+		&gp_resqueue_cgroup_path,
+		"", gpvars_assign_gp_resqueue_cgroup_path, NULL
+	},
+
+	{
 		{"gp_email_smtp_server", PGC_SUSET, LOGGING,
 			gettext_noop("Sets the SMTP server and port used to send e-mail alerts."),
 			NULL,

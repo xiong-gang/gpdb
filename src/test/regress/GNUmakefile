@@ -157,7 +157,7 @@ tablespace-setup:
 # Check for include files that are not being shipped
 .PHONY: includecheck
 includecheck:
-	$(srcdir)/checkinc.py
+	
 
 ##
 ## Run tests

@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "pgstat.h"
+#include "miscadmin.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "catalog/pg_language.h"
@@ -68,6 +69,7 @@ extern Datum project_describe(PG_FUNCTION_ARGS);
 extern Datum userdata_describe(PG_FUNCTION_ARGS);
 extern Datum userdata_project(PG_FUNCTION_ARGS);
 extern Datum noop_project(PG_FUNCTION_ARGS);
+extern Datum high_cpu(PG_FUNCTION_ARGS);
 
 /* resource queue support */
 extern Datum checkResourceQueueMemoryLimits(PG_FUNCTION_ARGS);
@@ -2740,4 +2742,24 @@ udf_unsetenv(PG_FUNCTION_ARGS)
 	const char *name = (const char *) PG_GETARG_CSTRING(0);
 	int ret = unsetenv(name);
 	PG_RETURN_BOOL(ret == 0);
+}
+
+PG_FUNCTION_INFO_V1(high_cpu);
+Datum
+high_cpu(PG_FUNCTION_ARGS)
+{
+       const char *us = (const char *) PG_GETARG_CSTRING(0);
+       int ius = atoi(us);
+       int i = 0;
+       for(;;)
+       {
+               i++;
+               if (i == ius)
+               {
+                       usleep(1);
+                       CHECK_FOR_INTERRUPTS();
+                       i = 0;
+               }
+       }
+       PG_RETURN_BOOL(1);
 }
