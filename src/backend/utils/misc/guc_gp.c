@@ -381,6 +381,7 @@ int			gp_resqueue_priority_inactivity_timeout;
 int			gp_resqueue_priority_grouping_timeout;
 double		gp_resqueue_priority_cpucores_per_segment;
 char	   *gp_resqueue_priority_default_value;
+char	   *gp_resqueue_cgroup_path;
 bool		gp_debug_resqueue_priority = false;
 
 /* Perfmon segment GUCs */
@@ -5298,7 +5299,7 @@ struct config_string ConfigureNamesString_gp[] =
 			NULL
 		},
 		&gp_resqueue_cgroup_path,
-		"", gpvars_assign_gp_resqueue_cgroup_path, NULL
+		"", NULL, NULL
 	},
 
 	{

@@ -582,6 +582,27 @@ FetchStatementTargetList(Node *stmt)
 	return NIL;
 }
 
+
+void AddMyselfToCgroupMemQueue()
+{
+	char tasks[1024];
+	char pidstr[64];
+	if (gp_resqueue_cgroup_path == NULL || strlen(gp_resqueue_cgroup_path) == 0)
+		return;
+
+	snprintf(tasks, sizeof(tasks), "%s/tasks", gp_resqueue_cgroup_path);
+
+	if ((cfd = open(tasks, O_WRONLY)) == -1)
+		elog(ERROR, "failed to locate cgroup path: %s", tasks);
+
+	snprintf(pidstr, sizeof(pidstr), "%d\n",getpid());
+	if (write(cfd, pidstr, sizeof(pidstr)) == -1)
+		elog(ERROR, "failed to wirte cgroup path: %s", tasks);
+
+	if (close(cfd) == -1)
+		elog(ERROR, "failed to close cgroup path: %s", tasks);
+}
+
 /*
  * PortalStart
  *		Prepare a portal for execution.
@@ -621,6 +642,7 @@ PortalStart(Portal portal, ParamListInfo params, Snapshot snapshot,
     
 	portal->ddesc = ddesc;
 
+	AddMyselfToCgroupMemQueue();
     /*
 	 * Set up global portal context pointers.  (Should we set QueryContext?)
 	 */
