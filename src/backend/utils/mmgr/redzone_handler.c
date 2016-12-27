@@ -136,6 +136,11 @@ RedZoneHandler_IsVmemRedZone()
 			 */
 			LWLockAcquire(ResQueueLock, LW_EXCLUSIVE);
 			ResQueue resQueue = ResQueueHashFind(MyQueueId);
+			if (resQueue == NULL)
+			{
+				LWLockRelease(ResQueueLock);
+				return false;
+			}
 
 			redZoneChunks = VmemTracker_ConvertVmemMBToChunks(resQueue->limits[RES_MEMORY_LIMIT].threshold_value * (((float) runaway_detector_activation_percent) / 100.0));
 

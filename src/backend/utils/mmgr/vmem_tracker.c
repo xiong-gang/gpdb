@@ -194,6 +194,12 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 	LWLockAcquire(ResQueueLock, LW_EXCLUSIVE);
 	ResQueue resQueue = ResQueueHashFind(MyQueueId);
 
+	if (resQueue == NULL)
+	{
+		LWLockRelease(ResQueueLock);
+		return MemoryAllocation_Success;
+	}
+
 
 	/* Now reserve vmem at segment level */
 	int32 new_vmem = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)&resQueue->vmemChunks, numChunksToReserve);
@@ -268,6 +274,12 @@ VmemTracker_ReleaseVmemChunks(int reduction)
 
 	LWLockAcquire(ResQueueLock, LW_EXCLUSIVE);
 	ResQueue resQueue = ResQueueHashFind(MyQueueId);
+
+	if (resQueue == NULL)
+	{
+		LWLockRelease(ResQueueLock);
+		return;
+	}
 
 	pg_atomic_sub_fetch_u32((pg_atomic_uint32 *) &resQueue->vmemChunks, reduction);
 
