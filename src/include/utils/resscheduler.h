@@ -19,6 +19,7 @@
 #include "nodes/plannodes.h"
 #include "storage/lock.h"
 #include "tcop/dest.h"
+#include "executor/execdesc.h"
 
 /*
  * GUC variables.

@@ -17,6 +17,7 @@
 #include "miscadmin.h"
 #include "utils/vmem_tracker.h"
 #include "utils/session_state.h"
+#include "utils/resscheduler.h"
 
 /* External dependencies within the runaway cleanup framework */
 extern bool vmemTrackerInited;
@@ -25,6 +26,8 @@ extern volatile EventVersion *CurrentVersion;
 extern volatile EventVersion *latestRunawayVersion;
 extern void RunawayCleaner_StartCleanup(void);
 extern int32 VmemTracker_ConvertVmemMBToChunks(int mb);
+
+static bool inRedZoneHandler = false;
 
 #define SHMEM_RUNAWAY_DETECTOR_MUTEX "SHMEM_RUNAWAY_DETECTOR_MUTEX"
 #define INVALID_SESSION_ID -1
@@ -336,18 +339,23 @@ RedZoneHandler_DetectRunawaySession()
 	 * done at the end of LWLockAcquire. This may cause the semaphore to never wake up other waiting
 	 * processes and therefore may cause other processes to hang perpetually.
 	 */
-	if (!RedZoneHandler_IsVmemRedZone() || InterruptHoldoffCount > 0 ||
-			CritSectionCount > 0)
+	if (!inRedZoneHandler)
 	{
-		return;
+		inRedZoneHandler = true;
+		if (!RedZoneHandler_IsVmemRedZone() || InterruptHoldoffCount > 0 ||
+				CritSectionCount > 0)
+		{
+			return;
+		}
+
+		/* We don't support runaway detection/termination from non-owner thread */
+		Assert(MemoryProtection_IsOwnerThread());
+		Assert(gp_mp_inited);
+
+		RedZoneHandler_FlagTopConsumer();
+		RunawayCleaner_StartCleanup();
+		inRedZoneHandler = false;
 	}
-
-	/* We don't support runaway detection/termination from non-owner thread */
-	Assert(MemoryProtection_IsOwnerThread());
-	Assert(gp_mp_inited);
-
-	RedZoneHandler_FlagTopConsumer();
-	RunawayCleaner_StartCleanup();
 }
 
 /*

@@ -38,6 +38,7 @@
 #include "utils/memutils.h"
 #include "utils/resscheduler.h"
 #include "utils/syscache.h"
+#include "utils/session_state.h"
 
 /*
  * GUC variables.
@@ -239,6 +240,7 @@ InitResQueues(void)
 		if (!queuesok)
 		{
 			/** Break out of loop. Close relations, relinquish LWLock and then error out */ 
+			MySessionState->queueId = queueid;
 			break;
 		}
 	}
@@ -260,7 +262,6 @@ InitResQueues(void)
 	CurrentResourceOwner = NULL;
 	ResourceOwnerDelete(owner);
 
-	MySessionState->queueId = queueid;
 
 	return;
 }

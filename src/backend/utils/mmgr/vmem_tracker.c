@@ -19,6 +19,7 @@
 #include "utils/faultinjection.h"
 #include "utils/vmem_tracker.h"
 #include "utils/session_state.h"
+#include "utils/resscheduler.h"
 
 /* External dependencies within the runaway cleanup framework */
 extern void EventVersion_ShmemInit(void);
@@ -165,8 +166,8 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 	Assert(NULL != MySessionState);
 
 	Assert(0 < numChunksToReserve);
-	int32 total = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
-	Assert(total > (int32) 0);
+	//int32 total = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
+	//Assert(total > (int32) 0);
 
 	/* We don't support vmem usage from non-owner thread */
 	Assert(MemoryProtection_IsOwnerThread());
@@ -314,7 +315,7 @@ VmemTracker_GetNonNegativeAvailableVmemChunks()
 static int32
 VmemTracker_GetNonNegativeAvailableQueryChunks()
 {
-	int32 curSessionVmem = MySessionState->sessionVmem;
+	//int32 curSessionVmem = MySessionState->sessionVmem;
 //	if (vmemTrackerInited && maxChunksPerQuery > curSessionVmem)
 //	{
 //		return maxChunksPerQuery - curSessionVmem;
