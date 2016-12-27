@@ -260,6 +260,8 @@ InitResQueues(void)
 	CurrentResourceOwner = NULL;
 	ResourceOwnerDelete(owner);
 
+	MySessionState->queueId = queueid;
+
 	return;
 }
 
@@ -303,6 +305,8 @@ ResCreateQueue(Oid queueid, Cost limits[NUM_RES_LIMIT_TYPES], bool overcommit,
 
 	/* Set ignore cost limit. */
 	queue->ignorecostlimit = ignorelimit;
+
+	queue->vmemChunks = 0;
 
 	/* Now run through all the possible limit types.*/
 	for (i = 0 ; i < NUM_RES_LIMIT_TYPES; i++)

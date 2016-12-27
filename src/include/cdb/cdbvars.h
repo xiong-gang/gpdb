@@ -1088,4 +1088,6 @@ extern char *gp_idf_deduplicate_str;
 /* default to RANDOM distribution for CREATE TABLE without DISTRIBUTED BY */
 extern bool gp_create_table_random_default_distribution;
 
+extern bool enable_resource_manager;
+
 #endif   /* CDBVARS_H */

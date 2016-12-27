@@ -59,7 +59,7 @@ bool vmemTrackerInited = false;
  * A derived parameter from gp_vmem_limit_per_query in chunks unit,
  * considering the current chunk size.
  */
-static int32 maxChunksPerQuery = 0;
+//static int32 maxChunksPerQuery = 0;
 
 /*
  * How many chunks are currently waived from checking (e.g., for error
@@ -67,10 +67,6 @@ static int32 maxChunksPerQuery = 0;
  */
 static int32 waivedChunks = 0;
 
-/*
- * Consumed vmem on the segment.
- */
-volatile int32 *segmentVmemChunks = NULL;
 
 static void ReleaseAllVmemChunks(void);
 
@@ -87,43 +83,20 @@ VmemTracker_ShmemInit()
 	maxVmemChunksTracked = 0;
 	trackedBytes = 0;
 
-	bool		alreadyInShmem = false;
-
-	segmentVmemChunks = (int32 *)
-								ShmemInitStruct(SHMEM_AVAILABLE_VMEM,
-										sizeof(int32),
-										&alreadyInShmem);
-	Assert(alreadyInShmem || !IsUnderPostmaster);
-
-	Assert(NULL != segmentVmemChunks);
-
 	if(!IsUnderPostmaster)
 	{
 		Assert(chunkSizeInBits == BITS_IN_MB);
 
-		vmemChunksQuota = gp_vmem_protect_limit;
-		/*
-		 * If vmem is larger than 16GB (i.e., 16K MB), we make the chunks bigger
-		 * so that the vmem limit in chunks unit is not larger than 16K.
-		 */
-		while(vmemChunksQuota > (16 * 1024))
-		{
-			chunkSizeInBits++;
-			vmemChunksQuota >>= 1;
-		}
-
-		/*
-		 * gp_vmem_limit_per_query is in kB. So, first convert it to MB, and then shift it
-		 * to adjust for cases where we enlarged our chunk size
-		 */
-		maxChunksPerQuery = ceil(gp_vmem_limit_per_query / (1024.0 * (1 << (chunkSizeInBits - BITS_IN_MB))));
+//		/*
+//		 * gp_vmem_limit_per_query is in kB. So, first convert it to MB, and then shift it
+//		 * to adjust for cases where we enlarged our chunk size
+//		 */
+//		maxChunksPerQuery = ceil(gp_vmem_limit_per_query / (1024.0 * (1 << (chunkSizeInBits - BITS_IN_MB))));
 
 		/* Initialize the sub-systems */
 		EventVersion_ShmemInit();
 		RedZoneHandler_ShmemInit();
 		IdleTracker_ShmemInit();
-
-		*segmentVmemChunks = 0;
 	}
 }
 
@@ -149,9 +122,7 @@ VmemTracker_Init()
 	trackedBytes = 0;
 
 	Assert(0 < vmemChunksQuota || Gp_role != GP_ROLE_EXECUTE);
-	Assert(gp_vmem_limit_per_query == 0 || (maxChunksPerQuery != 0 && maxChunksPerQuery < gp_vmem_limit_per_query));
-
-	Assert(NULL != segmentVmemChunks);
+	//Assert(gp_vmem_limit_per_query == 0 || (maxChunksPerQuery != 0 && maxChunksPerQuery < gp_vmem_limit_per_query));
 
 	IdleTracker_Init();
 	RunawayCleaner_Init();
@@ -170,7 +141,6 @@ VmemTracker_Shutdown()
 	vmemTrackerInited = false;
 
 	ReleaseAllVmemChunks();
-	Assert(*segmentVmemChunks >= 0);
 
 	IdleTracker_Shutdown();
 }
@@ -208,26 +178,46 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 	 * For non-QE processes and processes in critical section, we don't enforce
 	 * VMEM, but we do track the usage.
 	 */
-	if (maxChunksPerQuery != 0 && total > maxChunksPerQuery &&
-			Gp_role == GP_ROLE_EXECUTE && CritSectionCount == 0)
-	{
-		if (total > maxChunksPerQuery + waivedChunks)
-		{
-			/* Revert the reserved space, but don't revert the prev_alloc as we have already set the firstTime to false */
-			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
-			return MemoryFailure_QueryMemoryExhausted;
-		}
-		waiverUsed = true;
-	}
+//	if (maxChunksPerQuery != 0 && total > maxChunksPerQuery &&
+//			Gp_role == GP_ROLE_EXECUTE && CritSectionCount == 0)
+//	{
+//		if (total > maxChunksPerQuery + waivedChunks)
+//		{
+//			/* Revert the reserved space, but don't revert the prev_alloc as we have already set the firstTime to false */
+//			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
+//			return MemoryFailure_QueryMemoryExhausted;
+//		}
+//		waiverUsed = true;
+//	}
+
+	LWLockAcquire(ResQueueLock, LW_EXCLUSIVE);
+	ResQueue resQueue = ResQueueHashFind(MyQueueId);
+
 
 	/* Now reserve vmem at segment level */
-	int32 new_vmem = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)segmentVmemChunks, numChunksToReserve);
+	int32 new_vmem = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)&resQueue->vmemChunks, numChunksToReserve);
 
 	/*
 	 * If segment vmem is exhausted, rollback query level reservation. For non-QE
 	 * processes and processes in critical section, we don't enforce VMEM, but we
 	 * do track the usage.
 	 */
+
+	if (vmemChunksQuota == 0)
+	{
+		vmemChunksQuota = resQueue->limits[RES_MEMORY_LIMIT].threshold_value;
+
+		/*
+		 * If vmem is larger than 16GB (i.e., 16K MB), we make the chunks bigger
+		 * so that the vmem limit in chunks unit is not larger than 16K.
+		 */
+		while(vmemChunksQuota > (16 * 1024))
+		{
+			chunkSizeInBits++;
+			vmemChunksQuota >>= 1;
+		}
+	}
+
 	if (new_vmem > vmemChunksQuota &&
 			Gp_role == GP_ROLE_EXECUTE && CritSectionCount == 0)
 	{
@@ -237,12 +227,16 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
 
 			/* Revert vmem reservation */
-			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)segmentVmemChunks, numChunksToReserve);
+			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&resQueue->vmemChunks, numChunksToReserve);
+
+			LWLockRelease(ResQueueLock);
 
 			return MemoryFailure_VmemExhausted;
 		}
 		waiverUsed = true;
 	}
+
+	LWLockRelease(ResQueueLock);
 
 	/* The current process now owns additional vmem in this segment */
 	trackedVmemChunks += numChunksToReserve;
@@ -271,9 +265,13 @@ VmemTracker_ReleaseVmemChunks(int reduction)
 	/* We don't support vmem usage from non-owner thread */
 	Assert(MemoryProtection_IsOwnerThread());
 
-	pg_atomic_sub_fetch_u32((pg_atomic_uint32 *) segmentVmemChunks, reduction);
+	LWLockAcquire(ResQueueLock, LW_EXCLUSIVE);
+	ResQueue resQueue = ResQueueHashFind(MyQueueId);
 
-	Assert(*segmentVmemChunks >= 0);
+	pg_atomic_sub_fetch_u32((pg_atomic_uint32 *) &resQueue->vmemChunks, reduction);
+
+	LWLockRelease(ResQueueLock);
+
 	Assert(NULL != MySessionState);
 	pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, reduction);
 	Assert(0 <= MySessionState->sessionVmem);
@@ -298,12 +296,12 @@ ReleaseAllVmemChunks()
 static int32
 VmemTracker_GetNonNegativeAvailableVmemChunks()
 {
-	int32 usedChunks = *segmentVmemChunks;
-	if (vmemTrackerInited && vmemChunksQuota > usedChunks)
-	{
-		return vmemChunksQuota - usedChunks;
-	}
-	else
+//	int32 usedChunks = *segmentVmemChunks;
+//	if (vmemTrackerInited && vmemChunksQuota > usedChunks)
+//	{
+//		return vmemChunksQuota - usedChunks;
+//	}
+//	else
 	{
 		return 0;
 	}
@@ -317,11 +315,11 @@ static int32
 VmemTracker_GetNonNegativeAvailableQueryChunks()
 {
 	int32 curSessionVmem = MySessionState->sessionVmem;
-	if (vmemTrackerInited && maxChunksPerQuery > curSessionVmem)
-	{
-		return maxChunksPerQuery - curSessionVmem;
-	}
-	else
+//	if (vmemTrackerInited && maxChunksPerQuery > curSessionVmem)
+//	{
+//		return maxChunksPerQuery - curSessionVmem;
+//	}
+//	else
 	{
 		return 0;
 	}

@@ -1126,13 +1126,14 @@ uint64 ResourceQueueGetQueryMemoryLimit(PlannedStmt *stmt, Oid queueId)
 
 	int64 resqLimitBytes = ResourceQueueGetMemoryLimit(queueId);
 
+	float ratio = enable_resource_manager ? 0.2 : 1;
 	/**
 	 * If there is no memory limit on the queue, simply use statement_mem.
 	 */
 	AssertImply(resqLimitBytes < 0, resqLimitBytes == -1);
 	if (resqLimitBytes == -1)
 	{
-		return (uint64) statement_mem * 1024L;
+		return (uint64) statement_mem * 1024L * ratio;
 	}
 	
 	/**
@@ -1192,7 +1193,7 @@ uint64 ResourceQueueGetQueryMemoryLimit(PlannedStmt *stmt, Oid queueId)
 		queryMem = (uint64) statement_mem * 1024L;
 	}
 	
-	return queryMem;
+	return queryMem * ratio;
 }
 
 /**

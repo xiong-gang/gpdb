@@ -70,6 +70,7 @@ typedef struct ResQueueData
 	int				num_limits;			/* Number of limits in this queue */
 	bool			overcommit;			/* Does queue allow overcommit? */
 	float4			ignorecostlimit;	/* Ignore queries with cost less than.*/
+	volatile int	vmemChunks;			/* Number of limits in this queue */
 	ResLimitData	limits[NUM_RES_LIMIT_TYPES];	/* The limits */
 } ResQueueData;
 typedef ResQueueData	*ResQueue;

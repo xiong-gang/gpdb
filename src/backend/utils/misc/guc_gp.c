@@ -3404,6 +3404,16 @@ struct config_bool ConfigureNamesBool_gp[] =
 		false, NULL, NULL
 	},
 
+	{
+		{"enable_resource_manager", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Checks for interrupts before reserving VMEM"),
+			NULL,
+			GUC_GPDB_ADDOPT
+		},
+		&enable_resource_manager,
+		false, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL

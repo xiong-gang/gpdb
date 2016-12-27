@@ -95,20 +95,20 @@ RedZoneHandler_ShmemInit()
 		 * This may result in 0 vmem protect limit. In such case, we ensure that the
 		 * redZoneChunks is set to a large value.
 		 */
-		if (runaway_detector_activation_percent != 100)
-		{
-			/*
-			 * Calculate red zone threshold in MB, and then convert MB to "chunks"
-			 * using chunk size for efficient comparison to detect red zone
-			 */
-			redZoneChunks = VmemTracker_ConvertVmemMBToChunks(gp_vmem_protect_limit * (((float) runaway_detector_activation_percent) / 100.0));
-		}
-
-		/* 0 means disable red-zone completely */
-		if (redZoneChunks == 0)
-		{
-			redZoneChunks = INT32_MAX;
-		}
+//		if (runaway_detector_activation_percent != 100)
+//		{
+//			/*
+//			 * Calculate red zone threshold in MB, and then convert MB to "chunks"
+//			 * using chunk size for efficient comparison to detect red zone
+//			 */
+//			redZoneChunks = VmemTracker_ConvertVmemMBToChunks(gp_vmem_protect_limit * (((float) runaway_detector_activation_percent) / 100.0));
+//		}
+//
+//		/* 0 means disable red-zone completely */
+//		if (redZoneChunks == 0)
+//		{
+//			redZoneChunks = INT32_MAX;
+//		}
 
 		*isRunawayDetector = 0;
 	}
@@ -121,10 +121,36 @@ bool
 RedZoneHandler_IsVmemRedZone()
 {
 	Assert(!vmemTrackerInited || redZoneChunks > 0);
+	bool ret = false;
 
-	if (vmemTrackerInited)
+	if(redZoneChunks == 0 && MyQueueId != InvalidOid)
 	{
-		return *segmentVmemChunks > redZoneChunks;
+		if (runaway_detector_activation_percent != 100)
+		{
+			/*
+			 * Calculate red zone threshold in MB, and then convert MB to "chunks"
+			 * using chunk size for efficient comparison to detect red zone
+			 */
+			LWLockAcquire(ResQueueLock, LW_EXCLUSIVE);
+			ResQueue resQueue = ResQueueHashFind(MyQueueId);
+
+			redZoneChunks = VmemTracker_ConvertVmemMBToChunks(resQueue->limits[RES_MEMORY_LIMIT].threshold_value * (((float) runaway_detector_activation_percent) / 100.0));
+
+			if (vmemTrackerInited)
+			{
+				ret = resQueue->vmemChunks > redZoneChunks;
+			}
+
+			LWLockRelease(ResQueueLock);
+
+			return ret;
+		}
+
+		/* 0 means disable red-zone completely */
+		if (redZoneChunks == 0)
+		{
+			redZoneChunks = INT32_MAX;
+		}
 	}
 
 	return false;
@@ -181,7 +207,7 @@ RedZoneHandler_FlagTopConsumer()
 
 		Assert(maxActiveVmem <= maxVmem);
 
-		if (curVmem > maxActiveVmem)
+		if (curSessionState->queueId == MyQueueId && curVmem > maxActiveVmem)
 		{
 			if (curVmem > maxVmem)
 			{

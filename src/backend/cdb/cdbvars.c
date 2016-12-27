@@ -183,6 +183,8 @@ bool		gp_enable_slow_cursor_testmode = false;
  */
 bool		gp_eager_hashtable_release = true;
 
+bool		enable_resource_manager = false;
+
 /*
  * TCP port the Interconnect listens on for incoming connections from other
  * backends.  Assigned by initMotionLayerIPC() at process startup.  This port
