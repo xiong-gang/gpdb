@@ -227,6 +227,7 @@ extern bool gp_debug_pgproc;
  * on the log.
  */
 extern bool Debug_print_prelim_plan;
+extern bool debug_qe_reader;
 
 /* Parameter debug_print_slice_table
  *

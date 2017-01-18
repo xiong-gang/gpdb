@@ -62,6 +62,7 @@ int			gp_command_count;	/* num of commands from client */
 bool		gp_debug_pgproc;	/* print debug info for PGPROC */
 bool		Debug_print_prelim_plan;	/* Shall we log argument of
 										 * cdbparallelize? */
+bool       debug_qe_reader;
 
 bool		Debug_print_slice_table;	/* Shall we log the slice table? */
 

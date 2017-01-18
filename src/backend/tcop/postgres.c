@@ -575,6 +575,51 @@ SocketBackend(StringInfo inBuf)
  *		EOF is returned if end of file.
  * ----------------
  */
+typedef struct MppQueryInfo
+{
+	char type;
+	int gp_command_count;
+	int suid;
+	bool suid_is_super;
+	int ouid;
+	bool ouid_is_super;
+	int cuid;
+	int rootIdx;
+	TimestampTz statementStart;
+	int query_string_len;
+	int serializedQuerytreelen;
+	int serializedPlantreelen;
+	int serializedParamslen;
+	int serializedQueryDispatchDesclen;
+	int serializedDtxContextInfolen;
+	int seqServerHostlen;
+	int seqServerPort;
+	char query_string[1024];
+	char serializedQuerytree[1024];
+	char serializedPlantree[1024];
+	char serializedParams[1024];
+	char serializedQueryDispatchDesc[1024];
+	char serializedDtxContextInfo[1024];
+	char seqServerHost[100];
+	int localSlice;
+}MppQueryInfo;
+
+MppQueryInfo *mppQueryInfo;
+
+int QEShmemSize(void)
+{
+	/* just our one int4 */
+	return sizeof(MppQueryInfo);
+}
+
+void QEShmemInit(void)
+{
+	bool		found;
+
+	/* Create or attach to the SharedSnapshot shared structure */
+	mppQueryInfo = (MppQueryInfo *) ShmemInitStruct("QE shared memory", QEShmemSize(), &found);
+}
+
 static int
 ReadCommand(StringInfo inBuf)
 {
@@ -582,6 +627,10 @@ ReadCommand(StringInfo inBuf)
 
 	if (whereToSendOutput == DestRemote)
 		result = SocketBackend(inBuf);
+	else if (whereToSendOutput == DestWriterQE)
+	{
+		result = SocketBackend(inBuf);
+	}
 	else
 		result = InteractiveBackend(inBuf);
 	return result;
@@ -4976,171 +5025,210 @@ PostgresMain(int argc, char *argv[],
 					 * Since PortalDefineQuery() does not take NULL query string,
 					 * we initialize it with a contant empty string.
 					 */
-					const char *query_string = pstrdup("");
-					
-					const char *serializedDtxContextInfo = NULL;
-					const char *serializedQuerytree = NULL;
-					const char *serializedPlantree = NULL;
-					const char *serializedParams = NULL;
-					const char *serializedQueryDispatchDesc = NULL;
-					const char *seqServerHost = NULL;
-					
-					int query_string_len = 0;
-					int serializedDtxContextInfolen = 0;
-					int serializedQuerytreelen = 0;
-					int serializedPlantreelen = 0;
-					int serializedParamslen = 0;
-					int serializedQueryDispatchDesclen = 0;
-					int seqServerHostlen = 0;
-					int seqServerPort = -1;
-
-					int localSlice = -1, i;
-					int rootIdx;
-					int numSlices = 0;
-					TimestampTz statementStart;
-					Oid suid;
-					Oid ouid;
-					Oid cuid;
-					bool suid_is_super = false;
-					bool ouid_is_super = false;
-
-					int unusedFlags;
-
-					/* Set statement_timestamp() */
- 					SetCurrentStatementStartTimestamp();
-
-					/* get the client command serial# */
-					gp_command_count = pq_getmsgint(&input_message, 4);
-					
-					elog(DEBUG1, "Message type %c received by from libpq, len = %d", firstchar, input_message.len); /* TODO: Remove this */
-									
-					/* Get the userid info  (session, outer, current) */	
-					suid = pq_getmsgint(&input_message, 4);	
-					if(pq_getmsgbyte(&input_message) == 1)
-						suid_is_super = true;	
-					
-					ouid = pq_getmsgint(&input_message, 4);		
-					if(pq_getmsgbyte(&input_message) == 1)
-						ouid_is_super = true;	
-					cuid = pq_getmsgint(&input_message, 4);		
-					
-					rootIdx = pq_getmsgint(&input_message, 4);
-
-					statementStart = pq_getmsgint64(&input_message);
-					query_string_len = pq_getmsgint(&input_message, 4);
-					serializedQuerytreelen = pq_getmsgint(&input_message, 4);
-					serializedPlantreelen = pq_getmsgint(&input_message, 4);
-					serializedParamslen = pq_getmsgint(&input_message, 4);
-					serializedQueryDispatchDesclen = pq_getmsgint(&input_message, 4);
-					serializedDtxContextInfolen = pq_getmsgint(&input_message, 4);
-						
-					/* read in the DTX context info */
-					if (serializedDtxContextInfolen == 0)
-						serializedDtxContextInfo = NULL;
-					else
-						serializedDtxContextInfo = pq_getmsgbytes(&input_message,serializedDtxContextInfolen);
-
-					DtxContextInfo_Deserialize(serializedDtxContextInfo, serializedDtxContextInfolen, &TempDtxContextInfo);
-
-					/* get the transaction options */
-					unusedFlags = pq_getmsgint(&input_message, 4);
-
-					seqServerHostlen = pq_getmsgint(&input_message, 4);
-					seqServerPort = pq_getmsgint(&input_message, 4);
-
-					/* get the query string and kick off processing. */
-					if (query_string_len > 0)
-						query_string = pq_getmsgbytes(&input_message,query_string_len);
-					
-					if (serializedQuerytreelen > 0)
-						serializedQuerytree = pq_getmsgbytes(&input_message,serializedQuerytreelen);
-						
-					if (serializedPlantreelen > 0)
-						serializedPlantree = pq_getmsgbytes(&input_message,serializedPlantreelen);
-						
-					if (serializedParamslen > 0)
-						serializedParams = pq_getmsgbytes(&input_message,serializedParamslen);
-
-					if (serializedQueryDispatchDesclen > 0)
-						serializedQueryDispatchDesc = pq_getmsgbytes(&input_message,serializedQueryDispatchDesclen);
-
-					if (seqServerHostlen > 0)
-						seqServerHost = pq_getmsgbytes(&input_message, seqServerHostlen);
-
-					numSlices = pq_getmsgint(&input_message, 4);
-
-					Assert(qe_gang_id > 0);
-					for (i = 0; i < numSlices; ++i)
+					if (Gp_is_writer || !debug_qe_reader)
 					{
-						if (qe_gang_id == pq_getmsgint(&input_message, 4))
+						int i;
+						int rootIdx;
+						int numSlices = 0;
+						TimestampTz statementStart;
+						int unusedFlags;
+
+						/* Set statement_timestamp() */
+						SetCurrentStatementStartTimestamp();
+
+						/* get the client command serial# */
+						mppQueryInfo->gp_command_count = gp_command_count = pq_getmsgint(&input_message, 4);
+
+						elog(DEBUG1, "Message type %c received by from libpq, len = %d", firstchar, input_message.len); /* TODO: Remove this */
+
+						/* Get the userid info  (session, outer, current) */
+						mppQueryInfo->suid = pq_getmsgint(&input_message, 4);
+						if(pq_getmsgbyte(&input_message) == 1)
+							mppQueryInfo->suid_is_super = true;
+						if (mppQueryInfo->suid > 0)
+							SetSessionUserId(mppQueryInfo->suid, mppQueryInfo->suid_is_super); /* Set the session UserId */
+
+						mppQueryInfo->ouid = pq_getmsgint(&input_message, 4);
+						if(pq_getmsgbyte(&input_message) == 1)
+							mppQueryInfo->ouid_is_super = true;
+						if (mppQueryInfo->ouid > 0 && mppQueryInfo->ouid != GetSessionUserId())
+							SetCurrentRoleId(mppQueryInfo->ouid, mppQueryInfo->ouid_is_super); /* Set the outer UserId */
+
+						mppQueryInfo->cuid = pq_getmsgint(&input_message, 4);
+						if (mppQueryInfo->cuid > 0)
+							SetUserIdAndContext(mppQueryInfo->cuid, false); /* Set current userid */
+
+						/*unused*/
+						rootIdx = pq_getmsgint(&input_message, 4);
+						statementStart = pq_getmsgint64(&input_message);
+
+						mppQueryInfo->query_string_len = pq_getmsgint(&input_message, 4);
+						mppQueryInfo->serializedQuerytreelen = pq_getmsgint(&input_message, 4);
+						mppQueryInfo->serializedPlantreelen = pq_getmsgint(&input_message, 4);
+						mppQueryInfo->serializedParamslen = pq_getmsgint(&input_message, 4);
+						mppQueryInfo->serializedQueryDispatchDesclen = pq_getmsgint(&input_message, 4);
+						mppQueryInfo->serializedDtxContextInfolen = pq_getmsgint(&input_message, 4);
+
+						/* read in the DTX context info */
+						if (mppQueryInfo->serializedDtxContextInfolen != 0)
+							 pq_copymsgbytes(&input_message, mppQueryInfo->serializedDtxContextInfo, mppQueryInfo->serializedDtxContextInfolen);
+
+						DtxContextInfo_Deserialize(mppQueryInfo->serializedDtxContextInfo, mppQueryInfo->serializedDtxContextInfolen, &TempDtxContextInfo);
+
+						/* get the transaction options */
+						unusedFlags = pq_getmsgint(&input_message, 4);
+
+						mppQueryInfo->seqServerHostlen = pq_getmsgint(&input_message, 4);
+						mppQueryInfo->seqServerPort = pq_getmsgint(&input_message, 4);
+
+						/* get the query string and kick off processing. */
+						if (mppQueryInfo->query_string_len > 0)
+							 pq_copymsgbytes(&input_message, mppQueryInfo->query_string, mppQueryInfo->query_string_len);
+						
+						if (mppQueryInfo->serializedQuerytreelen > 0)
+							 pq_copymsgbytes(&input_message, mppQueryInfo->serializedQuerytree, mppQueryInfo->serializedQuerytreelen);
+
+						if (mppQueryInfo->serializedPlantreelen > 0)
+							 pq_copymsgbytes(&input_message, mppQueryInfo->serializedPlantree, mppQueryInfo->serializedPlantreelen);
+
+						if (mppQueryInfo->serializedParamslen > 0)
+							pq_copymsgbytes(&input_message, mppQueryInfo->serializedParams, mppQueryInfo->serializedParamslen);
+
+						if (mppQueryInfo->serializedQueryDispatchDesclen > 0)
+						    pq_copymsgbytes(&input_message, mppQueryInfo->serializedQueryDispatchDesc, mppQueryInfo->serializedQueryDispatchDesclen);
+
+						if (mppQueryInfo->seqServerHostlen > 0)
+						    pq_copymsgbytes(&input_message, mppQueryInfo->seqServerHost, mppQueryInfo->seqServerHostlen);
+
+						numSlices = pq_getmsgint(&input_message, 4);
+
+						Assert(qe_gang_id > 0);
+						mppQueryInfo->localSlice = -1;
+						for (i = 0; i < numSlices; ++i)
 						{
-							localSlice = i;
+							if (qe_gang_id == pq_getmsgint(&input_message, 4))
+							{
+								mppQueryInfo->localSlice = i;
+							}
 						}
-					}
 
-					if (localSlice == -1 && numSlices > 0)
-					{
-						ereport(ERROR,
-								(errcode(ERRCODE_PROTOCOL_VIOLATION),
-								 errmsg("QE cannot find slice to execute")));
-					}
-
-					pq_getmsgend(&input_message);
-
-					elog((Debug_print_full_dtm ? LOG : DEBUG5), "MPP dispatched stmt from QD: %s.",query_string);
-
-					if (suid > 0)				
-						SetSessionUserId(suid, suid_is_super); /* Set the session UserId */
-	
-					if (ouid > 0 && ouid != GetSessionUserId()) 
-						SetCurrentRoleId(ouid, ouid_is_super); /* Set the outer UserId */
-
-					// UNDONE: Make this more official...
-					if (TempDtxContextInfo.distributedSnapshot.header.maxCount == 0)
-						TempDtxContextInfo.distributedSnapshot.header.maxCount = max_prepared_xacts;
-					
-					setupQEDtxContext(&TempDtxContextInfo);
-					
-					if (cuid > 0)
-						SetUserIdAndContext(cuid, false); /* Set current userid */
-
-					if (serializedQuerytreelen==0 && serializedPlantreelen==0)
-					{
-						if (strncmp(query_string, "BEGIN", 5) == 0)
+						if (mppQueryInfo->localSlice == -1 && numSlices > 0)
 						{
-							CommandDest dest = whereToSendOutput;
-							
-							/*
-							 * Special explicit BEGIN for COPY, etc.
-							 * We've already begun it as part of setting up the context.
-							 */
-							elog((Debug_print_full_dtm ? LOG : DEBUG5), "PostgresMain explicit %s", query_string);
-							
-							// UNDONE: HACK
-							pgstat_report_activity("BEGIN");
-							
-							set_ps_display("BEGIN", false);
-							
-							BeginCommand("BEGIN", dest);
-							
-							EndCommand("BEGIN", dest);
-							
+							ereport(ERROR,
+									(errcode(ERRCODE_PROTOCOL_VIOLATION),
+									 errmsg("QE cannot find slice to execute")));
+						}
+
+						pq_getmsgend(&input_message);
+
+						// UNDONE: Make this more official...
+						if (TempDtxContextInfo.distributedSnapshot.header.maxCount == 0)
+							TempDtxContextInfo.distributedSnapshot.header.maxCount = max_prepared_xacts;
+						
+						setupQEDtxContext(&TempDtxContextInfo);
+						
+
+						if (mppQueryInfo->serializedQuerytreelen==0 && mppQueryInfo->serializedPlantreelen==0)
+						{
+							if (strncmp(&mppQueryInfo->query_string[0], "BEGIN", 5) == 0)
+							{
+								CommandDest dest = whereToSendOutput;
+
+								/*
+								 * Special explicit BEGIN for COPY, etc.
+								 * We've already begun it as part of setting up the context.
+								 */
+								elog((Debug_print_full_dtm ? LOG : DEBUG5), "PostgresMain explicit %s", mppQueryInfo->query_string);
+
+								// UNDONE: HACK
+								pgstat_report_activity("BEGIN");
+
+								set_ps_display("BEGIN", false);
+
+								BeginCommand("BEGIN", dest);
+
+								EndCommand("BEGIN", dest);
+							}
+							else
+							{
+								exec_simple_query(mppQueryInfo->query_string, mppQueryInfo->seqServerHost, mppQueryInfo->seqServerPort);
+							}
 						}
 						else
-						{
-							exec_simple_query(query_string, seqServerHost, seqServerPort);
-						}
+							exec_mpp_query(mppQueryInfo->query_string,
+									mppQueryInfo->serializedQuerytree, mppQueryInfo->serializedQuerytreelen,
+									mppQueryInfo->serializedPlantree, mppQueryInfo->serializedPlantreelen,
+									mppQueryInfo->serializedParams, mppQueryInfo->serializedParamslen,
+									mppQueryInfo->serializedQueryDispatchDesc, mppQueryInfo->serializedQueryDispatchDesclen,
+									mppQueryInfo->seqServerHost, mppQueryInfo->seqServerPort, mppQueryInfo->localSlice);
 					}
 					else
-						exec_mpp_query(query_string, 
-									   serializedQuerytree, serializedQuerytreelen,
-									   serializedPlantree, serializedPlantreelen,
-									   serializedParams, serializedParamslen,
-									   serializedQueryDispatchDesc, serializedQueryDispatchDesclen,
-									   seqServerHost, seqServerPort, localSlice);
+					{
+						int i;
+						int rootIdx;
+						int numSlices = 0;
+						TimestampTz statementStart;
+						int unusedFlags;
+
+						/* Set statement_timestamp() */
+						SetCurrentStatementStartTimestamp();
+
+						/* get the client command serial# */
+						gp_command_count = mppQueryInfo->gp_command_count;
+
+						/* Get the userid info  (session, outer, current) */
+						if (mppQueryInfo->suid > 0)
+							SetSessionUserId(mppQueryInfo->suid, mppQueryInfo->suid_is_super); /* Set the session UserId */
+
+						if (mppQueryInfo->ouid > 0 && mppQueryInfo->ouid != GetSessionUserId())
+							SetCurrentRoleId(mppQueryInfo->ouid, mppQueryInfo->ouid_is_super); /* Set the outer UserId */
+
+						if (mppQueryInfo->cuid > 0)
+							SetUserIdAndContext(mppQueryInfo->cuid, false); /* Set current userid */
+
+						DtxContextInfo_Deserialize(mppQueryInfo->serializedDtxContextInfo, mppQueryInfo->serializedDtxContextInfolen, &TempDtxContextInfo);
+						// UNDONE: Make this more official...
+						if (TempDtxContextInfo.distributedSnapshot.header.maxCount == 0)
+							TempDtxContextInfo.distributedSnapshot.header.maxCount = max_prepared_xacts;
+						setupQEDtxContext(&TempDtxContextInfo);
+
+						if (mppQueryInfo->serializedQuerytreelen==0 && mppQueryInfo->serializedPlantreelen==0)
+						{
+							if (strncmp(&mppQueryInfo->query_string[0], "BEGIN", 5) == 0)
+							{
+								CommandDest dest = whereToSendOutput;
+
+								/*
+								 * Special explicit BEGIN for COPY, etc.
+								 * We've already begun it as part of setting up the context.
+								 */
+								elog((Debug_print_full_dtm ? LOG : DEBUG5), "PostgresMain explicit %s", mppQueryInfo->query_string);
+
+								// UNDONE: HACK
+								pgstat_report_activity("BEGIN");
+
+								set_ps_display("BEGIN", false);
+
+								BeginCommand("BEGIN", dest);
+
+								EndCommand("BEGIN", dest);
+
+							}
+							else
+							{
+								exec_simple_query(mppQueryInfo->query_string, mppQueryInfo->seqServerHost, mppQueryInfo->seqServerPort);
+							}
+						}
+						else
+							exec_mpp_query(mppQueryInfo->query_string,
+									mppQueryInfo->serializedQuerytree, mppQueryInfo->serializedQuerytreelen,
+									mppQueryInfo->serializedPlantree, mppQueryInfo->serializedPlantreelen,
+									mppQueryInfo->serializedParams, mppQueryInfo->serializedParamslen,
+									mppQueryInfo->serializedQueryDispatchDesc, mppQueryInfo->serializedQueryDispatchDesclen,
+									mppQueryInfo->seqServerHost, mppQueryInfo->seqServerPort, mppQueryInfo->localSlice);
+					}
 
 					SetUserIdAndContext(GetOuterUserId(), false);
-
 					send_ready_for_query = true;
 				}
 				break;

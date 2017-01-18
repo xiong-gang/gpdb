@@ -379,6 +379,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	WalRcvShmemInit();
 	//AutoVacuumShmemInit();
 	SeqServerShmemInit();
+	QEShmemInit();
 
 	if (GPAreFileReplicationStructuresRequired()) {
 	

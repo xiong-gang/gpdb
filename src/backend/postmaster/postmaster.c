@@ -6486,7 +6486,8 @@ BackendInitialize(Port *port)
 	 * Must do this now because authentication uses libpq to send messages.
 	 */
 	pq_init();					/* initialize libpq to talk to client */
-	whereToSendOutput = DestRemote;		/* now safe to ereport to client */
+
+	whereToSendOutput = Gp_is_writer ? DestRemote : DestWriterQE;		/* now safe to ereport to client */
 
 	/*
 	 * If possible, make this process a group leader, so that the postmaster
