@@ -620,6 +620,18 @@ void QEShmemInit(void)
 	mppQueryInfo = (MppQueryInfo *) ShmemInitStruct("QE shared memory", QEShmemSize(), &found);
 }
 
+int checkReaderQECommand(void)
+{
+	for(;;)
+	{
+		if(mppQueryInfo->type == 'M')
+			return 'M';
+		pg_usleep(1000);
+		//CHECK_FOR_INTERRUPT();
+	}
+	return EOF;
+}
+
 static int
 ReadCommand(StringInfo inBuf)
 {
@@ -629,7 +641,7 @@ ReadCommand(StringInfo inBuf)
 		result = SocketBackend(inBuf);
 	else if (whereToSendOutput == DestWriterQE)
 	{
-		result = SocketBackend(inBuf);
+		result = checkReaderQECommand(inBuf);
 	}
 	else
 		result = InteractiveBackend(inBuf);
@@ -5118,7 +5130,7 @@ PostgresMain(int argc, char *argv[],
 									(errcode(ERRCODE_PROTOCOL_VIOLATION),
 									 errmsg("QE cannot find slice to execute")));
 						}
-
+						mppQueryInfo->type = 'M';
 						pq_getmsgend(&input_message);
 
 						// UNDONE: Make this more official...
@@ -5227,7 +5239,7 @@ PostgresMain(int argc, char *argv[],
 									mppQueryInfo->serializedQueryDispatchDesc, mppQueryInfo->serializedQueryDispatchDesclen,
 									mppQueryInfo->seqServerHost, mppQueryInfo->seqServerPort, mppQueryInfo->localSlice);
 					}
-
+					mppQueryInfo->type = '0';
 					SetUserIdAndContext(GetOuterUserId(), false);
 					send_ready_for_query = true;
 				}

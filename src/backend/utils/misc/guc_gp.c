@@ -723,6 +723,14 @@ struct config_bool ConfigureNamesBool_gp[] =
 		false, NULL, NULL
 	},
 	{
+		{"debug_qe_reader", PGC_USERSET, LOGGING_WHAT,
+			gettext_noop("Prints the preliminary execution plan to server log."),
+			NULL
+		},
+		&debug_qe_reader,
+		false, NULL, NULL
+	},
+	{
 		{"debug_print_slice_table", PGC_USERSET, LOGGING_WHAT,
 			gettext_noop("Prints the slice table to server log."),
 			NULL

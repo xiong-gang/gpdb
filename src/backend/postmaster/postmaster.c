@@ -6487,7 +6487,9 @@ BackendInitialize(Port *port)
 	 */
 	pq_init();					/* initialize libpq to talk to client */
 
-	whereToSendOutput = Gp_is_writer ? DestRemote : DestWriterQE;		/* now safe to ereport to client */
+	whereToSendOutput = DestRemote;		/* now safe to ereport to client */
+	if (debug_qe_reader && Gp_is_writer)
+		whereToSendOutput = DestWriterQE;
 
 	/*
 	 * If possible, make this process a group leader, so that the postmaster
