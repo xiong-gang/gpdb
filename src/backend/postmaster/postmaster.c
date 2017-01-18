@@ -6488,7 +6488,7 @@ BackendInitialize(Port *port)
 	pq_init();					/* initialize libpq to talk to client */
 
 	whereToSendOutput = DestRemote;		/* now safe to ereport to client */
-	if (debug_qe_reader && Gp_is_writer)
+	if (debug_qe_reader && !Gp_is_writer)
 		whereToSendOutput = DestWriterQE;
 
 	/*

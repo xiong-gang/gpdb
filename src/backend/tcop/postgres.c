@@ -601,7 +601,8 @@ typedef struct MppQueryInfo
 	char serializedQueryDispatchDesc[1024];
 	char serializedDtxContextInfo[1024];
 	char seqServerHost[100];
-	int localSlice;
+	int numSlices;
+	int sliceMap[50];
 }MppQueryInfo;
 
 MppQueryInfo *mppQueryInfo;
@@ -637,11 +638,11 @@ ReadCommand(StringInfo inBuf)
 {
 	int			result;
 
-	if (whereToSendOutput == DestRemote)
+	if (!debug_qe_reader || whereToSendOutput == DestRemote)
 		result = SocketBackend(inBuf);
 	else if (whereToSendOutput == DestWriterQE)
 	{
-		result = checkReaderQECommand(inBuf);
+		result = checkReaderQECommand();
 	}
 	else
 		result = InteractiveBackend(inBuf);
@@ -5039,7 +5040,7 @@ PostgresMain(int argc, char *argv[],
 					 */
 					if (Gp_is_writer || !debug_qe_reader)
 					{
-						int i;
+						int localSlice = -1, i;
 						int rootIdx;
 						int numSlices = 0;
 						TimestampTz statementStart;
@@ -5112,19 +5113,21 @@ PostgresMain(int argc, char *argv[],
 						if (mppQueryInfo->seqServerHostlen > 0)
 						    pq_copymsgbytes(&input_message, mppQueryInfo->seqServerHost, mppQueryInfo->seqServerHostlen);
 
-						numSlices = pq_getmsgint(&input_message, 4);
+						mppQueryInfo->numSlices = pq_getmsgint(&input_message, 4);
 
 						Assert(qe_gang_id > 0);
-						mppQueryInfo->localSlice = -1;
+						localSlice = -1;
 						for (i = 0; i < numSlices; ++i)
 						{
-							if (qe_gang_id == pq_getmsgint(&input_message, 4))
+							int gang = pq_getmsgint(&input_message, 4);
+							mppQueryInfo->sliceMap[i] = gang;
+							if (qe_gang_id == gang)
 							{
-								mppQueryInfo->localSlice = i;
+								localSlice = i;
 							}
 						}
 
-						if (mppQueryInfo->localSlice == -1 && numSlices > 0)
+						if (localSlice == -1 && numSlices > 0)
 						{
 							ereport(ERROR,
 									(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -5172,11 +5175,11 @@ PostgresMain(int argc, char *argv[],
 									mppQueryInfo->serializedPlantree, mppQueryInfo->serializedPlantreelen,
 									mppQueryInfo->serializedParams, mppQueryInfo->serializedParamslen,
 									mppQueryInfo->serializedQueryDispatchDesc, mppQueryInfo->serializedQueryDispatchDesclen,
-									mppQueryInfo->seqServerHost, mppQueryInfo->seqServerPort, mppQueryInfo->localSlice);
+									mppQueryInfo->seqServerHost, mppQueryInfo->seqServerPort, localSlice);
 					}
 					else
 					{
-						int i;
+						int localSlice = -1, i;
 						int rootIdx;
 						int numSlices = 0;
 						TimestampTz statementStart;
@@ -5203,6 +5206,21 @@ PostgresMain(int argc, char *argv[],
 						if (TempDtxContextInfo.distributedSnapshot.header.maxCount == 0)
 							TempDtxContextInfo.distributedSnapshot.header.maxCount = max_prepared_xacts;
 						setupQEDtxContext(&TempDtxContextInfo);
+
+						for (i = 0; i < mppQueryInfo->numSlices; ++i)
+						{
+							if (qe_gang_id == mppQueryInfo->sliceMap[i])
+							{
+								localSlice = i;
+								break;
+							}
+						}
+						if (localSlice == -1 && mppQueryInfo->numSlices > 0)
+						{
+							ereport(ERROR,
+									(errcode(ERRCODE_PROTOCOL_VIOLATION),
+									 errmsg("QE cannot find slice to execute")));
+						}
 
 						if (mppQueryInfo->serializedQuerytreelen==0 && mppQueryInfo->serializedPlantreelen==0)
 						{
@@ -5237,7 +5255,7 @@ PostgresMain(int argc, char *argv[],
 									mppQueryInfo->serializedPlantree, mppQueryInfo->serializedPlantreelen,
 									mppQueryInfo->serializedParams, mppQueryInfo->serializedParamslen,
 									mppQueryInfo->serializedQueryDispatchDesc, mppQueryInfo->serializedQueryDispatchDesclen,
-									mppQueryInfo->seqServerHost, mppQueryInfo->seqServerPort, mppQueryInfo->localSlice);
+									mppQueryInfo->seqServerHost, mppQueryInfo->seqServerPort, localSlice);
 					}
 					mppQueryInfo->type = '0';
 					SetUserIdAndContext(GetOuterUserId(), false);

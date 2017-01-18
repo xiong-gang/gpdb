@@ -725,7 +725,8 @@ struct config_bool ConfigureNamesBool_gp[] =
 	{
 		{"debug_qe_reader", PGC_USERSET, LOGGING_WHAT,
 			gettext_noop("Prints the preliminary execution plan to server log."),
-			NULL
+			NULL,
+			GUC_GPDB_ADDOPT
 		},
 		&debug_qe_reader,
 		false, NULL, NULL
