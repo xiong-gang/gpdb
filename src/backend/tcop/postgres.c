@@ -628,7 +628,7 @@ int checkReaderQECommand(void)
 		if(mppQueryInfo->type == 'M')
 			return 'M';
 		pg_usleep(1000);
-		//CHECK_FOR_INTERRUPT();
+		CHECK_FOR_INTERRUPTS();
 	}
 	return EOF;
 }
@@ -638,11 +638,12 @@ ReadCommand(StringInfo inBuf)
 {
 	int			result;
 
-	if (!debug_qe_reader || whereToSendOutput == DestRemote)
-		result = SocketBackend(inBuf);
-	else if (whereToSendOutput == DestWriterQE)
+	if (whereToSendOutput == DestRemote)
 	{
-		result = checkReaderQECommand();
+		if (debug_qe_reader && Gp_role != GP_ROLE_DISPATCH && !Gp_is_writer)
+			result = checkReaderQECommand();
+		else
+			result = SocketBackend(inBuf);
 	}
 	else
 		result = InteractiveBackend(inBuf);
@@ -5042,7 +5043,6 @@ PostgresMain(int argc, char *argv[],
 					{
 						int localSlice = -1, i;
 						int rootIdx;
-						int numSlices = 0;
 						TimestampTz statementStart;
 						int unusedFlags;
 
@@ -5117,7 +5117,7 @@ PostgresMain(int argc, char *argv[],
 
 						Assert(qe_gang_id > 0);
 						localSlice = -1;
-						for (i = 0; i < numSlices; ++i)
+						for (i = 0; i < mppQueryInfo->numSlices; ++i)
 						{
 							int gang = pq_getmsgint(&input_message, 4);
 							mppQueryInfo->sliceMap[i] = gang;
@@ -5127,7 +5127,7 @@ PostgresMain(int argc, char *argv[],
 							}
 						}
 
-						if (localSlice == -1 && numSlices > 0)
+						if (localSlice == -1 && mppQueryInfo->numSlices > 0)
 						{
 							ereport(ERROR,
 									(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -5181,7 +5181,6 @@ PostgresMain(int argc, char *argv[],
 					{
 						int localSlice = -1, i;
 						int rootIdx;
-						int numSlices = 0;
 						TimestampTz statementStart;
 						int unusedFlags;
 

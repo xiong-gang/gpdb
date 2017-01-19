@@ -86,8 +86,7 @@ typedef enum
 	DestSPI,					/* results sent to SPI manager */
 	DestTuplestore,				/* results sent to Tuplestore */
 	DestIntoRel,				/* results sent to relation (SELECT INTO) */
-	DestCopyOut,					/* results sent to COPY TO code */
-	DestWriterQE				/* results sent to relation (SELECT INTO) */
+	DestCopyOut					/* results sent to COPY TO code */
 } CommandDest;
 
 /* ----------------
