@@ -693,8 +693,10 @@ IsSharedRelation(Oid relationId)
 		relationId == ResQueueCapabilityResqueueidIndexId ||
 		relationId == ResQueueCapabilityRestypidIndexId ||
 		relationId == ResGroupRsgnameIndexId ||
+		relationId == ResGroupCapabilityResgroupidIndexId ||
 		relationId == ResGroupCapabilityResgroupidResLimittypeIndexId ||
 		relationId == AuthIdRolResQueueIndexId ||
+		relationId == AuthIdRolResGroupIndexId ||
 		relationId == GpSanConfigMountidIndexId ||
 		relationId == GpConfigurationContentDefinedprimaryIndexId ||
 		relationId == GpConfigurationDbidIndexId ||
