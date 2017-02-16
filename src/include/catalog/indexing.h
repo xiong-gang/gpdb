@@ -311,6 +311,12 @@ DECLARE_INDEX(pg_resqueuecapability_resqueueid_index, 6065, on pg_resqueuecapabi
 DECLARE_INDEX(pg_resqueuecapability_restypid_index, 6066, on pg_resqueuecapability using btree(restypid int2_ops));
 #define ResQueueCapabilityRestypidIndexId	6066
 
+DECLARE_UNIQUE_INDEX(pg_resgroup_rsgname_index, 6084, on pg_resgroup using btree(rsgname name_ops));
+#define ResGroupRsgnameIndexId	6084
+
+DECLARE_UNIQUE_INDEX(pg_resgroupcapability_resgroupid_reslimittype_index, 6083, on pg_resgroupcapability using btree(resgroupid oid_ops, reslimittype int2_ops));
+#define ResGroupCapabilityResgroupidResLimittypeIndexId	6083
+
 DECLARE_UNIQUE_INDEX(pg_partition_oid_index, 5012, on pg_partition using btree(oid oid_ops));
 #define PartitionOidIndexId	5012
 DECLARE_INDEX(pg_partition_parrelid_index, 5013, on pg_partition using btree(parrelid oid_ops));
