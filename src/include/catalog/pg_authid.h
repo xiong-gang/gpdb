@@ -113,10 +113,11 @@ typedef FormData_pg_authid *Form_pg_authid;
  * The uppercase quantities will be replaced at initdb time with
  * user choices.
  *
- * MPP-7845: add default queue DEFAULTRESQUEUE_OID 6055
+ * add default queue DEFAULTRESQUEUE_OID 6055
+ * add default group ADMINRESGROUP_OID 6438
  * ----------------
  */
-DATA(insert OID = 10 ( "POSTGRES" t t t t t t -1 _null_ _null_ _null_ 6055 t t t t t 6437));
+DATA(insert OID = 10 ( "POSTGRES" t t t t t t -1 _null_ _null_ _null_ 6055 t t t t t 6438 ));
 
 #define BOOTSTRAP_SUPERUSERID 10
 
