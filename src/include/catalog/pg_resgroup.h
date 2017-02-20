@@ -67,6 +67,7 @@ DATA(insert OID = 6438 ( admin_group, 0 ));
 #define RESGROUP_LIMIT_TYPE_CONCURRENCY 	1
 #define RESGROUP_LIMIT_TYPE_CPU			2
 #define RESGROUP_LIMIT_TYPE_MEMORY		3
+#define RESGROUP_LIMIT_TYPE_MEMORY_REDZONE	4
 
 CATALOG(pg_resgroupcapability,6439) BKI_SHARED_RELATION
 {
@@ -75,7 +76,12 @@ CATALOG(pg_resgroupcapability,6439) BKI_SHARED_RELATION
 	int2		reslimittype;	/* resource limit type id (RESGROUP_LIMIT_TYPE_XXX) */
 
 	text		value;		/* resource limit (opaque type)  */
+
+	text		proposed; 	/* most of the capabilities cannot be updated immediately, we
+					 * do it in an asynchronous way to merge the proposed value 
+					 * with the working one */
 } FormData_pg_resgroupcapability;
+
 
 /* GPDB added foreign key definitions for gpcheckcat. */
 FOREIGN_KEY(resgroupid REFERENCES pg_resgroup(oid));
@@ -91,21 +97,26 @@ typedef FormData_pg_resgroupcapability *Form_pg_resgroupcapability;
  *	compiler constants for pg_resgroupcapability
  * ----------------
  */
-#define Natts_pg_resgroupcapability		3
+#define Natts_pg_resgroupcapability		4
 #define Anum_pg_resgroupcapability_resgroupid	1
 #define Anum_pg_resgroupcapability_reslimittype 2
 #define Anum_pg_resgroupcapability_value	3
+#define Anum_pg_resgroupcapability_proposed	4
 
-DATA(insert ( 6437, 1, 20 ));
+DATA(insert ( 6437, 1, 20, 20 ));
 
-DATA(insert ( 6437, 2, 0.3 ));
+DATA(insert ( 6437, 2, 0.3, 0.3 ));
 
-DATA(insert ( 6437, 3, 0.3 ));
+DATA(insert ( 6437, 3, 0.3, 0.3 ));
 
-DATA(insert ( 6438, 1, -1 ));
+DATA(insert ( 6437, 4, 0.8, 0.8 ));
 
-DATA(insert ( 6438, 2, 0.1 ));
+DATA(insert ( 6438, 1, -1, -1 ));
 
-DATA(insert ( 6438, 3, 0.1 ));
+DATA(insert ( 6438, 2, 0.1, 0.1 ));
+
+DATA(insert ( 6438, 3, 0.1, 0.1 ));
+
+DATA(insert ( 6438, 4, 0.8, 0.8 ));
 
 #endif   /* PG_RESGROUP_H */
