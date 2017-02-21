@@ -19,7 +19,7 @@ test: variadic_parameters default_parameters function_extensions
 test: spi xpath
 
 test: leastsquares opr_sanity_gp decode_expr bitmapscan bitmapscan_ao case_gp limit_gp notin percentile naivebayes join_gp union_gp gpcopy gp_create_table
-test: filter gpctas gpdist matrix toast sublink table_functions olap_setup complex opclass_ddl information_schema guc_env_var
+test: filter gpctas gpdist matrix toast sublink table_functions olap_setup complex opclass_ddl information_schema guc_env_var gp_explain
 test: bitmap_index gp_dump_query_oids analyze
 test: indexjoin as_alias regex_gp gpparams with_clause transient_types gp_rules
 # dispatch should always run seperately from other cases.
@@ -53,7 +53,7 @@ test: rangefuncs_cdb gp_dqa subselect_gp subselect_gp2 distributed_transactions 
 # long-running tests. Unfortunately, 'partition' also assumes that there
 # are no other partitioned tables present in the database, so it cannot run
 # in parallel with tests that use partitions.
-test: partition appendonly alter_distpol_dropped
+test: partition appendonly alter_distpol_dropped query_finish
 # 'partition_locking' gets confused if other backends run concurrently and
 # hold locks.
 test: partition_locking
@@ -74,7 +74,7 @@ test: vacuum_gp
 
 ignore: gp_portal_error
 test: external_table column_compression eagerfree mapred gpdtm_plpgsql alter_table_aocs alter_distribution_policy ic aoco_privileges aocs
-test: partition_indexing 
+test: partition_indexing parruleord
 test: alter_table_ao ao_create_alter_valid_table subtransaction_limit oid_consistency udf_exception_blocks
 ignore: icudp_full
 
@@ -106,9 +106,13 @@ test: bfv_catalog bfv_index bfv_olap bfv_aggregate bfv_partition DML_over_joins 
  
 test: aggregate_with_groupingsets 
 
-test: nested_case_null
+test: nested_case_null sort
 
 test: bfv_cte bfv_joins bfv_subquery bfv_planner bfv_legacy
+
+# This test gets confused if there are other connections, with temp tables,
+# active at the same time.
+test: bfv_temp
 
 test: qp_olap_mdqa qp_misc
 
@@ -153,6 +157,16 @@ test: uao_catalog_tables uaocs_catalog_tables uao_ddl/alter_ao_table_setstorage_
 test: uao_ddl/alter_ao_part_exch_column uao_ddl/alter_ao_part_tables_row uao_ddl/create_ao_table_500cols_column uao_ddl/alter_ao_part_tables_column
 
 test: uao_ddl/alter_drop_allcol_row uao_ddl/alter_drop_allcol_column uao_ddl/alter_rollback_row uao_ddl/alter_rollback_column uao_ddl/uao_allalter_row uao_ddl/uao_allalter_column uao_col/alter_ao_table_oid_column uao_row/alter_ao_table_oid_row
+
+test: ao_locks
+
+# These cannot run in parallel, because they check that VACUUM FULL shrinks table size.
+# A concurrent session could hold back the xid horizon and prevent old tuples from being
+# removed.
+test: vacuum_full_ao
+test: vacuum_full_freeze_heap
+test: vacuum_full_heap
+test: vacuum_full_heap_bitmapindex
 
 test: AOCO_Compression2 schema_topology table_statistics
 test: metadata_track

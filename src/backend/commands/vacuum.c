@@ -1472,12 +1472,13 @@ get_rel_oids(List *relids, VacuumStmt *vacstmt, bool isVacuum)
 				if (!vacstmt->rootonly)
 				{
 					oid_list = all_leaf_partition_relids(pn); /* all leaves */
+
+					if (optimizer_analyze_midlevel_partition)
+					{
+						oid_list = list_concat(oid_list, all_interior_partition_relids(pn)); /* interior partitions */
+					}
 				}
 				oid_list = lappend_oid(oid_list, relationOid); /* root partition */
-				if (optimizer_analyze_midlevel_partition)
-				{
-					oid_list = list_concat(oid_list, all_interior_partition_relids(pn)); /* interior partitions */
-				}
 			}
 			else if (ps == PART_STATUS_INTERIOR) /* analyze an interior partition directly */
 			{
@@ -1552,6 +1553,14 @@ get_rel_oids(List *relids, VacuumStmt *vacstmt, bool isVacuum)
 			{
 				continue;
 			}
+
+			// skip mid-level partition tables if we have disabled collecting statistics for them
+			PartStatus ps = rel_part_status(candidateOid);
+			if (!optimizer_analyze_midlevel_partition && ps == PART_STATUS_INTERIOR)
+			{
+				continue;
+			}
+
 			oldcontext = MemoryContextSwitchTo(vac_context);
 			oid_list = lappend_oid(oid_list, candidateOid);
 			MemoryContextSwitchTo(oldcontext);

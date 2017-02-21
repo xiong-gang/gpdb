@@ -297,6 +297,7 @@ _outPlannedStmt(StringInfo str, PlannedStmt *node)
 	WRITE_BOOL_FIELD(transientPlan);
 	WRITE_NODE_FIELD(planTree);
 	WRITE_NODE_FIELD(rtable);
+	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(utilityStmt);
 	WRITE_NODE_FIELD(intoClause);
 	WRITE_NODE_FIELD(subplans);
@@ -2016,7 +2017,8 @@ _outRelOptInfo(StringInfo str, RelOptInfo *node)
 	WRITE_UINT_FIELD(pages);
 	WRITE_FLOAT_FIELD(tuples, "%.0f");
 	WRITE_NODE_FIELD(subplan);
-	WRITE_NODE_FIELD(locationlist);
+	WRITE_NODE_FIELD(urilocationlist);
+	WRITE_NODE_FIELD(execlocationlist);
 	WRITE_STRING_FIELD(execcommand);
 	WRITE_CHAR_FIELD(fmttype);
 	WRITE_STRING_FIELD(fmtopts);
