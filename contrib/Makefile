@@ -20,6 +20,7 @@ WANTED_DIRS = \
 		indexscan \
 		dict_int \
 		dict_xsyn \
+		amcheck		\
 		citext		\
 		hstore		\
 		intarray \
