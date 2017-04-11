@@ -621,6 +621,8 @@ typedef struct PgBackendStatus
 	TimestampTz st_proc_start_timestamp;
 	TimestampTz st_xact_start_timestamp;
 	TimestampTz st_activity_start_timestamp;
+	/* the start time of queueing on resource group */
+	TimestampTz	st_resgroup_queue_start_timestamp;
 
 	/* Database OID, owning user's OID, connection client address */
 	Oid			st_databaseid;
@@ -723,6 +725,9 @@ extern void pgstat_report_waiting(char reason);
 extern void pgstat_report_appname(const char *appname);
 extern void pgstat_report_xact_timestamp(TimestampTz tstamp);
 extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);
+
+extern void pgstat_report_resgroup_queue_timestamp(TimestampTz tstamp);
+extern TimestampTz pgstat_fetch_resgroup_queue_timestamp(void);
 
 extern void pgstat_initstats(Relation rel);
 
