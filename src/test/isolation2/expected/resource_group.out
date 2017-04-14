@@ -38,6 +38,11 @@ rsgname            |num_running|num_queueing|num_queued|num_executed
 -------------------+-----------+------------+----------+------------
 rg_concurrency_test|2          |1           |1         |2           
 (1 row)
+1:SELECT waiting_reason, rsgqueueduration > '0'::interval as time from pg_stat_activity where current_query = 'BEGIN;' and rsgname = 'rg_concurrency_test';
+waiting_reason|time
+--------------+----
+resgroup      |t   
+(1 row)
 2:END;
 END
 3:END;

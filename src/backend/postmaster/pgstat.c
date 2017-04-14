@@ -2267,6 +2267,7 @@ pgstat_bestart(void)
 	/* Also make sure the last byte in each string area is always 0 */
 	beentry->st_appname[NAMEDATALEN - 1] = '\0';
 	beentry->st_activity[pgstat_track_activity_query_size - 1] = '\0';
+	beentry->st_rsgid = InvalidOid;
 
 	beentry->st_changecount++;
 	Assert((beentry->st_changecount & 1) == 0);
@@ -2419,7 +2420,7 @@ pgstat_report_xact_timestamp(TimestampTz tstamp)
  * Report the timestamp of transaction start queueing on the resource group.
  */
 void
-pgstat_report_resgroup_queue_timestamp(TimestampTz tstamp)
+pgstat_report_resgroup_wait(TimestampTz tstamp, Oid groupid)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
 
@@ -2433,6 +2434,8 @@ pgstat_report_resgroup_queue_timestamp(TimestampTz tstamp)
 	 */
 	beentry->st_changecount++;
 	beentry->st_resgroup_queue_start_timestamp = tstamp;
+	beentry->st_rsgid = groupid;
+	beentry->st_waiting = PGBE_WAITING_RESGROUP;
 	beentry->st_changecount++;
 	Assert((beentry->st_changecount & 1) == 0);
 }
@@ -2475,7 +2478,6 @@ pgstat_report_waiting(char waiting)
 	 */
 	beentry->st_waiting = waiting;
 }
-
 
 /* ----------
  * pgstat_read_current_status() -

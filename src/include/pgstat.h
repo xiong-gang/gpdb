@@ -590,6 +590,7 @@ typedef struct PgStat_GlobalStats
 /* Definitions of waiting reason */
 #define PGBE_WAITING_LOCK			'l'
 #define PGBE_WAITING_REPLICATION	'r'
+#define PGBE_WAITING_RESGROUP		'g'
 #define PGBE_WAITING_NONE			'\0'
 
 /* ----------
@@ -639,6 +640,7 @@ typedef struct PgBackendStatus
 	/* current command string; MUST be null-terminated */
 	char		*st_activity;
 
+	Oid			st_rsgid;
 } PgBackendStatus;
 
 /*
@@ -726,7 +728,7 @@ extern void pgstat_report_appname(const char *appname);
 extern void pgstat_report_xact_timestamp(TimestampTz tstamp);
 extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);
 
-extern void pgstat_report_resgroup_queue_timestamp(TimestampTz tstamp);
+extern void pgstat_report_resgroup_wait(TimestampTz tstamp, Oid groupid);
 extern TimestampTz pgstat_fetch_resgroup_queue_timestamp(void);
 
 extern void pgstat_initstats(Relation rel);

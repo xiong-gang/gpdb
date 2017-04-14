@@ -64,7 +64,7 @@ extern void ResGroupControlInit(void);
 extern void	InitResGroups(void);
 
 extern void AllocResGroupEntry(Oid groupId);
-extern void FreeResGroupEntry(Oid groupId);
+extern void FreeResGroupEntry(Oid groupId, char *name);
 
 /* Acquire and release resource group slot */
 extern void ResGroupSlotAcquire(void);

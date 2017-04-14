@@ -304,7 +304,7 @@ DropResourceGroup(DropResourceGroupStmt *stmt)
 		 * modifying catalog, since the check of no exiting running transaction may
 		 * fail
 		 */
-		FreeResGroupEntry(groupid);
+		FreeResGroupEntry(groupid, stmt->name);
 
 		/* Argument of callback function should be allocated in heap region */
 		callbackArg = (Oid *)MemoryContextAlloc(TopMemoryContext, sizeof(Oid));
@@ -372,7 +372,7 @@ GetResGroupIdForRole(Oid roleid)
 	}
 
 	/* must access tuple before systable_endscan */
-	groupId = heap_getattr(tuple, Anum_pg_authid_rolresgroup, rel->rd_att, NULL);
+	groupId = DatumGetObjectId(heap_getattr(tuple, Anum_pg_authid_rolresgroup, rel->rd_att, NULL));
 
 	systable_endscan(sscan);
 
@@ -632,7 +632,7 @@ createResGroupAbortCallback(ResourceReleasePhase phase,
 		 * FreeResGroupEntry would acquire LWLock, since this callback is called
 		 * after LWLockReleaseAll in AbortTransaction, it is safe here
 		 */
-		FreeResGroupEntry(groupId);
+		FreeResGroupEntry(groupId, NULL);
 	}
 
 	UnregisterResourceReleaseCallback(createResGroupAbortCallback, arg);
@@ -933,6 +933,44 @@ GetResGroupIdForName(char *name, LOCKMODE lockmode)
 	heap_close(rel, lockmode);
 
 	return rsgid;
+}
+
+/*
+ * GetResGroupNameForId -- Return the resource group name for an Oid
+ */
+char *
+GetResGroupNameForId(Oid oid, LOCKMODE lockmode)
+{
+	Relation	rel;
+	ScanKeyData scankey;
+	SysScanDesc scan;
+	HeapTuple	tuple;
+	char		*name = NULL;
+
+	rel = heap_open(ResGroupRelationId, lockmode);
+
+	/* SELECT rsgname FROM pg_resgroup WHERE oid = :1 */
+	ScanKeyInit(&scankey,
+				ObjectIdAttributeNumber,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(oid));
+	scan = systable_beginscan(rel, ResGroupOidIndexId, true,
+							  SnapshotNow, 1, &scankey);
+
+	tuple = systable_getnext(scan);
+	if (HeapTupleIsValid(tuple))
+	{
+		bool isnull;
+		Datum nameDatum = heap_getattr(tuple, Anum_pg_resgroup_rsgname, rel->rd_att, &isnull);
+		Assert (!isnull);
+		Name resGroupName = DatumGetName(nameDatum);
+		name = pstrdup(NameStr(*resGroupName));
+	}
+
+	systable_endscan(scan);
+	heap_close(rel, lockmode);
+
+	return name;
 }
 
 /*

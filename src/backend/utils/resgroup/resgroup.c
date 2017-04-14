@@ -148,7 +148,7 @@ AllocResGroupEntry(Oid groupId)
  * Remove a resource group entry from the hash table
  */
 void
-FreeResGroupEntry(Oid groupId)
+FreeResGroupEntry(Oid groupId, char *name)
 {
 	ResGroup group;
 
@@ -166,13 +166,16 @@ FreeResGroupEntry(Oid groupId)
 
 	if (group->nRunning > 0)
 	{
+		int nQuery = group->nRunning + group->waitProcs.size;
 		LWLockRelease(ResGroupLock);
 
+		Assert(name != NULL);
 		ereport(ERROR,
 				(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
-				 errmsg("Cannot drop resource group with Oid %d", groupId),
-				 errhint("There are running transactions in this group."
-						 "Please terminate the queries first, or try dropping the group later.")));
+				 errmsg("Cannot drop resource group \"%s\" with Oid %d", name, groupId),
+				 errhint(" The resource group is currently managing %d query(ies) and cannot be dropped.\n"
+						 "\tTerminate the queries first or try dropping the group later.\n"
+						 "\tThe view pg_stat_activity tracks the queries managed by resource groups.", nQuery)));
 	}
 
 #ifdef USE_ASSERT_CHECKING
@@ -367,9 +370,6 @@ ResGroupSlotAcquire(void)
 		return;
 	}
 
-	/* Update the timestamp in PgBackendStatus before waiting on the slot */
-	pgstat_report_resgroup_queue_timestamp(GetCurrentTimestamp());
-
 	ResGroupWait(group);
 
 	/*
@@ -455,6 +455,8 @@ ResGroupWait(ResGroup group)
 
 	group->totalQueued++;
 
+	pgstat_report_resgroup_wait(GetCurrentTimestamp(), group->groupId);
+
 	LWLockRelease(ResGroupLock);
 
 	/* similar to lockAwaited in ProcSleep for interrupt cleanup */
@@ -485,6 +487,8 @@ ResGroupWait(ResGroup group)
 	PG_END_TRY();
 
 	localResWaiting = false;
+
+	pgstat_report_waiting(PGBE_WAITING_NONE);
 }
 
 /*
@@ -642,4 +646,6 @@ ResGroupWaitCancel(void)
 
 	LWLockRelease(ResGroupLock);
 	localResWaiting = false;
+
+	pgstat_report_waiting(PGBE_WAITING_NONE);
 }
