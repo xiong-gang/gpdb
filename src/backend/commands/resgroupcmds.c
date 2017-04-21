@@ -49,14 +49,14 @@ typedef struct ResourceGroupOptions
 } ResourceGroupOptions;
 
 static float text2Float(const text *text, const char *prop);
-static void updateResgroupCapability(Oid groupid, ResourceGroupOptions *options);
-static void deleteResgroupCapability(Oid groupid);
 static int getResgroupOptionType(const char* defname);
 static void parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options);
 static void validateCapabilities(Relation rel, Oid groupid, ResourceGroupOptions *options);
-static void getCapabilityForGroup(int groupId, int type, char **value, char **proposed);
-static void insertTupleIntoResCapability(Relation rel, Oid groupid, uint16 type, char *value);
+static void getResgroupCapabilityEntry(int groupId, int type, char **value, char **proposed);
+static void insertResgroupCapabilityEntry(Relation rel, Oid groupid, uint16 type, char *value);
 static void updateResgroupCapabilityEntry(Oid groupid, uint16 type, char *value, char *proposed);
+static void insertResgroupCapabilities(Oid groupid, ResourceGroupOptions *options);
+static void deleteResgroupCapabilities(Oid groupid);
 static void createResGroupAbortCallback(ResourceReleasePhase phase, bool isCommit, bool isTopLevel, void *arg);
 static void dropResGroupAbortCallback(ResourceReleasePhase phase, bool isCommit, bool isTopLevel, void *arg);
 static void alterResGroupCommitCallback(ResourceReleasePhase phase, bool isCommit, bool isTopLevel, void *arg);
@@ -156,7 +156,7 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 	CatalogUpdateIndexes(pg_resgroup_rel, tuple);
 
 	/* process the WITH (...) list items */
-	updateResgroupCapability(groupid, &options);
+	insertResgroupCapabilities(groupid, &options);
 
 	/* Dispatch the statement to segments */
 	if (Gp_role == GP_ROLE_DISPATCH)
@@ -279,7 +279,7 @@ DropResourceGroup(DropResourceGroupStmt *stmt)
 	heap_close(pg_resgroup_rel, NoLock);
 
 	/* drop the extended attributes for this resource group */
-	deleteResgroupCapability(groupid);
+	deleteResgroupCapabilities(groupid);
 
 	/*
 	 * Remove any comments on this resource group
@@ -401,7 +401,7 @@ GetConcurrencyForGroup(int groupId, int *value, int *proposed)
 	char *valueStr;
 	char *proposedStr;
 
-	getCapabilityForGroup(groupId, RESGROUP_LIMIT_TYPE_CONCURRENCY, &valueStr, &proposedStr);
+	getResgroupCapabilityEntry(groupId, RESGROUP_LIMIT_TYPE_CONCURRENCY, &valueStr, &proposedStr);
 
 	if (value != NULL)
 		*value = pg_atoi(valueStr, sizeof(int32), 0);
@@ -759,8 +759,9 @@ dropResGroupAbortCallback(ResourceReleasePhase phase,
 /*
  * Resource owner call back function
  *
- * Restore resource group entry in shared memory when abort transaction which
- * drops resource groups
+ * When ALTER RESOURCE GROUP SET CONCURRENCY commits, some queueing
+ * transaction of this resource group may need to be woke up.
+ *
  */
 static void
 alterResGroupCommitCallback(ResourceReleasePhase phase,
@@ -799,7 +800,7 @@ alterResGroupCommitCallback(ResourceReleasePhase phase,
  * @param options  the capabilities
  */
 static void
-updateResgroupCapability(Oid groupid,
+insertResgroupCapabilities(Oid groupid,
 						   ResourceGroupOptions *options)
 {
 	char value[64];
@@ -808,16 +809,16 @@ updateResgroupCapability(Oid groupid,
 	validateCapabilities(resgroup_capability_rel, groupid, options);
 
 	sprintf(value, "%d", options->concurrency);
-	insertTupleIntoResCapability(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_CONCURRENCY, value);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_CONCURRENCY, value);
 
 	sprintf(value, "%.2f", options->cpuRateLimit);
-	insertTupleIntoResCapability(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_CPU, value);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_CPU, value);
 
 	sprintf(value, "%.2f", options->memoryLimit);
-	insertTupleIntoResCapability(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY, value);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY, value);
 
 	sprintf(value, "%.2f", options->redzoneLimit);
-	insertTupleIntoResCapability(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_REDZONE, value);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_REDZONE, value);
 
 	heap_close(resgroup_capability_rel, NoLock);
 }
@@ -952,7 +953,7 @@ validateCapabilities(Relation rel,
  * @param value    the limit value
  */
 static void
-insertTupleIntoResCapability(Relation rel,
+insertResgroupCapabilityEntry(Relation rel,
 							 Oid groupid,
 							 uint16 type,
 							 char *value)
@@ -979,7 +980,7 @@ insertTupleIntoResCapability(Relation rel,
  * Retrive capability value from pg_resgroupcapability
  */
 static void
-getCapabilityForGroup(int groupId, int type, char **value, char **proposed)
+getResgroupCapabilityEntry(int groupId, int type, char **value, char **proposed)
 {
 	SysScanDesc	sscan;
 	ScanKeyData	key[2];
@@ -992,7 +993,7 @@ getCapabilityForGroup(int groupId, int type, char **value, char **proposed)
 
 	if (CurrentResourceOwner == NULL)
 	{
-		owner = ResourceOwnerCreate(NULL, "getCapabilityForGroup");
+		owner = ResourceOwnerCreate(NULL, "getResgroupCapabilityEntry");
 		CurrentResourceOwner = owner;
 	}
 
@@ -1054,7 +1055,7 @@ getCapabilityForGroup(int groupId, int type, char **value, char **proposed)
  * Delete capability entries of one resource group.
  */
 static void
-deleteResgroupCapability(Oid groupid)
+deleteResgroupCapabilities(Oid groupid)
 {
 	Relation	 resgroup_capability_rel;
 	HeapTuple	 tuple;
