@@ -311,7 +311,7 @@ ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen)
 	if (!IsResGroupEnabled())
 		return;
 
-	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
+	LWLockAcquire(ResGroupLock, LW_SHARED);
 
 	group = ResGroupHashFind(groupId);
 	if (group == NULL)
@@ -365,7 +365,7 @@ CalcConcurrencyValue(int groupId, int val, int proposed, int newProposed)
 	if (!IsResGroupEnabled())
 		return newProposed;
 
-	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
+	LWLockAcquire(ResGroupLock, LW_SHARED);
 
 	group = ResGroupHashFind(groupId);
 	if (group == NULL)
@@ -634,7 +634,7 @@ ResGroupHashFind(Oid groupId)
 	bool		found;
 	ResGroup	group = NULL;
 
-	Assert(LWLockHeldExclusiveByMe(ResGroupLock));
+	Assert(LWLockHeldByMe(ResGroupLock));
 
 	group = (ResGroup)
 		hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_FIND, &found);
