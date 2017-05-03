@@ -253,7 +253,7 @@ ResGroupCheckForDrop(Oid groupId, char *name)
 		Assert(name != NULL);
 		ereport(ERROR,
 				(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
-				 errmsg("Cannot drop resource group \"%s\" with Oid %d", name, groupId),
+				 errmsg("Cannot drop resource group \"%s\"", name),
 				 errhint(" The resource group is currently managing %d query(ies) and cannot be dropped.\n"
 						 "\tTerminate the queries first or try dropping the group later.\n"
 						 "\tThe view pg_stat_activity tracks the queries managed by resource groups.", nQuery)));
