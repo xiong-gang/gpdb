@@ -343,9 +343,6 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 				(errcode(ERRCODE_INVALID_LIMIT_VALUE),
 				 errmsg("concurrency limit cannot be less than %d", RESGROUP_CONCURRENCY_UNLIMITED)));
 
-	/* any access to pg_resgroupcapability should be blocked during ALTER */
-	LockRelationOid(ResGroupCapabilityRelationId, AccessExclusiveLock);
-
 	/*
 	 * Check the pg_resgroup relation to be certain the resource group already
 	 * exists.
@@ -371,7 +368,7 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	systable_endscan(sscan);
 	heap_close(pg_resgroup_rel, NoLock);
 
-	GetConcurrencyForGroup(groupid, &concurrencyVal, &concurrencyProposed);
+	GetConcurrencyForResGroup(groupid, &concurrencyVal, &concurrencyProposed);
 	newConcurrency = CalcConcurrencyValue(groupid, concurrencyVal, concurrencyProposed, stmt->concurrency);
 
 	snprintf(concurrencyStr, sizeof(concurrencyStr), "%d", newConcurrency);
@@ -396,7 +393,7 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
  * Get 'concurrency' of on resource group in pg_resgroupcapability.
  */
 void
-GetConcurrencyForGroup(int groupId, int *value, int *proposed)
+GetConcurrencyForResGroup(int groupId, int *value, int *proposed)
 {
 	char *valueStr;
 	char *proposedStr;

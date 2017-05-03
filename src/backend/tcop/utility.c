@@ -431,11 +431,11 @@ check_xact_readonly(Node *parsetree)
 		case T_AlterDomainStmt:
 		case T_AlterFunctionStmt:
 		case T_AlterQueueStmt:
+		case T_AlterResourceGroupStmt:
 		case T_AlterRoleStmt:
 		case T_AlterRoleSetStmt:
 		case T_AlterObjectSchemaStmt:
 		case T_AlterOwnerStmt:
-		case T_AlterResourceGroupStmt:
 		case T_AlterSeqStmt:
 		case T_AlterTableStmt:
 		case T_RenameStmt:
@@ -1745,11 +1745,13 @@ ProcessUtility(Node *parsetree,
 		case T_CreateResourceGroupStmt:
 			CreateResourceGroup((CreateResourceGroupStmt *) parsetree);
 			break;
-		case T_DropResourceGroupStmt:
-			DropResourceGroup((DropResourceGroupStmt *) parsetree);
-			break;
+
 		case T_AlterResourceGroupStmt:
 			AlterResourceGroup((AlterResourceGroupStmt *) parsetree);
+			break;
+
+		case T_DropResourceGroupStmt:
+			DropResourceGroup((DropResourceGroupStmt *) parsetree);
 			break;
 
 			/*

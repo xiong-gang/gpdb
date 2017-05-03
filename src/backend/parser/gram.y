@@ -1029,6 +1029,7 @@ stmt :
 			| AlterObjectSchemaStmt
 			| AlterOwnerStmt
 			| AlterQueueStmt
+			| AlterResourceGroupStmt
 			| AlterRoleSetStmt
 			| AlterRoleStmt
 			| AlterTSConfigurationStmt
@@ -1038,7 +1039,6 @@ stmt :
 			| AlterTypeStmt
 			| AlterUserSetStmt
 			| AlterUserStmt
-			| AlterResourceGroupStmt
 			| AnalyzeStmt
 			| CheckPointStmt
 			| ClosePortalStmt

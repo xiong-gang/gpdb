@@ -259,7 +259,7 @@ void ResGroupAlterCheckForWakeup(Oid groupId)
 	PROC_QUEUE	*waitQueue;
 	ResGroup	group;
 
-	GetConcurrencyForGroup(groupId, NULL, &proposed);
+	GetConcurrencyForResGroup(groupId, NULL, &proposed);
 
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 
@@ -435,7 +435,7 @@ ResGroupSlotAcquire(void)
 
 	CurrentResGroupId = groupId;
 
-	GetConcurrencyForGroup(groupId, NULL, &concurrencyProposed);
+	GetConcurrencyForResGroup(groupId, NULL, &concurrencyProposed);
 
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 
@@ -499,7 +499,7 @@ ResGroupSlotRelease(void)
 
 	Assert(CurrentResGroupId != InvalidOid);
 
-	GetConcurrencyForGroup(CurrentResGroupId, NULL, &concurrencyProposed);
+	GetConcurrencyForResGroup(CurrentResGroupId, NULL, &concurrencyProposed);
 
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 

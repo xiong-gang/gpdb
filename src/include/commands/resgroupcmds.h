@@ -22,7 +22,7 @@ extern void AlterResourceGroup(AlterResourceGroupStmt *stmt);
 /* catalog access function */
 extern Oid GetResGroupIdForName(char *name, LOCKMODE lockmode);
 extern char *GetResGroupNameForId(Oid oid, LOCKMODE lockmode);
-extern void GetConcurrencyForGroup(int groupId, int *value, int *proposed);
+extern void GetConcurrencyForResGroup(int groupId, int *value, int *proposed);
 extern Oid GetResGroupIdForRole(Oid roleid);
 
 #endif   /* RESGROUPCMDS_H */
