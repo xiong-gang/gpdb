@@ -38,6 +38,8 @@
 
 #define RESGROUP_DEFAULT_CONCURRENCY (20)
 #define RESGROUP_DEFAULT_REDZONE_LIMIT (0.8)
+#define RESGROUP_DEFAULT_MEM_SHARED_QUOTA (0.2)
+#define RESGROUP_DEFAULT_MEM_SPILL_RATIO  (0.2)
 
 
 /*
@@ -49,6 +51,8 @@ typedef struct ResourceGroupOptions
 	float cpuRateLimit;
 	float memoryLimit;
 	float redzoneLimit;
+	float memSharedQuota;
+	float memSpillRatio;
 } ResourceGroupOptions;
 
 typedef struct ResourceGroupStatusRow
@@ -921,6 +925,10 @@ getResgroupOptionType(const char* defname)
 		return RESGROUP_LIMIT_TYPE_CONCURRENCY;
 	else if (strcmp(defname, "memory_redzone_limit") == 0)
 		return RESGROUP_LIMIT_TYPE_MEMORY_REDZONE;
+	else if (strcmp(defname, "memory_shared_quota") == 0)
+		return RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA;
+	else if (strcmp(defname, "memory_spill_ratio") == 0)
+		return RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO;
 	else
 		return RESGROUP_LIMIT_TYPE_UNKNOWN;
 }
@@ -989,6 +997,14 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 							errmsg("memory_redzone_limit range is (.5, 1]")));
 				break;
 
+			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
+				options->memSharedQuota = roundf(defGetNumeric(defel) * 100) / 100;
+				break;
+
+			case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
+				options->memSpillRatio = roundf(defGetNumeric(defel) * 100) / 100;
+				break;
+
 			default:
 				Assert(!"unexpected options");
 				break;
@@ -1005,6 +1021,18 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 
 	if (options->redzoneLimit == 0)
 		options->redzoneLimit = RESGROUP_DEFAULT_REDZONE_LIMIT;
+	
+	if (options->memSharedQuota == 0)
+		options->memSharedQuota = RESGROUP_DEFAULT_MEM_SHARED_QUOTA;
+
+	if (options->memSpillRatio == 0)
+		options->memSpillRatio = RESGROUP_DEFAULT_MEM_SPILL_RATIO;
+
+	if (options->memSpillRatio + options->memSharedQuota > 1.f) 
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("The sum of memory_shared_quota (%.2f) and memory_spill_ratio (%.2f) exceeds 1.0",
+						options->memSharedQuota, options->memSpillRatio)));
 }
 
 /*
@@ -1140,6 +1168,12 @@ insertResgroupCapabilities(Oid groupid,
 
 	sprintf(value, "%.2f", options->redzoneLimit);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_REDZONE, value);
+
+	sprintf(value, "%.2f", options->memSharedQuota);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA, value);
+	
+	sprintf(value, "%.2f", options->memSpillRatio);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO, value);
 
 	heap_close(resgroup_capability_rel, NoLock);
 }
