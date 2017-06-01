@@ -15,6 +15,8 @@
  * GUC variables.
  */
 extern int MaxResourceGroups;
+extern double gp_resource_group_cpu_limit;
+extern double gp_resource_group_memory_limit;
 
 /*
  * Data structures

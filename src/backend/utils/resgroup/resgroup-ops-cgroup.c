@@ -12,7 +12,7 @@
 #include "postgres.h"
 
 #include "cdb/cdbvars.h"
-#include "postmaster/backoff.h"
+#include "utils/resgroup.h"
 #include "utils/resgroup-ops.h"
 
 #ifndef __linux__
