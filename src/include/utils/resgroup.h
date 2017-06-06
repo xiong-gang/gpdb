@@ -48,8 +48,9 @@ typedef ResGroupData *ResGroup;
  */
 typedef struct ResGroupControl
 {
-	HTAB			*htbl;
-	bool			loaded;
+	HTAB	*htbl;
+	int 	segmentsOnMaster;
+	bool	loaded;
 } ResGroupControl;
 
 /* Type of statistic infomation */
@@ -98,6 +99,8 @@ extern void ResGroupAlterCheckForWakeup(Oid groupId);
 extern void ResGroupDropCheckForWakeup(Oid groupId, bool isCommit);
 extern void ResGroupCheckForDrop(Oid groupId, char *name);
 extern int CalcConcurrencyValue(int groupId, int val, int proposed, int newProposed);
+
+extern void ResGroupSetupMemoryController(void);
 
 #define LOG_RESGROUP_DEBUG(...) \
 	do {if (Debug_resource_group) elog(__VA_ARGS__); } while(false);

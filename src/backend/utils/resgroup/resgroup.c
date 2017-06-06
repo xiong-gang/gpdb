@@ -14,6 +14,8 @@
 #include "access/genam.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_resgroup.h"
+#include "cdb/cdbgang.h"
+#include "cdb/cdbutil.h"
 #include "cdb/cdbvars.h"
 #include "cdb/memquota.h"
 #include "commands/resgroupcmds.h"
@@ -183,6 +185,8 @@ InitResGroups(void)
 	HeapTuple	tuple;
 	SysScanDesc	sscan;
 	int			numGroups;
+	CdbComponentDatabases *cdbComponentDBs;
+	CdbComponentDatabaseInfo *qdinfo;
 
 	on_shmem_exit(AtProcExit_ResGroup, 0);
 	if (pResGroupControl->loaded)
@@ -228,6 +232,13 @@ InitResGroups(void)
 		Assert(numGroups <= MaxResourceGroups);
 	}
 	systable_endscan(sscan);
+
+	if (Gp_role == GP_ROLE_DISPATCH)
+	{
+		cdbComponentDBs = getCdbComponentDatabases();
+		qdinfo = &cdbComponentDBs->entry_db_info[0];
+		pResGroupControl->segmentsOnMaster = qdinfo->hostSegs;
+	}
 
 	pResGroupControl->loaded = true;
 	LOG_RESGROUP_DEBUG(LOG, "initialized %d resource groups", numGroups);
@@ -550,8 +561,17 @@ ResGroupCreate(Oid groupId)
 void
 ResGroupSetupMemoryController(void)
 {
+	int segmentCount;
 
-
+	if (Gp_role == GP_ROLE_DISPATCH)
+		segmentCount = pResGroupControl->segmentsOnMaster;
+	else if (Gp_role == GP_ROLE_EXECUTE)
+		segmentCount = host_segments;
+	/* Memory controller is disabled for GP_ROLE_UTILITY, set 1 for simplicity */
+	else if (Gp_role == GP_ROLE_UTILITY)
+		segmentCount = 1;
+	Assert(segmentCount > 0);
+    LOG_RESGROUP_DEBUG(LOG, "primary segments on this host: %d", segmentCount);
 
 }
 

@@ -2243,10 +2243,17 @@ StartTransaction(void)
 			 TransStateAsString(s->state));
 
 	/* Acquire a resource group slot at the beginning of a transaction */
-	if (Gp_role == GP_ROLE_DISPATCH && IsResGroupEnabled() && IsNormalProcessingMode())
-		ResGroupSlotAcquire();
-	else if (Gp_role == GP_ROLE_EXECUTE && IsResGroupEnabled() && IsNormalProcessingMode())
-		SetCurrentResGroup();
+	if (IsResGroupEnabled() && IsNormalProcessingMode())
+	{
+		if (Gp_role == GP_ROLE_DISPATCH)
+			ResGroupSlotAcquire();
+		else if (Gp_role == GP_ROLE_EXECUTE)
+			SetCurrentResGroup();
+
+		AssertImply(Gp_role == GP_ROLE_UTILITY, CurrentResGroup == NULL);
+
+		ResGroupSetupMemoryController();
+	}
 
 	/*
 	 * set the current transaction state information appropriately during
