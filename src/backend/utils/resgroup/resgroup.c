@@ -547,6 +547,14 @@ ResGroupCreate(Oid groupId)
 	return true;
 }
 
+void
+ResGroupSetupMemoryController(void)
+{
+
+
+
+}
+
 /*
  * Acquire a resource group slot 
  *

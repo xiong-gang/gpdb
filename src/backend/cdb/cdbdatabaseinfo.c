@@ -280,7 +280,6 @@ DatabaseInfo_RelationIdHashTableInit()
 	return hash_create("RelationId", 100, &info, hash_flags);
 }
 
-
 /*
  * DatabaseInfo_PgAppendOnlyHashTableInit()
  *    Construct a hash table of PgAppendOnlyHashEntry
