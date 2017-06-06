@@ -2250,8 +2250,6 @@ StartTransaction(void)
 		else if (Gp_role == GP_ROLE_EXECUTE)
 			SetCurrentResGroup();
 
-		AssertImply(Gp_role == GP_ROLE_UTILITY, CurrentResGroup == NULL);
-
 		ResGroupSetupMemoryController();
 	}
 

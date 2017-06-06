@@ -562,6 +562,8 @@ void
 ResGroupSetupMemoryController(void)
 {
 	int segmentCount;
+	int totalMemory;
+	int memPerSegment;
 
 	if (Gp_role == GP_ROLE_DISPATCH)
 		segmentCount = pResGroupControl->segmentsOnMaster;
@@ -570,13 +572,19 @@ ResGroupSetupMemoryController(void)
 	/* Memory controller is disabled for GP_ROLE_UTILITY, set 1 for simplicity */
 	else if (Gp_role == GP_ROLE_UTILITY)
 		segmentCount = 1;
-	Assert(segmentCount > 0);
-    LOG_RESGROUP_DEBUG(LOG, "primary segments on this host: %d", segmentCount);
 
+	AssertImply(Gp_role == GP_ROLE_UTILITY, CurrentResGroup == NULL);
+	Assert(segmentCount > 0);
+
+	totalMemory = ResGroupOps_GetTotalMemory() * gp_resource_group_memory_limit;
+	memPerSegment = totalMemory / segmentCount;
+
+	LOG_RESGROUP_DEBUG(LOG, "primary segments on this host: %d, memory per segment: %d MB",
+						segmentCount, memPerSegment);
 }
 
 /*
- * Acquire a resource group slot 
+ * Acquire a resource group slot
  *
  * Call this function at the start of the transaction.
  */
@@ -796,7 +804,7 @@ ResetCurrentResGroup(void)
 }
 
 /*
- * Wait on the queue of resource group 
+ * Wait on the queue of resource group
  */
 static void
 ResGroupWait(ResGroup group, bool isLocked)

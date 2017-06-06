@@ -25,5 +25,6 @@ extern void ResGroupOps_AssignGroup(Oid group, int pid);
 extern void ResGroupOps_SetCpuRateLimit(Oid group, float cpu_rate_limit);
 extern int64 ResGroupOps_GetCpuUsage(Oid group);
 extern int ResGroupOps_GetCpuCores(void);
+extern int ResGroupOps_GetTotalMemory(void);
 
 #endif   /* RES_GROUP_OPS_H */
