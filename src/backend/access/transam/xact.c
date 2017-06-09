@@ -2243,14 +2243,11 @@ StartTransaction(void)
 			 TransStateAsString(s->state));
 
 	/* Acquire a resource group slot at the beginning of a transaction */
-	if (IsResGroupEnabled() && IsNormalProcessingMode())
+	if (IsResGroupEnabled() && IsNormalProcessingMode() && Gp_role == GP_ROLE_DISPATCH)
 	{
-		if (Gp_role == GP_ROLE_DISPATCH)
-			ResGroupSlotAcquire();
-		else if (Gp_role == GP_ROLE_EXECUTE)
-			SetCurrentResGroup();
+		ResGroupSlotAcquire();
 
-		ResGroupSetupMemoryController();
+		ResGroupCheckSwitch();
 	}
 
 	/*

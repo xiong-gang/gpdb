@@ -166,7 +166,6 @@ SessionState_Release(SessionState *acquired)
 
 		acquired->sessionId = INVALID_SESSION_ID;
 
-		Assert(0 == acquired->sessionVmem);
 		Assert(acquired->runawayStatus == RunawayStatus_NotRunaway);
 		Assert(CLEANUP_COUNTDOWN_BEFORE_RUNAWAY == acquired->cleanupCountdown);
 		Assert(0 == acquired->activeProcessCount);

@@ -51,12 +51,13 @@ int		MaxResourceGroups;
  */
 static ResGroup	CurrentResGroup = NULL;
 
-static ResGroupControl *pResGroupControl;
+static ResGroupControl *pResGroupControl = NULL;
 
 static bool localResWaiting = false;
 
-/* static functions */
+static LocalResGroupData *pLocalResGroup = NULL;
 
+/* static functions */
 static ResGroup ResGroupHashNew(Oid groupId);
 static ResGroup ResGroupHashFind(Oid groupId);
 static bool ResGroupHashRemove(Oid groupId);
@@ -468,7 +469,7 @@ ResGroupUpdateMemoryUsage(int32 memoryChunks)
 {
 	ResGroup group;
 
-	if (!IsResGroupEnabled())
+	if (!IsResGroupEnabled() || pLocalResGroup == NULL)
 		return;
 
 	group = CurrentResGroup;
@@ -488,6 +489,21 @@ ResGroupUpdateMemoryUsage(int32 memoryChunks)
 		if (group == NULL)
 			return;
 	}
+
+	/*
+	 * There may exist race condition for the manipulation of totalMemoryUsage,
+	 * but since the group memory is almost used up, we can sacrifice some
+	 * correctness here for simplicity
+	 */
+	if (memoryChunks > 0 && group->totalMemoryUsage + memoryChunks > pLocalResGroup->memoryLimit)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				errmsg("Out of memory"),
+				errdetail("Resource group memory limit reached. "
+						  "Group limit: %d MB, total memory used: %d MB,"
+						  "memory used by this session: %d MB, try to allocate: %d MB",
+							pLocalResGroup->memoryLimit, group->totalMemoryUsage,
+							MySessionState->sessionVmem, memoryChunks)));
 
 	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&group->totalMemoryUsage, memoryChunks);
 }
@@ -564,23 +580,37 @@ ResGroupSetupMemoryController(void)
 	int segmentCount;
 	int totalMemory;
 	int memPerSegment;
+	float memoryLimit, sharedQuota, spillRatio;
 
 	if (Gp_role == GP_ROLE_DISPATCH)
 		segmentCount = pResGroupControl->segmentsOnMaster;
 	else if (Gp_role == GP_ROLE_EXECUTE)
 		segmentCount = host_segments;
-	/* Memory controller is disabled for GP_ROLE_UTILITY, set 1 for simplicity */
-	else if (Gp_role == GP_ROLE_UTILITY)
-		segmentCount = 1;
 
-	AssertImply(Gp_role == GP_ROLE_UTILITY, CurrentResGroup == NULL);
 	Assert(segmentCount > 0);
+	Assert(Gp_role != GP_ROLE_UTILITY);
+	Assert(CurrentResGroup != NULL);
 
+	/*TODO: should we calculate swap? can we compute just once? */
 	totalMemory = ResGroupOps_GetTotalMemory() * gp_resource_group_memory_limit;
 	memPerSegment = totalMemory / segmentCount;
 
-	LOG_RESGROUP_DEBUG(LOG, "primary segments on this host: %d, memory per segment: %d MB",
+	LOG_RESGROUP_DEBUG(LOG, "Primary segments on this host: %d, memory per segment: %d MB",
 						segmentCount, memPerSegment);
+
+	/* TODO: retrieve this from shared memory? then we must make sure shared memory is not updated until ALTER transaction commit */
+	GetMemoryCapabilitiesForResGroup(CurrentResGroup->groupId, &memoryLimit, &sharedQuota, &spillRatio);
+
+	if (pLocalResGroup == NULL)
+		pLocalResGroup = (LocalResGroupData *) MemoryContextAlloc(TopMemoryContext,
+																 sizeof(LocalResGroupData));
+	pLocalResGroup->memoryLimit = memPerSegment * memoryLimit;
+	pLocalResGroup->memorySpillLimit = pLocalResGroup->memoryLimit * spillRatio;
+	pLocalResGroup->memorySharedQuota = pLocalResGroup->memoryLimit * sharedQuota;
+
+	LOG_RESGROUP_DEBUG(LOG, "Group memory limit: %d MB, spill limit: %d MB, shared quota: %d MB",
+						pLocalResGroup->memoryLimit, pLocalResGroup->memorySpillLimit,
+						pLocalResGroup->memorySharedQuota);
 }
 
 /*
@@ -620,20 +650,7 @@ retry:
 					 errmsg("Cannot find resource group %d in shared memory", groupId)));
 	}
 
-	/* update memory accounting when switch resource group */
-	if (MySessionState->resGroupId != groupId)
-	{
-		ResGroup prevGroup = ResGroupHashFind(MySessionState->resGroupId);;
-		if (prevGroup != NULL)
-			prevGroup->totalMemoryUsage -= MySessionState->sessionVmem;
-
-		group->totalMemoryUsage += MySessionState->sessionVmem;
-
-		MySessionState->resGroupId = groupId;
-		ResGroupOps_AssignGroup(groupId, MyProcPid);
-	}
 	CurrentResGroup = group;
-
 	/* wait on the queue if the group is locked for drop */
 	if (group->lockedForDrop)
 	{
@@ -746,51 +763,59 @@ AssignResGroup(Oid groupId)
 
 	Assert(Gp_role == GP_ROLE_EXECUTE);
 
-	if (MySessionState->resGroupId == groupId)
-	{
-		ResGroupOps_AssignGroup(groupId, MyProcPid);
+	if (groupId == InvalidOid)
 		return;
-	}
-
-	Assert(groupId != InvalidOid);
 
 	/* update memory accounting when switch resource group */
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
-	prevGroup = ResGroupHashFind(MySessionState->resGroupId);;
-	if (prevGroup != NULL)
-		prevGroup->totalMemoryUsage -= MySessionState->sessionVmem;
-
 	group = ResGroupHashFind(groupId);
 	Assert(group != NULL);
-	group->totalMemoryUsage += MySessionState->sessionVmem;
+	if (MySessionState->resGroupId != groupId)
+	{
+		Assert(groupId != InvalidOid);
+		prevGroup = ResGroupHashFind(MySessionState->resGroupId);;
+		if (prevGroup != NULL)
+			prevGroup->totalMemoryUsage -= MySessionState->sessionVmem;
+
+		group->totalMemoryUsage += MySessionState->sessionVmem;
+
+		/* update resource group id */
+		MySessionState->resGroupId = groupId;
+	}
 	LWLockRelease(ResGroupLock);
 
-	/* update resource group id */
-	MySessionState->resGroupId = groupId;
+	CurrentResGroup = group;
+
+	ResGroupSetupMemoryController();
 
 	ResGroupOps_AssignGroup(groupId, MyProcPid);
 }
 
-/*
- * Call this function at the beginning of the transaction on QE
- * to set CurrentResGroup.
- */
+/* check if we need to switch resource group on QD */
 void
-SetCurrentResGroup(void)
+ResGroupCheckSwitch(void)
 {
-	ResGroup group;
+	Assert(Gp_role == GP_ROLE_DISPATCH);
 
-	Assert(Gp_role == GP_ROLE_EXECUTE);
-	if (MySessionState->resGroupId == InvalidOid)
+	if (MySessionState->resGroupId == CurrentResGroup->groupId)
 		return;
 
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
-	group = ResGroupHashFind(MySessionState->resGroupId);
-	Assert(group != NULL);
+
+	ResGroup prevGroup = ResGroupHashFind(MySessionState->resGroupId);;
+	if (prevGroup != NULL)
+		prevGroup->totalMemoryUsage -= MySessionState->sessionVmem;
+
+	CurrentResGroup->totalMemoryUsage += MySessionState->sessionVmem;
+
 	LWLockRelease(ResGroupLock);
 
-	CurrentResGroup = group;
+	MySessionState->resGroupId = CurrentResGroup->groupId;
+	ResGroupSetupMemoryController();
+
+	ResGroupOps_AssignGroup(CurrentResGroup->groupId, MyProcPid);
 }
+
 
 /*
  * Call this function at the end of the transaction on QE to reset

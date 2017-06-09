@@ -39,7 +39,9 @@
 #define RESGROUP_DEFAULT_CONCURRENCY (20)
 #define RESGROUP_DEFAULT_REDZONE_LIMIT (0.8)
 #define RESGROUP_DEFAULT_MEM_SHARED_QUOTA (0.2)
-#define RESGROUP_DEFAULT_MEM_SPILL_RATIO  (0.2)
+#define RESGROUP_DEFAULT_MEM_SPILL_RATIO (0.2)
+static char *RESGROUP_DEFAULT_MEM_SHARED_QUOTA_STR = "0.2";
+static char *RESGROUP_DEFAULT_MEM_SPILL_RATIO_STR = "0.2";
 
 
 /*
@@ -447,6 +449,29 @@ GetCpuRateLimitForResGroup(int groupId)
 							   &valueStr, &proposedStr);
 
 	return str2Float(valueStr, "cpu_rate_limit");
+}
+
+/*
+ * Get memory capabilities of one resource group in pg_resgroupcapability.
+ * TODO: scan the catalog table only once?
+ */
+void
+GetMemoryCapabilitiesForResGroup(int groupId, float *memoryLimit, float *sharedQuota, float *spillRatio)
+{
+	char *valueStr;
+	char *proposedStr;
+
+	getResgroupCapabilityEntry(groupId, RESGROUP_LIMIT_TYPE_MEMORY,
+							   &valueStr, &proposedStr);
+	*memoryLimit = str2Float(valueStr, "memory_limit");
+
+	getResgroupCapabilityEntry(groupId, RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA,
+							   &valueStr, &proposedStr);
+	*sharedQuota = str2Float(valueStr, "memory_shared_quota");
+
+	getResgroupCapabilityEntry(groupId, RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO,
+							   &valueStr, &proposedStr);
+	*spillRatio = str2Float(valueStr, "memory_spill_ratio");
 }
 
 /*
@@ -1378,6 +1403,18 @@ getResgroupCapabilityEntry(int groupId, int type, char **value, char **proposed)
 		{
 			CurrentResourceOwner = NULL;
 			ResourceOwnerDelete(owner);
+		}
+
+		/* for backward compatibility */
+		switch (type)
+		{
+			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
+				*value = *proposed = RESGROUP_DEFAULT_MEM_SHARED_QUOTA_STR;
+				return;
+
+			case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
+				*value = *proposed = RESGROUP_DEFAULT_MEM_SPILL_RATIO_STR;
+				return;
 		}
 
 		ereport(ERROR,

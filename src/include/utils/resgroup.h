@@ -42,6 +42,13 @@ typedef struct ResGroupData
 } ResGroupData;
 typedef ResGroupData *ResGroup;
 
+typedef struct LocalResGroupData
+{
+	uint32	memoryLimit;
+	uint32	memorySpillLimit;
+	uint32	memorySharedQuota;
+} LocalResGroupData;
+
 /*
  * The hash table for resource groups in shared memory should only be populated
  * once, so we add a flag here to implement this requirement.
@@ -85,8 +92,8 @@ extern void ResGroupSlotAcquire(void);
 extern void ResGroupSlotRelease(void);
 
 /* Assign current process to the associated resource group */
+extern void ResGroupCheckSwitch(void);
 extern void AssignResGroup(Oid groupId);
-extern void SetCurrentResGroup(void);
 extern void ResetCurrentResGroup(void);
 
 /* Retrieve statistic information of type from resource group */
