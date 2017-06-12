@@ -1,10 +1,10 @@
-test: resgroup/enable_resgroup_validate
-test: resgroup/enable_resgroup
+test: enable_resgroup_validate
+test: enable_resgroup
 
-test: resgroup/resgroup_syntax
-test: resgroup/resgroup_cpu_rate_limit
-test: resgroup/resgroup_concurrency
-test: resgroup/drop_resgroup
-test: resgroup/resgroup_memory
+test: resgroup_syntax
+test: resgroup_cpu_rate_limit
+test: resgroup_concurrency
+test: drop_resgroup
+test: resgroup_memory
 
-test: resgroup/disable_resgroup
+test: disable_resgroup
