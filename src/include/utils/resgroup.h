@@ -99,6 +99,8 @@ extern void ResetCurrentResGroup(void);
 /* Retrieve statistic information of type from resource group */
 extern void ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen, const char *prop);
 
+/* Check the memory limit of resource group */
+extern bool ResGroupCheckMemoryLimit(int32 memoryChunks, int32 overuseChunks);
 /* Update the memory usage of resource group */
 extern void ResGroupUpdateMemoryUsage(int32 memoryChunks);
 

@@ -462,6 +462,57 @@ ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen,
 }
 
 /*
+ * Check the memory limit of resource group
+ */
+bool
+ResGroupCheckMemoryLimit(int32 memoryChunks, int32 overuseChunks)
+{
+	ResGroup group;
+
+	if (!IsResGroupEnabled() || pLocalResGroup == NULL)
+		return true;
+
+	group = CurrentResGroup;
+
+	/* CurrentResGroup is NULL if it's not in a transaction */
+	if (group == NULL)
+	{
+		LWLockAcquire(ResGroupLock, LW_SHARED);
+		group = ResGroupHashFind(MySessionState->resGroupId);
+		LWLockRelease(ResGroupLock);
+
+		/*
+		 * If the resource group is dropped, ignore it here.
+		 * The memory used by this session(session_state->sessionVmem) will
+		 * be added to the new resource group.
+		 */
+		if (group == NULL)
+			return true;
+	}
+
+	/*
+	 * There may exist race condition for the manipulation of totalMemoryUsage,
+	 * but since the group memory is almost used up, we can sacrifice some
+	 * correctness here for simplicity
+	 */
+	if (memoryChunks > 0 && group->totalMemoryUsage + memoryChunks - overuseChunks > pLocalResGroup->memoryLimit)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				errmsg("Out of memory"),
+				errdetail("Resource group memory limit reached. "
+						  "Group limit: %d MB, total memory used: %d MB, "
+						  "memory used by this session: %d MB, try to allocate: %d MB, "
+						  "allowed overuse: %d bytes",
+						  pLocalResGroup->memoryLimit, group->totalMemoryUsage,
+						  MySessionState->sessionVmem, memoryChunks, overuseChunks)));
+		return false;
+	}
+
+	return true;
+}
+
+/*
  * Update the memory usage of resource group
  */
 void
@@ -489,21 +540,6 @@ ResGroupUpdateMemoryUsage(int32 memoryChunks)
 		if (group == NULL)
 			return;
 	}
-
-	/*
-	 * There may exist race condition for the manipulation of totalMemoryUsage,
-	 * but since the group memory is almost used up, we can sacrifice some
-	 * correctness here for simplicity
-	 */
-	if (memoryChunks > 0 && group->totalMemoryUsage + memoryChunks > pLocalResGroup->memoryLimit)
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				errmsg("Out of memory"),
-				errdetail("Resource group memory limit reached. "
-						  "Group limit: %d MB, total memory used: %d MB,"
-						  "memory used by this session: %d MB, try to allocate: %d MB",
-							pLocalResGroup->memoryLimit, group->totalMemoryUsage,
-							MySessionState->sessionVmem, memoryChunks)));
 
 	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&group->totalMemoryUsage, memoryChunks);
 }

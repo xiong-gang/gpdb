@@ -200,12 +200,21 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 	int32 total = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
 	Assert(total > (int32) 0);
 
-	ResGroupUpdateMemoryUsage(numChunksToReserve);
 
 	/* We don't support vmem usage from non-owner thread */
 	Assert(MemoryProtection_IsOwnerThread());
 
 	bool waiverUsed = false;
+
+	if (!ResGroupCheckMemoryLimit(numChunksToReserve, 0))
+	{
+		if (!ResGroupCheckMemoryLimit(numChunksToReserve, waivedChunks))
+		{
+			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
+			return MemoryFailure_QueryMemoryExhausted;
+		}
+		waiverUsed = true;
+	}
 
 	/*
 	 * Query vmem quota exhausted, so rollback the reservation and return error.
@@ -219,7 +228,6 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 		{
 			/* Revert the reserved space, but don't revert the prev_alloc as we have already set the firstTime to false */
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
-			ResGroupUpdateMemoryUsage(-numChunksToReserve);
 			return MemoryFailure_QueryMemoryExhausted;
 		}
 		waiverUsed = true;
@@ -240,7 +248,6 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 		{
 			/* Revert query memory reservation */
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
-			ResGroupUpdateMemoryUsage(-numChunksToReserve);
 			/* Revert vmem reservation */
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)segmentVmemChunks, numChunksToReserve);
 
@@ -262,6 +269,8 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 		 */
 		waivedChunks = 0;
 	}
+
+	ResGroupUpdateMemoryUsage(numChunksToReserve);
 
 	return MemoryAllocation_Success;
 }
