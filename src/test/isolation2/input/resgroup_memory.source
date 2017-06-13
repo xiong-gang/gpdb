@@ -68,18 +68,21 @@ GRANT ALL ON memory_result TO role2_memory_test;
 1: SET ROLE TO role1_memory_test;
 -- check initial state
 SELECT * FROM memory_result;
+1: BEGIN;
 1: SELECT * FROM eat_memory_on_qd;
 SELECT * FROM memory_result;
 1q:
 
 -- 2) QEs on one slice
 1: SET ROLE TO role1_memory_test;
+1: BEGIN;
 1: SELECT 1 FROM eat_memory_on_one_slice;
 SELECT * FROM memory_result;
 1q:
 
 -- 3) QEs on multiple slices
 1: SET ROLE TO role1_memory_test;
+1: BEGIN;
 1: SELECT 1 FROM eat_memory_on_slices;
 SELECT * FROM memory_result;
 1q:
@@ -91,7 +94,9 @@ SELECT * FROM memory_result;
 1: SET ROLE TO role1_memory_test;
 2: SET ROLE TO role1_memory_test;
 -- QEs on multiple slices
+1: BEGIN;
 1: SELECT 1 FROM eat_memory_on_slices;
+2: BEGIN;
 2: SELECT 1 FROM eat_memory_on_slices;
 SELECT * FROM memory_result;
 1q:
@@ -101,7 +106,9 @@ SELECT * FROM memory_result;
 1: SET ROLE TO role1_memory_test;
 2: SET ROLE TO role2_memory_test;
 -- QEs on multiple slices
+1: BEGIN;
 1: SELECT * FROM eat_memory_on_slices;
+2: BEGIN;
 2: SELECT * FROM eat_memory_on_slices;
 SELECT * FROM memory_result;
 1q:

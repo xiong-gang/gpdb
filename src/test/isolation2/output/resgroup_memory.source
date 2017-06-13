@@ -70,6 +70,8 @@ rsgname        |master_mem|seg0_mem|seg1_mem|seg2_mem
 rg1_memory_test|0         |0       |0       |0       
 rg2_memory_test|0         |0       |0       |0       
 (2 rows)
+1: BEGIN;
+BEGIN
 1: SELECT * FROM eat_memory_on_qd;
 hold_memory
 -----------
@@ -86,6 +88,8 @@ rg2_memory_test|0         |0       |0       |0
 -- 2) QEs on one slice
 1: SET ROLE TO role1_memory_test;
 SET
+1: BEGIN;
+BEGIN
 1: SELECT 1 FROM eat_memory_on_one_slice;
 ?column?
 --------
@@ -102,6 +106,8 @@ rg2_memory_test|0         |0       |0       |0
 -- 3) QEs on multiple slices
 1: SET ROLE TO role1_memory_test;
 SET
+1: BEGIN;
+BEGIN
 1: SELECT 1 FROM eat_memory_on_slices;
 ?column?
 --------
@@ -110,7 +116,7 @@ SET
 SELECT * FROM memory_result;
 rsgname        |master_mem|seg0_mem|seg1_mem|seg2_mem
 ---------------+----------+--------+--------+--------
-rg1_memory_test|0         |200     |200     |200     
+rg1_memory_test|0         |100     |100     |100     
 rg2_memory_test|0         |0       |0       |0       
 (2 rows)
 1q: ... <quitting>
@@ -129,11 +135,15 @@ SET
 2: SET ROLE TO role1_memory_test;
 SET
 -- QEs on multiple slices
+1: BEGIN;
+BEGIN
 1: SELECT 1 FROM eat_memory_on_slices;
 ?column?
 --------
 1       
 (1 row)
+2: BEGIN;
+BEGIN
 2: SELECT 1 FROM eat_memory_on_slices;
 ?column?
 --------
@@ -142,7 +152,7 @@ SET
 SELECT * FROM memory_result;
 rsgname        |master_mem|seg0_mem|seg1_mem|seg2_mem
 ---------------+----------+--------+--------+--------
-rg1_memory_test|0         |400     |400     |400     
+rg1_memory_test|0         |200     |200     |200     
 rg2_memory_test|0         |0       |0       |0       
 (2 rows)
 1q: ... <quitting>
@@ -154,11 +164,15 @@ SET
 2: SET ROLE TO role2_memory_test;
 SET
 -- QEs on multiple slices
+1: BEGIN;
+BEGIN
 1: SELECT * FROM eat_memory_on_slices;
 count
 -----
 9    
 (1 row)
+2: BEGIN;
+BEGIN
 2: SELECT * FROM eat_memory_on_slices;
 count
 -----
@@ -167,8 +181,8 @@ count
 SELECT * FROM memory_result;
 rsgname        |master_mem|seg0_mem|seg1_mem|seg2_mem
 ---------------+----------+--------+--------+--------
-rg1_memory_test|0         |200     |200     |200     
-rg2_memory_test|0         |200     |200     |200     
+rg1_memory_test|0         |100     |100     |100     
+rg2_memory_test|0         |100     |100     |100     
 (2 rows)
 1q: ... <quitting>
 2q: ... <quitting>
