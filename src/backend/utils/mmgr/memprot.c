@@ -37,6 +37,7 @@
 #include "utils/debugbreak.h"
 #include "utils/simex.h"
 #include "utils/vmem_tracker.h"
+#include "utils/resgroup.h"
 #include "utils/session_state.h"
 #include "utils/gp_alloc.h"
 
@@ -263,6 +264,10 @@ static void gp_failed_to_alloc(MemoryAllocationStatus ec, int en, int sz)
 		 */
 		write_stderr("Logging memory usage for reaching system memory limit");
 	}
+	else if (ec == MemoryFailure_ResourceGroupMemoryExhausted)
+	{
+		elog(LOG, "Logging memory usage for reaching resource group limit");
+	}
 	else
 	{
 		Assert(!"Unknown memory failure error code");
@@ -308,6 +313,14 @@ static void gp_failed_to_alloc(MemoryAllocationStatus ec, int en, int sz)
 						sz, VmemTracker_GetAvailableVmemMB()
 				)
 		));
+	}
+	else if (ec == MemoryFailure_ResourceGroupMemoryExhausted)
+	{
+		ereport(ERROR, (errcode(ERRCODE_GP_MEMPROT_KILL),
+				errmsg("Out of memory"),
+				errdetail("Resource group VM protect limit reached: current limit is %d MB, "
+						  "requested %d bytes",
+						  CurrentResGroupLocalInfo->memoryLimit, sz)));
 	}
 	else
 	{

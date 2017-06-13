@@ -47,6 +47,8 @@ typedef struct LocalResGroupData
 	uint32	memoryLimit;
 	uint32	memorySpillLimit;
 	uint32	memorySharedQuota;
+
+	uint32	memoryUsed;
 } LocalResGroupData;
 
 /*
@@ -74,6 +76,11 @@ typedef enum
 	RES_GROUP_STAT_MEM_USAGE,
 } ResGroupStatType;
 
+/* Global variables */
+extern Oid CurrentResourceGroupId;
+extern LocalResGroupData *CurrentResGroupLocalInfo;
+
+
 /*
  * Functions in resgroup.c
  */
@@ -92,9 +99,8 @@ extern void ResGroupSlotAcquire(void);
 extern void ResGroupSlotRelease(void);
 
 /* Assign current process to the associated resource group */
-extern void ResGroupCheckSwitch(void);
-extern void AssignResGroup(Oid groupId);
-extern void ResetCurrentResGroup(void);
+extern void AssignResGroup(void);
+extern void UnassignResGroup(void);
 
 /* Retrieve statistic information of type from resource group */
 extern void ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen, const char *prop);

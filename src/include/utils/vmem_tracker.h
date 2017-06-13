@@ -24,7 +24,8 @@ typedef enum MemoryAllocationStatus
 	MemoryAllocation_Success,
 	MemoryFailure_VmemExhausted,
 	MemoryFailure_SystemMemoryExhausted,
-	MemoryFailure_QueryMemoryExhausted
+	MemoryFailure_QueryMemoryExhausted,
+	MemoryFailure_ResourceGroupMemoryExhausted
 } MemoryAllocationStatus;
 
 typedef int64 EventVersion;

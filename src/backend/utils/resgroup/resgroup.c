@@ -41,21 +41,22 @@
 /* GUC */
 int		MaxResourceGroups;
 
-/* static variables */
+/* Global variables */
+Oid CurrentResourceGroupId = InvalidOid;
+LocalResGroupData *CurrentResGroupLocalInfo = NULL;
 
+/* static variables */
 /*
- * Global variable 'CurrentResGroup' is used to optimize the
+ * Global variable 'CurrentResGroupSharedInfo' is used to optimize the
  * access to the current resource group. This pointer is valid
  * in the lifetime of a transaction as the resource group could
  * be dropped concurrently.
  */
-static ResGroup	CurrentResGroup = NULL;
+static ResGroup	CurrentResGroupSharedInfo = NULL;
 
 static ResGroupControl *pResGroupControl = NULL;
 
 static bool localResWaiting = false;
-
-static LocalResGroupData *pLocalResGroup = NULL;
 
 /* static functions */
 static ResGroup ResGroupHashNew(Oid groupId);
@@ -467,47 +468,17 @@ ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen,
 bool
 ResGroupCheckMemoryLimit(int32 memoryChunks, int32 overuseChunks)
 {
-	ResGroup group;
-
-	if (!IsResGroupEnabled() || pLocalResGroup == NULL)
+	if (!IsResGroupEnabled() || CurrentResGroupLocalInfo == NULL || CurrentResGroupSharedInfo == NULL)
 		return true;
-
-	group = CurrentResGroup;
-
-	/* CurrentResGroup is NULL if it's not in a transaction */
-	if (group == NULL)
-	{
-		LWLockAcquire(ResGroupLock, LW_SHARED);
-		group = ResGroupHashFind(MySessionState->resGroupId);
-		LWLockRelease(ResGroupLock);
-
-		/*
-		 * If the resource group is dropped, ignore it here.
-		 * The memory used by this session(session_state->sessionVmem) will
-		 * be added to the new resource group.
-		 */
-		if (group == NULL)
-			return true;
-	}
 
 	/*
 	 * There may exist race condition for the manipulation of totalMemoryUsage,
 	 * but since the group memory is almost used up, we can sacrifice some
 	 * correctness here for simplicity
 	 */
-	if (memoryChunks > 0 && group->totalMemoryUsage + memoryChunks - overuseChunks > pLocalResGroup->memoryLimit)
-	{
-		ereport(WARNING,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				errmsg("Out of memory"),
-				errdetail("Resource group memory limit reached. "
-						  "Group limit: %d MB, total memory used: %d MB, "
-						  "memory used by this session: %d MB, try to allocate: %d MB, "
-						  "allowed overuse: %d bytes",
-						  pLocalResGroup->memoryLimit, group->totalMemoryUsage,
-						  MySessionState->sessionVmem, memoryChunks, overuseChunks)));
+	Assert(CurrentResGroupSharedInfo->totalMemoryUsage >= 0);
+	if (memoryChunks > 0 && CurrentResGroupSharedInfo->totalMemoryUsage + memoryChunks - overuseChunks > CurrentResGroupLocalInfo->memoryLimit)
 		return false;
-	}
 
 	return true;
 }
@@ -518,30 +489,11 @@ ResGroupCheckMemoryLimit(int32 memoryChunks, int32 overuseChunks)
 void
 ResGroupUpdateMemoryUsage(int32 memoryChunks)
 {
-	ResGroup group;
-
-	if (!IsResGroupEnabled() || pLocalResGroup == NULL)
+	if (!IsResGroupEnabled() || CurrentResGroupLocalInfo == NULL || CurrentResGroupSharedInfo == NULL)
 		return;
 
-	group = CurrentResGroup;
-
-	/* CurrentResGroup is NULL if it's not in a transaction */
-	if (group == NULL)
-	{
-		LWLockAcquire(ResGroupLock, LW_SHARED);
-		group = ResGroupHashFind(MySessionState->resGroupId);
-		LWLockRelease(ResGroupLock);
-
-		/*
-		 * If the resource group is dropped, ignore it here.
-		 * The memory used by this session(session_state->sessionVmem) will
-		 * be added to the new resource group.
-		 */
-		if (group == NULL)
-			return;
-	}
-
-	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&group->totalMemoryUsage, memoryChunks);
+	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&CurrentResGroupSharedInfo->totalMemoryUsage, memoryChunks);
+	CurrentResGroupLocalInfo->memoryUsed += memoryChunks;
 }
 
 /*
@@ -625,7 +577,7 @@ ResGroupSetupMemoryController(void)
 
 	Assert(segmentCount > 0);
 	Assert(Gp_role != GP_ROLE_UTILITY);
-	Assert(CurrentResGroup != NULL);
+	Assert(CurrentResGroupSharedInfo != NULL);
 
 	/*TODO: should we calculate swap? can we compute just once? */
 	totalMemory = ResGroupOps_GetTotalMemory() * gp_resource_group_memory_limit;
@@ -635,18 +587,22 @@ ResGroupSetupMemoryController(void)
 						segmentCount, memPerSegment);
 
 	/* TODO: retrieve this from shared memory? then we must make sure shared memory is not updated until ALTER transaction commit */
-	GetMemoryCapabilitiesForResGroup(CurrentResGroup->groupId, &memoryLimit, &sharedQuota, &spillRatio);
+	GetMemoryCapabilitiesForResGroup(CurrentResGroupSharedInfo->groupId, &memoryLimit, &sharedQuota, &spillRatio);
 
-	if (pLocalResGroup == NULL)
-		pLocalResGroup = (LocalResGroupData *) MemoryContextAlloc(TopMemoryContext,
+	if (CurrentResGroupLocalInfo == NULL)
+	{
+		CurrentResGroupLocalInfo = (LocalResGroupData *) MemoryContextAlloc(TopMemoryContext,
 																 sizeof(LocalResGroupData));
-	pLocalResGroup->memoryLimit = memPerSegment * memoryLimit;
-	pLocalResGroup->memorySpillLimit = pLocalResGroup->memoryLimit * spillRatio;
-	pLocalResGroup->memorySharedQuota = pLocalResGroup->memoryLimit * sharedQuota;
+		CurrentResGroupLocalInfo->memoryUsed = 0;
+	}
+
+	CurrentResGroupLocalInfo->memoryLimit = memPerSegment * memoryLimit;
+	CurrentResGroupLocalInfo->memorySpillLimit = CurrentResGroupLocalInfo->memoryLimit * spillRatio;
+	CurrentResGroupLocalInfo->memorySharedQuota = CurrentResGroupLocalInfo->memoryLimit * sharedQuota;
 
 	LOG_RESGROUP_DEBUG(LOG, "Group memory limit: %d MB, spill limit: %d MB, shared quota: %d MB",
-						pLocalResGroup->memoryLimit, pLocalResGroup->memorySpillLimit,
-						pLocalResGroup->memorySharedQuota);
+						CurrentResGroupLocalInfo->memoryLimit, CurrentResGroupLocalInfo->memorySpillLimit,
+						CurrentResGroupLocalInfo->memorySharedQuota);
 }
 
 /*
@@ -659,8 +615,11 @@ ResGroupSlotAcquire(void)
 {
 	ResGroup	group;
 	Oid			groupId;
+	Oid			prevResgroupId;
 	int			concurrencyProposed;
 	bool		retried = false;
+
+	prevResgroupId = CurrentResourceGroupId;
 
 	groupId = GetResGroupIdForRole(GetUserId());
 	if (groupId == InvalidOid)
@@ -676,6 +635,9 @@ retry:
 	{
 		LWLockRelease(ResGroupLock);
 
+		CurrentResourceGroupId = prevResgroupId;
+		CurrentResGroupSharedInfo = NULL;
+
 		if (retried)
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -686,7 +648,9 @@ retry:
 					 errmsg("Cannot find resource group %d in shared memory", groupId)));
 	}
 
-	CurrentResGroup = group;
+	CurrentResGroupSharedInfo = group;
+	CurrentResourceGroupId = groupId;
+
 	/* wait on the queue if the group is locked for drop */
 	if (group->lockedForDrop)
 	{
@@ -749,7 +713,7 @@ ResGroupSlotRelease(void)
 	PGPROC		*waitProc;
 	int			concurrencyProposed;
 
-	group = CurrentResGroup;
+	group = CurrentResGroupSharedInfo;
 	Assert(group != NULL);
 
 	GetConcurrencyForResGroup(group->groupId, NULL, &concurrencyProposed);
@@ -770,7 +734,6 @@ ResGroupSlotRelease(void)
 		group->nRunning--;
 
 		LWLockRelease(ResGroupLock);
-		CurrentResGroup = NULL;
 
 		return;
 	}
@@ -784,84 +747,48 @@ ResGroupSlotRelease(void)
 
 	waitProc->resWaiting = false;
 	SetLatch(&waitProc->procLatch);
-
-	CurrentResGroup = NULL;
 }
 
-/*
- * Assign a resource group to QE process
- */
+/* check if we need to switch resource group */
 void
-AssignResGroup(Oid groupId)
+AssignResGroup(void)
 {
-	ResGroup group;
-	ResGroup prevGroup;
-
-	Assert(Gp_role == GP_ROLE_EXECUTE);
-
-	if (groupId == InvalidOid)
+	if (CurrentResourceGroupId == InvalidOid)
 		return;
 
-	/* update memory accounting when switch resource group */
-	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
-	group = ResGroupHashFind(groupId);
-	Assert(group != NULL);
-	if (MySessionState->resGroupId != groupId)
+	if (Gp_role == GP_ROLE_EXECUTE)
 	{
-		Assert(groupId != InvalidOid);
-		prevGroup = ResGroupHashFind(MySessionState->resGroupId);;
-		if (prevGroup != NULL)
-			prevGroup->totalMemoryUsage -= MySessionState->sessionVmem;
-
-		group->totalMemoryUsage += MySessionState->sessionVmem;
-
-		/* update resource group id */
-		MySessionState->resGroupId = groupId;
+		LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
+		CurrentResGroupSharedInfo = ResGroupHashFind(CurrentResourceGroupId);
+		LWLockRelease(ResGroupLock);
 	}
-	LWLockRelease(ResGroupLock);
-
-	CurrentResGroup = group;
+	Assert(CurrentResGroupSharedInfo != NULL);
 
 	ResGroupSetupMemoryController();
-
-	ResGroupOps_AssignGroup(groupId, MyProcPid);
-}
-
-/* check if we need to switch resource group on QD */
-void
-ResGroupCheckSwitch(void)
-{
-	Assert(Gp_role == GP_ROLE_DISPATCH);
-
-	if (MySessionState->resGroupId == CurrentResGroup->groupId)
-		return;
-
-	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
-
-	ResGroup prevGroup = ResGroupHashFind(MySessionState->resGroupId);;
-	if (prevGroup != NULL)
-		prevGroup->totalMemoryUsage -= MySessionState->sessionVmem;
-
-	CurrentResGroup->totalMemoryUsage += MySessionState->sessionVmem;
-
-	LWLockRelease(ResGroupLock);
-
-	MySessionState->resGroupId = CurrentResGroup->groupId;
-	ResGroupSetupMemoryController();
-
-	ResGroupOps_AssignGroup(CurrentResGroup->groupId, MyProcPid);
+	ResGroupOps_AssignGroup(CurrentResGroupSharedInfo->groupId, MyProcPid);
+	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&CurrentResGroupSharedInfo->totalMemoryUsage,
+							CurrentResGroupLocalInfo->memoryUsed);
 }
 
 
 /*
- * Call this function at the end of the transaction on QE to reset
- * CurrentResGroup.
+ * Call this function at the end of the transaction reset CurrentResGroupSharedInfo.
  */
 void
-ResetCurrentResGroup(void)
+UnassignResGroup(void)
 {
-	Assert(Gp_role == GP_ROLE_EXECUTE);
-	CurrentResGroup = NULL;
+	if (CurrentResGroupSharedInfo == NULL)
+		return;
+
+	Assert(CurrentResGroupLocalInfo != NULL);
+
+	pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&CurrentResGroupSharedInfo->totalMemoryUsage,
+							CurrentResGroupLocalInfo->memoryUsed);
+
+	if (CurrentResGroupLocalInfo->memoryUsed > 10)
+		LOG_RESGROUP_DEBUG(LOG, "Idle proc memory usage: %d", CurrentResGroupLocalInfo->memoryUsed);
+
+	CurrentResGroupSharedInfo = NULL;
 }
 
 /*
@@ -1019,7 +946,7 @@ ResGroupWaitCancel()
 	PGPROC		*waitProc;
 
 	/* Process exit without waiting for slot */
-	group = CurrentResGroup;
+	group = CurrentResGroupSharedInfo;
 	if (group == NULL || !localResWaiting)
 		return;
 
@@ -1077,5 +1004,5 @@ ResGroupWaitCancel()
 	LWLockRelease(ResGroupLock);
 	localResWaiting = false;
 	pgstat_report_waiting(PGBE_WAITING_NONE);
-	CurrentResGroup = NULL;
+	CurrentResGroupSharedInfo = NULL;
 }

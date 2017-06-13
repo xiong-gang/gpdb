@@ -79,6 +79,7 @@
 #include "utils/ps_status.h"
 #include "utils/datum.h"
 #include "utils/debugbreak.h"
+#include "utils/session_state.h"
 #include "mb/pg_wchar.h"
 #include "cdb/cdbvars.h"
 #include "cdb/cdbsrlz.h"
@@ -5038,7 +5039,6 @@ PostgresMain(int argc, char *argv[],
 					Oid suid;
 					Oid ouid;
 					Oid cuid;
-					Oid resgroupId;
 					bool suid_is_super = false;
 					bool ouid_is_super = false;
 
@@ -5066,10 +5066,7 @@ PostgresMain(int argc, char *argv[],
 					if(pq_getmsgbyte(&input_message) == 1)
 						ouid_is_super = true;
 					cuid = pq_getmsgint(&input_message, 4);
-					resgroupId = pq_getmsgint(&input_message, 4);
-
-					if (IsResGroupEnabled())
-						AssignResGroup(resgroupId);
+					CurrentResourceGroupId = pq_getmsgint(&input_message, 4);
 
 					rootIdx = pq_getmsgint(&input_message, 4);
 
