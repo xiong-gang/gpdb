@@ -5066,7 +5066,23 @@ PostgresMain(int argc, char *argv[],
 					if(pq_getmsgbyte(&input_message) == 1)
 						ouid_is_super = true;
 					cuid = pq_getmsgint(&input_message, 4);
-					CurrentResourceGroupId = pq_getmsgint(&input_message, 4);
+
+					{
+						UnassignResGroup();
+
+						MyResGroupProcData->groupId = pq_getmsgint(&input_message, 4);
+						MyResGroupProcData->slotId = pq_getmsgint(&input_message, 4);
+						MyResGroupProcData->concurrency = pq_getmsgint(&input_message, 4);
+						MyResGroupProcData->memoryLimit = pq_getmsgint(&input_message, 4);
+						MyResGroupProcData->sharedQuota = pq_getmsgint(&input_message, 4);
+						MyResGroupProcData->spillRatio = pq_getmsgint(&input_message, 4);
+						/* memoryUsed is only a place holder */
+						pq_getmsgint(&input_message, 4);
+						pq_getmsgint(&input_message, 4);
+
+						ResGroupInitSlot(MyResGroupProcData->slotId);
+						AssignResGroup();
+					}
 
 					rootIdx = pq_getmsgint(&input_message, 4);
 

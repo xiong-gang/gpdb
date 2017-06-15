@@ -2246,10 +2246,12 @@ StartTransaction(void)
 	if (IsResGroupEnabled() && IsNormalProcessingMode())
 	{
 		if (Gp_role == GP_ROLE_DISPATCH)
-			ResGroupSlotAcquire();
-
-		if (Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_EXECUTE)
+		{
+			int slotId = ResGroupSlotAcquire();
+			ResGroupInitSlot(slotId);
+			ResGroupInitProc(slotId);
 			AssignResGroup();
+		}
 	}
 
 	/*
@@ -2837,10 +2839,10 @@ CommitTransaction(void)
 	if (IsResGroupEnabled() && IsNormalProcessingMode())
 	{
 		if (Gp_role == GP_ROLE_DISPATCH)
+		{
 			ResGroupSlotRelease();
-
-		if (Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_EXECUTE)
 			UnassignResGroup();
+		}
 	}
 }
 
@@ -3392,10 +3394,10 @@ CleanupTransaction(void)
 	if (IsResGroupEnabled() && IsNormalProcessingMode())
 	{
 		if (Gp_role == GP_ROLE_DISPATCH)
+		{
 			ResGroupSlotRelease();
-
-		if (Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_EXECUTE)
 			UnassignResGroup();
+		}
 	}
 }
 

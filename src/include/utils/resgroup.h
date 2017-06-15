@@ -21,6 +21,22 @@ extern double gp_resource_group_memory_limit;
 /*
  * Data structures
  */
+
+
+#define RESGROUP_MAX_CONCURRENCY	90
+#define RESGROUP_INVALID_SLOT_ID	(-1)
+
+typedef struct ResGroupSlotData
+{
+	bool	inUse;
+	TransactionId	xactid;
+	int		sessionid;
+
+	uint32	memoryUsage;
+	int		nProcs;
+}ResGroupSlotData;
+
+
 /* Resource Groups */
 typedef struct ResGroupData
 {
@@ -39,17 +55,25 @@ typedef struct ResGroupData
 	 * belongs to this group
 	 */
 	uint32		totalMemoryUsage;
+	uint32		memSharedQuotaUsage;
+
+	ResGroupSlotData slots[RESGROUP_MAX_CONCURRENCY];
 } ResGroupData;
 typedef ResGroupData *ResGroup;
 
-typedef struct LocalResGroupData
+typedef struct ResGroupProcData
 {
-	uint32	memoryLimit;
-	uint32	memorySpillLimit;
-	uint32	memorySharedQuota;
+	Oid		groupId;
+	int		slotId;
 
+	int		concurrency;
+	int		memoryLimit;
+	int		sharedQuota;
+	int		spillRatio;
+
+	int		memoryQuota;
 	uint32	memoryUsed;
-} LocalResGroupData;
+} ResGroupProcData;
 
 /*
  * The hash table for resource groups in shared memory should only be populated
@@ -77,8 +101,7 @@ typedef enum
 } ResGroupStatType;
 
 /* Global variables */
-extern Oid CurrentResourceGroupId;
-extern LocalResGroupData *CurrentResGroupLocalInfo;
+extern ResGroupProcData *MyResGroupProcData;
 
 
 /*
@@ -94,8 +117,10 @@ extern void	InitResGroups(void);
 extern void AllocResGroupEntry(Oid groupId);
 extern void FreeResGroupEntry(Oid groupId);
 
+extern void ResGroupInitSlot(int slotId);
+extern void ResGroupInitProc(int slotId);
 /* Acquire and release resource group slot */
-extern void ResGroupSlotAcquire(void);
+extern int ResGroupSlotAcquire(void);
 extern void ResGroupSlotRelease(void);
 
 /* Assign current process to the associated resource group */
@@ -106,9 +131,9 @@ extern void UnassignResGroup(void);
 extern void ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen, const char *prop);
 
 /* Check the memory limit of resource group */
-extern bool ResGroupCheckMemoryLimit(int32 memoryChunks, int32 overuseChunks);
+extern bool ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks);
 /* Update the memory usage of resource group */
-extern void ResGroupUpdateMemoryUsage(int32 memoryChunks);
+extern void ResGroupReleaseMemory(int32 memoryChunks);
 
 extern void ResGroupAlterCheckForWakeup(Oid groupId);
 extern void ResGroupDropCheckForWakeup(Oid groupId, bool isCommit);

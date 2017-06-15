@@ -994,7 +994,7 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 		sizeof(sessionUserId) + 1 /* sessionUserIsSuper */	+
 		sizeof(outerUserId) + 1 /* outerUserIsSuper */	+
 		sizeof(currentUserId) +
-		sizeof(CurrentResourceGroupId) +
+		sizeof(*MyResGroupProcData) +
 		sizeof(rootIdx) +
 		sizeof(n32) * 2 /* currentStatementStartTimestamp */  +
 		sizeof(command_len) +
@@ -1058,9 +1058,41 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 	memcpy(pos, &tmp, sizeof(currentUserId));
 	pos += sizeof(currentUserId);
 
-	tmp = htonl(CurrentResourceGroupId);
-	memcpy(pos, &tmp, sizeof(CurrentResourceGroupId));
-	pos += sizeof(CurrentResourceGroupId);
+	{
+		/* TODO: serialize the entire struct */
+
+		tmp = htonl(MyResGroupProcData->groupId);
+		memcpy(pos, &tmp, sizeof(MyResGroupProcData->groupId));
+		pos += sizeof(MyResGroupProcData->groupId);
+
+		tmp = htonl(MyResGroupProcData->slotId);
+		memcpy(pos, &tmp, sizeof(MyResGroupProcData->slotId));
+		pos += sizeof(MyResGroupProcData->slotId);
+
+		tmp = htonl(MyResGroupProcData->concurrency);
+		memcpy(pos, &tmp, sizeof(MyResGroupProcData->concurrency));
+		pos += sizeof(MyResGroupProcData->concurrency);
+
+		tmp = htonl(MyResGroupProcData->memoryLimit);
+		memcpy(pos, &tmp, sizeof(MyResGroupProcData->memoryLimit));
+		pos += sizeof(MyResGroupProcData->memoryLimit);
+
+		tmp = htonl(MyResGroupProcData->sharedQuota);
+		memcpy(pos, &tmp, sizeof(MyResGroupProcData->sharedQuota));
+		pos += sizeof(MyResGroupProcData->sharedQuota);
+
+		tmp = htonl(MyResGroupProcData->spillRatio);
+		memcpy(pos, &tmp, sizeof(MyResGroupProcData->spillRatio));
+		pos += sizeof(MyResGroupProcData->spillRatio);
+
+		tmp = htonl(MyResGroupProcData->memoryQuota);
+		memcpy(pos, &tmp, sizeof(MyResGroupProcData->memoryQuota));
+		pos += sizeof(MyResGroupProcData->memoryQuota);
+
+		tmp = htonl(MyResGroupProcData->memoryUsed);
+		memcpy(pos, &tmp, sizeof(MyResGroupProcData->memoryUsed));
+		pos += sizeof(MyResGroupProcData->memoryUsed);
+	}
 
 	tmp = htonl(rootIdx);
 	memcpy(pos, &tmp, sizeof(rootIdx));

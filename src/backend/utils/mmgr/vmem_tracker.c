@@ -206,9 +206,9 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 
 	bool waiverUsed = false;
 
-	if (!ResGroupCheckMemoryLimit(numChunksToReserve, 0))
+	if (!ResGroupReserveMemory(numChunksToReserve, 0))
 	{
-		if (!ResGroupCheckMemoryLimit(numChunksToReserve, waivedChunks))
+		if (!ResGroupReserveMemory(numChunksToReserve, waivedChunks))
 		{
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
 			return MemoryFailure_ResourceGroupMemoryExhausted;
@@ -228,6 +228,8 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 		{
 			/* Revert the reserved space, but don't revert the prev_alloc as we have already set the firstTime to false */
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
+			/* Revert resgroup memory reservation */
+			ResGroupReleaseMemory(numChunksToReserve);
 			return MemoryFailure_QueryMemoryExhausted;
 		}
 		waiverUsed = true;
@@ -250,6 +252,8 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
 			/* Revert vmem reservation */
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)segmentVmemChunks, numChunksToReserve);
+			/* Revert resgroup memory reservation */
+			ResGroupReleaseMemory(numChunksToReserve);
 
 			return MemoryFailure_VmemExhausted;
 		}
@@ -270,8 +274,6 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 		waivedChunks = 0;
 	}
 
-	ResGroupUpdateMemoryUsage(numChunksToReserve);
-
 	return MemoryAllocation_Success;
 }
 
@@ -290,7 +292,7 @@ VmemTracker_ReleaseVmemChunks(int reduction)
 	Assert(*segmentVmemChunks >= 0);
 	Assert(NULL != MySessionState);
 	pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, reduction);
-	ResGroupUpdateMemoryUsage(-reduction);
+	ResGroupReleaseMemory(reduction);
 	Assert(0 <= MySessionState->sessionVmem);
 	trackedVmemChunks -= reduction;
 }

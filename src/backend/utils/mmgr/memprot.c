@@ -320,7 +320,7 @@ static void gp_failed_to_alloc(MemoryAllocationStatus ec, int en, int sz)
 				errmsg("Out of memory"),
 				errdetail("Resource group VM protect limit reached: current limit is %d MB, "
 						  "requested %d bytes",
-						  CurrentResGroupLocalInfo->memoryLimit, sz)));
+						  0, sz))); /* TODO: print actual memory limit */
 	}
 	else
 	{
