@@ -89,10 +89,13 @@ ResGroupShmemSize(void)
 	Size		size = 0;
 
 	/* The hash of groups. */
-	size = hash_estimate_size(MaxResourceGroups, sizeof(ResGroupData));
+	size = hash_estimate_size(MaxResourceGroups, sizeof(ResGroupHashEntry));
 
 	/* The control structure. */
-	size = add_size(size, sizeof(ResGroupControl));
+	size = add_size(size, sizeof(ResGroupControl) - sizeof(ResGroupData));
+
+	/* The control structure. */
+	size = add_size(size, mul_size(MaxResourceGroups, sizeof(ResGroupData)));
 
 	/* Add a safety margin */
 	size = add_size(size, size / 10);
@@ -106,12 +109,17 @@ ResGroupShmemSize(void)
 void
 ResGroupControlInit(void)
 {
+	int			i;
     bool        found;
     HASHCTL     info;
     int         hash_flags;
+	int			size;
+
+	size = sizeof(*pResGroupControl) - sizeof(ResGroupData);
+	size += mul_size(MaxResourceGroups, sizeof(ResGroupData));
 
     pResGroupControl = ShmemInitStruct("global resource group control",
-                                       sizeof(*pResGroupControl), &found);
+                                       size, &found);
     if (found)
         return;
     if (pResGroupControl == NULL)
@@ -120,7 +128,7 @@ ResGroupControlInit(void)
     /* Set key and entry sizes of hash table */
     MemSet(&info, 0, sizeof(info));
     info.keysize = sizeof(Oid);
-    info.entrysize = sizeof(ResGroupData);
+    info.entrysize = sizeof(ResGroupHashEntry);
     info.hash = tag_hash;
 
     hash_flags = (HASH_ELEM | HASH_FUNCTION);
@@ -140,6 +148,11 @@ ResGroupControlInit(void)
      * postmaster only
      */
     pResGroupControl->loaded = false;
+    pResGroupControl->nGroups = MaxResourceGroups;
+
+	for (i = 0; i < MaxResourceGroups; i++)
+		pResGroupControl->groups[i].groupId = InvalidOid;
+
     return;
 
 error_out:
@@ -1116,21 +1129,29 @@ ResGroupWait(ResGroup group, bool isLocked)
 static ResGroup
 ResGroupHashNew(Oid groupId)
 {
+	int			i;
 	bool		found;
-	ResGroup	group = NULL;
+	ResGroupHashEntry *entry;
 
 	Assert(LWLockHeldExclusiveByMe(ResGroupLock));
 
 	if (groupId == InvalidOid)
 		return NULL;
 
-	group = (ResGroup)
-		hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_ENTER_NULL, &found);
+	for (i = 0; i < pResGroupControl->nGroups; i++)
+	{
+		if (pResGroupControl->groups[i].groupId == InvalidOid)
+			break;
+	}
+	Assert(i < pResGroupControl->nGroups);
 
+	entry = (ResGroupHashEntry *)
+		hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_ENTER_NULL, &found);
 	/* caller should test that the group does not exist already */
 	Assert(!found);
+	entry->index = i;
 
-	return group;
+	return &pResGroupControl->groups[i];
 }
 
 /*
@@ -1143,15 +1164,18 @@ ResGroupHashNew(Oid groupId)
 static ResGroup
 ResGroupHashFind(Oid groupId)
 {
-	bool		found;
-	ResGroup	group = NULL;
+	bool				found;
+	ResGroupHashEntry	*entry;
 
 	Assert(LWLockHeldByMe(ResGroupLock));
 
-	group = (ResGroup)
+	entry = (ResGroupHashEntry *)
 		hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_FIND, &found);
+	if (!found)
+		return NULL;
 
-	return group;
+	Assert(entry->index < pResGroupControl->nGroups);
+	return &pResGroupControl->groups[entry->index];
 }
 
 
@@ -1166,22 +1190,19 @@ static bool
 ResGroupHashRemove(Oid groupId)
 {
 	bool		found;
-	void	   *group;
-	ResGroup	current_group;
+	ResGroupHashEntry	*entry;
+	ResGroup			group;
 
 	Assert(LWLockHeldExclusiveByMe(ResGroupLock));
 
-	current_group = (ResGroup) hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_FIND, &found);
-
-	group = hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_REMOVE, &found);
-	if (!group || !found)
+	entry = (ResGroupHashEntry*)hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_FIND, &found);
+	if (!found)
 		return false;
 
-	if (current_group)
-	{
-		/* FIXME: current_group is dangling pointer */
-		current_group->groupId = InvalidOid;
-	}
+	group = &pResGroupControl->groups[entry->index];
+	group->groupId = InvalidOid;
+
+	hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_REMOVE, &found);
 
 	return true;
 }

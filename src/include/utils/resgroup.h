@@ -38,6 +38,12 @@ typedef struct ResGroupSlotData
 
 
 /* Resource Groups */
+typedef struct ResGroupHashEntry
+{
+	Oid		groupId;
+	int		index;
+}ResGroupHashEntry;
+
 typedef struct ResGroupData
 {
 	Oid			groupId;		/* Id for this group */
@@ -82,9 +88,12 @@ typedef struct ResGroupProcData
  */
 typedef struct ResGroupControl
 {
-	HTAB	*htbl;
-	int 	segmentsOnMaster;
-	bool	loaded;
+	HTAB			*htbl;
+	int 			segmentsOnMaster;
+	bool			loaded;
+
+	int				nGroups;
+	ResGroupData	groups[1];
 } ResGroupControl;
 
 /* Type of statistic infomation */
