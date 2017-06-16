@@ -1085,6 +1085,10 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 		memcpy(pos, &tmp, sizeof(MyResGroupProcData->spillRatio));
 		pos += sizeof(MyResGroupProcData->spillRatio);
 
+		tmp = htonl(MyResGroupProcData->segmentMem);
+		memcpy(pos, &tmp, sizeof(MyResGroupProcData->segmentMem));
+		pos += sizeof(MyResGroupProcData->segmentMem);
+
 		tmp = htonl(MyResGroupProcData->memoryQuota);
 		memcpy(pos, &tmp, sizeof(MyResGroupProcData->memoryQuota));
 		pos += sizeof(MyResGroupProcData->memoryQuota);

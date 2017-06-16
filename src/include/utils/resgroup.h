@@ -71,6 +71,7 @@ typedef struct ResGroupProcData
 	int		sharedQuota;
 	int		spillRatio;
 
+	uint32	segmentMem;	/* total memory in MB for segment */
 	int		memoryQuota;
 	uint32	memoryUsed;
 } ResGroupProcData;
@@ -117,15 +118,9 @@ extern void	InitResGroups(void);
 extern void AllocResGroupEntry(Oid groupId);
 extern void FreeResGroupEntry(Oid groupId);
 
-extern void ResGroupInitSlot(int slotId);
-extern void ResGroupInitProc(int slotId);
-/* Acquire and release resource group slot */
-extern int ResGroupSlotAcquire(void);
-extern void ResGroupSlotRelease(void);
-
-/* Assign current process to the associated resource group */
-extern void AssignResGroup(void);
-extern void UnassignResGroup(void);
+extern void AssignResGroupOnMaster(void);
+extern void UnassignResGroupOnMaster(void);
+extern void SwitchResGroupOnSegment(int prevGroupId, int prevSlotId);
 
 /* Retrieve statistic information of type from resource group */
 extern void ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen, const char *prop);

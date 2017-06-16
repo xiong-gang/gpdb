@@ -5068,7 +5068,8 @@ PostgresMain(int argc, char *argv[],
 					cuid = pq_getmsgint(&input_message, 4);
 
 					{
-						UnassignResGroup();
+						Oid prevGroupId = MyResGroupProcData->groupId;
+						int prevSlotId = MyResGroupProcData->slotId;
 
 						MyResGroupProcData->groupId = pq_getmsgint(&input_message, 4);
 						MyResGroupProcData->slotId = pq_getmsgint(&input_message, 4);
@@ -5079,9 +5080,9 @@ PostgresMain(int argc, char *argv[],
 						/* memoryUsed is only a place holder */
 						pq_getmsgint(&input_message, 4);
 						pq_getmsgint(&input_message, 4);
+						pq_getmsgint(&input_message, 4);
 
-						ResGroupInitSlot(MyResGroupProcData->slotId);
-						AssignResGroup();
+						SwitchResGroupOnSegment(prevGroupId, prevSlotId);
 					}
 
 					rootIdx = pq_getmsgint(&input_message, 4);
