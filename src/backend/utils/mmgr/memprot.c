@@ -318,9 +318,7 @@ static void gp_failed_to_alloc(MemoryAllocationStatus ec, int en, int sz)
 	{
 		ereport(ERROR, (errcode(ERRCODE_GP_MEMPROT_KILL),
 				errmsg("Out of memory"),
-				errdetail("Resource group VM protect limit reached: current limit is %d MB, "
-						  "requested %d bytes",
-						  0, sz))); /* TODO: print actual memory limit */
+				errdetail("Resource group memory limit reached")));
 	}
 	else
 	{

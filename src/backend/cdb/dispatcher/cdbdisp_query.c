@@ -23,6 +23,7 @@
 #include "utils/memutils.h"
 #include "utils/faultinjector.h"
 #include "utils/resgroup.h"
+#include "utils/resource_manager.h"
 #include "utils/session_state.h"
 #include "miscadmin.h"
 
@@ -979,6 +980,7 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 	Oid	currentUserId = GetUserId();
 	bool sessionUserIsSuper = superuser_arg(GetSessionUserId());
 	bool outerUserIsSuper = superuser_arg(GetSessionUserId());
+	StringInfoData resgroupInfo;
 
 	int	tmp, len, i;
 	uint32 n32;
@@ -988,13 +990,16 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 	char one = 1;
 	char zero = 0;
 
+	initStringInfo(&resgroupInfo);
+	if (IsResGroupEnabled())
+		SerializeResGroupInfo(&resgroupInfo);
+
 	total_query_len = 1 /* 'M' */ +
 		sizeof(len) /* message length */ +
 		sizeof(gp_command_count) +
 		sizeof(sessionUserId) + 1 /* sessionUserIsSuper */	+
 		sizeof(outerUserId) + 1 /* outerUserIsSuper */	+
 		sizeof(currentUserId) +
-		sizeof(*MyResGroupProcData) +
 		sizeof(rootIdx) +
 		sizeof(n32) * 2 /* currentStatementStartTimestamp */  +
 		sizeof(command_len) +
@@ -1014,7 +1019,9 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 		sddesc_len +
 		seqServerHostlen +
 		sizeof(numSlices) +
-		sizeof(int) * numSlices;
+		sizeof(int) * numSlices +
+		sizeof(resgroupInfo.len) +
+		resgroupInfo.len;
 
 	if (ds->dispatchStateContext == NULL)
 		ds->dispatchStateContext = AllocSetContextCreate(TopMemoryContext,
@@ -1057,46 +1064,6 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 	tmp = htonl(currentUserId);
 	memcpy(pos, &tmp, sizeof(currentUserId));
 	pos += sizeof(currentUserId);
-
-	{
-		/* TODO: serialize the entire struct */
-
-		tmp = htonl(MyResGroupProcData->groupId);
-		memcpy(pos, &tmp, sizeof(MyResGroupProcData->groupId));
-		pos += sizeof(MyResGroupProcData->groupId);
-
-		tmp = htonl(MyResGroupProcData->slotId);
-		memcpy(pos, &tmp, sizeof(MyResGroupProcData->slotId));
-		pos += sizeof(MyResGroupProcData->slotId);
-
-		tmp = htonl(MyResGroupProcData->concurrency);
-		memcpy(pos, &tmp, sizeof(MyResGroupProcData->concurrency));
-		pos += sizeof(MyResGroupProcData->concurrency);
-
-		tmp = htonl(MyResGroupProcData->memoryLimit);
-		memcpy(pos, &tmp, sizeof(MyResGroupProcData->memoryLimit));
-		pos += sizeof(MyResGroupProcData->memoryLimit);
-
-		tmp = htonl(MyResGroupProcData->sharedQuota);
-		memcpy(pos, &tmp, sizeof(MyResGroupProcData->sharedQuota));
-		pos += sizeof(MyResGroupProcData->sharedQuota);
-
-		tmp = htonl(MyResGroupProcData->spillRatio);
-		memcpy(pos, &tmp, sizeof(MyResGroupProcData->spillRatio));
-		pos += sizeof(MyResGroupProcData->spillRatio);
-
-		tmp = htonl(MyResGroupProcData->segmentMem);
-		memcpy(pos, &tmp, sizeof(MyResGroupProcData->segmentMem));
-		pos += sizeof(MyResGroupProcData->segmentMem);
-
-		tmp = htonl(MyResGroupProcData->memoryQuota);
-		memcpy(pos, &tmp, sizeof(MyResGroupProcData->memoryQuota));
-		pos += sizeof(MyResGroupProcData->memoryQuota);
-
-		tmp = htonl(MyResGroupProcData->memoryUsed);
-		memcpy(pos, &tmp, sizeof(MyResGroupProcData->memoryUsed));
-		pos += sizeof(MyResGroupProcData->memoryUsed);
-	}
 
 	tmp = htonl(rootIdx);
 	memcpy(pos, &tmp, sizeof(rootIdx));
@@ -1205,6 +1172,16 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 			memcpy(pos, &tmp, sizeof(tmp));
 			pos += sizeof(tmp);
 		}
+	}
+
+	tmp = htonl(resgroupInfo.len);
+	memcpy(pos, &tmp, sizeof(resgroupInfo.len));
+	pos += sizeof(resgroupInfo.len);
+
+	if (resgroupInfo.len > 0)
+	{
+		memcpy(pos, resgroupInfo.data, resgroupInfo.len);
+		pos += resgroupInfo.len;
 	}
 
 	len = pos - shared_query - 1;

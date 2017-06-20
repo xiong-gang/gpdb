@@ -516,7 +516,7 @@ getOvercommitRatio(void)
 	int ratio;
 	char data[MAX_INT_STRING_LEN];
 	size_t datasize = sizeof(data);
-	char *path = "/proc/sys/vm/overcommit_ratio";
+	const char *path = "/proc/sys/vm/overcommit_ratio";
 
 	readData(path, data, datasize);
 

@@ -51,7 +51,7 @@ static int	CdbComponentDatabaseInfoCompare(const void *p1, const void *p2);
 static void freeCdbComponentDatabaseInfo(CdbComponentDatabaseInfo *cdi);
 
 static void getAddressesForDBid(CdbComponentDatabaseInfo *c, int elevel);
-static HTAB* DatabaseInfo_HostSegsHashTableInit();
+static HTAB* hostSegsHashTableInit(void);
 
 static HTAB *segment_ip_cache_htab = NULL;
 
@@ -60,7 +60,7 @@ struct segment_ip_cache_entry {
 	char hostinfo[NI_MAXHOST];
 };
 
-typedef struct HostSegsEntry 
+typedef struct HostSegsEntry
 {
 	char hostip[INET6_ADDRSTRLEN];
 	int  segmentCount;
@@ -112,7 +112,7 @@ getCdbComponentInfo(bool DNSLookupAsError)
 
 	bool		found;
 	HostSegsEntry *hsEntry;
-	HTAB		*hostSegsHash = DatabaseInfo_HostSegsHashTableInit();
+	HTAB		*hostSegsHash = hostSegsHashTableInit();
 
 	/*
 	 * Allocate component_databases return structure and
@@ -405,7 +405,7 @@ getCdbComponentInfo(bool DNSLookupAsError)
 
 	for (i = 0; i < component_databases->total_entry_dbs; i++)
 	{
-		CdbComponentDatabaseInfo *cdbInfo = &component_databases->entry_db_info[i];
+		cdbInfo = &component_databases->entry_db_info[i];
 
 		if (cdbInfo->role != SEGMENT_ROLE_PRIMARY)
 			continue;
@@ -1011,11 +1011,11 @@ getAddressesForDBid(CdbComponentDatabaseInfo *c, int elevel)
 }
 
 /*
- * DatabaseInfo_HostSegsHashTableInit()
+ * hostSegsHashTableInit()
  *    Construct a hash table of HostSegsEntry
  */
 static HTAB*
-DatabaseInfo_HostSegsHashTableInit()
+hostSegsHashTableInit(void)
 {
 	HASHCTL			info;
 

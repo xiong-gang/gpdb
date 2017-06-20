@@ -206,14 +206,10 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 
 	bool waiverUsed = false;
 
-	if (!ResGroupReserveMemory(numChunksToReserve, 0))
+	if (!ResGroupReserveMemory(numChunksToReserve, waivedChunks, &waiverUsed))
 	{
-		if (!ResGroupReserveMemory(numChunksToReserve, waivedChunks))
-		{
-			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
-			return MemoryFailure_ResourceGroupMemoryExhausted;
-		}
-		waiverUsed = true;
+		pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
+		return MemoryFailure_ResourceGroupMemoryExhausted;
 	}
 
 	/*

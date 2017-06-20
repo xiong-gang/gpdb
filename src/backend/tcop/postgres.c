@@ -5022,6 +5022,7 @@ PostgresMain(int argc, char *argv[],
 					const char *serializedParams = NULL;
 					const char *serializedQueryDispatchDesc = NULL;
 					const char *seqServerHost = NULL;
+					const char *resgroupInfoBuf = NULL;
 
 					int query_string_len = 0;
 					int serializedDtxContextInfolen = 0;
@@ -5031,6 +5032,7 @@ PostgresMain(int argc, char *argv[],
 					int serializedQueryDispatchDesclen = 0;
 					int seqServerHostlen = 0;
 					int seqServerPort = -1;
+					int resgroupInfoLen = 0;
 
 					int localSlice = -1, i;
 					int rootIdx;
@@ -5066,24 +5068,6 @@ PostgresMain(int argc, char *argv[],
 					if(pq_getmsgbyte(&input_message) == 1)
 						ouid_is_super = true;
 					cuid = pq_getmsgint(&input_message, 4);
-
-					{
-						Oid prevGroupId = MyResGroupProcData->groupId;
-						int prevSlotId = MyResGroupProcData->slotId;
-
-						MyResGroupProcData->groupId = pq_getmsgint(&input_message, 4);
-						MyResGroupProcData->slotId = pq_getmsgint(&input_message, 4);
-						MyResGroupProcData->concurrency = pq_getmsgint(&input_message, 4);
-						MyResGroupProcData->memoryLimit = pq_getmsgint(&input_message, 4);
-						MyResGroupProcData->sharedQuota = pq_getmsgint(&input_message, 4);
-						MyResGroupProcData->spillRatio = pq_getmsgint(&input_message, 4);
-						/* memoryUsed is only a place holder */
-						pq_getmsgint(&input_message, 4);
-						pq_getmsgint(&input_message, 4);
-						pq_getmsgint(&input_message, 4);
-
-						SwitchResGroupOnSegment(prevGroupId, prevSlotId);
-					}
 
 					rootIdx = pq_getmsgint(&input_message, 4);
 
@@ -5146,9 +5130,16 @@ PostgresMain(int argc, char *argv[],
 								 errmsg("QE cannot find slice to execute")));
 					}
 
+					resgroupInfoLen = pq_getmsgint(&input_message, 4);
+					if (resgroupInfoLen > 0)
+						resgroupInfoBuf = pq_getmsgbytes(&input_message, resgroupInfoLen);
+
 					pq_getmsgend(&input_message);
 
 					elog((Debug_print_full_dtm ? LOG : DEBUG5), "MPP dispatched stmt from QD: %s.",query_string);
+
+					if (IsResGroupEnabled())
+						SwitchResGroupOnSegment(resgroupInfoBuf, resgroupInfoLen);
 
 					if (suid > 0)
 						SetSessionUserId(suid, suid_is_super); /* Set the session UserId */

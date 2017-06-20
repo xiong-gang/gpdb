@@ -40,8 +40,6 @@
 #define RESGROUP_DEFAULT_REDZONE_LIMIT (0.8)
 #define RESGROUP_DEFAULT_MEM_SHARED_QUOTA (0.2)
 #define RESGROUP_DEFAULT_MEM_SPILL_RATIO (0.2)
-static char *RESGROUP_DEFAULT_MEM_SHARED_QUOTA_STR = "0.2";
-static char *RESGROUP_DEFAULT_MEM_SPILL_RATIO_STR = "0.2";
 
 
 /*
@@ -1046,14 +1044,14 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 
 	if (options->redzoneLimit == 0)
 		options->redzoneLimit = RESGROUP_DEFAULT_REDZONE_LIMIT;
-	
+
 	if (options->memSharedQuota == 0)
 		options->memSharedQuota = RESGROUP_DEFAULT_MEM_SHARED_QUOTA;
 
 	if (options->memSpillRatio == 0)
 		options->memSpillRatio = RESGROUP_DEFAULT_MEM_SPILL_RATIO;
 
-	if (options->memSpillRatio + options->memSharedQuota > 1.f) 
+	if (options->memSpillRatio + options->memSharedQuota > 1.f)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("The sum of memory_shared_quota (%.2f) and memory_spill_ratio (%.2f) exceeds 1.0",
@@ -1196,7 +1194,7 @@ insertResgroupCapabilities(Oid groupid,
 
 	sprintf(value, "%.2f", options->memSharedQuota);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA, value);
-	
+
 	sprintf(value, "%.2f", options->memSpillRatio);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO, value);
 
@@ -1396,6 +1394,8 @@ getResgroupCapabilityEntry(int groupId, int type, char **value, char **proposed)
 	tuple = systable_getnext(sscan);
 	if (!HeapTupleIsValid(tuple))
 	{
+		char buf[64];
+
 		systable_endscan(sscan);
 		heap_close(relResGroupCapability, AccessShareLock);
 
@@ -1409,11 +1409,15 @@ getResgroupCapabilityEntry(int groupId, int type, char **value, char **proposed)
 		switch (type)
 		{
 			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-				*value = *proposed = RESGROUP_DEFAULT_MEM_SHARED_QUOTA_STR;
+				snprintf(buf, sizeof(buf), "%.2f", RESGROUP_DEFAULT_MEM_SHARED_QUOTA);
+				*value = pstrdup(buf);
+				*proposed = pstrdup(buf);
 				return;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-				*value = *proposed = RESGROUP_DEFAULT_MEM_SPILL_RATIO_STR;
+				snprintf(buf, sizeof(buf), "%.2f", RESGROUP_DEFAULT_MEM_SPILL_RATIO);
+				*value = pstrdup(buf);
+				*proposed = pstrdup(buf);
 				return;
 		}
 
