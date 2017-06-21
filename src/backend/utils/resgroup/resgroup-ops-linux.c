@@ -14,6 +14,7 @@
 #include "cdb/cdbvars.h"
 #include "utils/resgroup.h"
 #include "utils/resgroup-ops.h"
+#include "utils/vmem_tracker.h"
 
 #ifndef __linux__
 #error  cgroup is only available on linux
@@ -687,5 +688,5 @@ ResGroupOps_GetTotalMemory(void)
 	overcommitRatio = getOvercommitRatio();
 	getMemoryInfo(&ram, &swap);
 	total = swap + ram * overcommitRatio / 100;
-	return total / 1024 / 1024;
+	return total >> VmemTracker_GetChunkSizeInBits();
 }

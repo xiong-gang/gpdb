@@ -37,6 +37,7 @@
 #include "utils/resource_manager.h"
 #include "utils/resowner.h"
 #include "utils/session_state.h"
+#include "utils/vmem_tracker.h"
 
 #define InvalidSlotId	(-1)
 #define RESGROUP_MAX_CONCURRENCY	90
@@ -86,7 +87,7 @@ typedef struct ResGroupSlotData
 {
 	int				sessionId;
 
-	uint32			segmentMem;	/* total memory in MB for segment */
+	uint32			segmentChunks;	/* total memory in chunks for segment */
 
 	int				memLimit;	/* memory limit of current resource group */
 	int				memSharedQuota;	/* shared memory quota of current resource group */
@@ -564,7 +565,8 @@ ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen,
 			break;
 		}
 		case RES_GROUP_STAT_MEM_USAGE:
-			snprintf(retStr, retStrLen, "%d", group->memUsage);
+			snprintf(retStr, retStrLen, "%d",
+					 group->memUsage << (VmemTracker_GetChunkSizeInBits() - 20));
 			break;
 		default:
 			ereport(ERROR,
@@ -583,6 +585,7 @@ ResGroupDumpMemoryInfo(void)
 {
 	ResGroupProcData	*procInfo = MyResGroupProcInfo;
 	ResGroupData		*sharedInfo = MyResGroupSharedInfo;
+	int					shift = VmemTracker_GetChunkSizeInBits() - 20;
 
 	if (sharedInfo)
 	{
@@ -595,18 +598,18 @@ ResGroupDumpMemoryInfo(void)
 			 "memory usage in current resource group is %d MB, "
 			 "memory usage in current slot is %d MB, "
 			 "memory usage in current proc is %d MB",
-			 slot->memLimit,
-			 slot->memSharedQuota,
-			 slot->memQuota,
-			 sharedInfo->memUsage,
-			 slot->memUsage,
-			 procInfo->memUsage);
+			 slot->memLimit << shift,
+			 slot->memSharedQuota << shift,
+			 slot->memQuota << shift,
+			 sharedInfo->memUsage << shift,
+			 slot->memUsage << shift,
+			 procInfo->memUsage << shift);
 	}
 	else
 	{
 		elog(LOG, "Resource group memory information: "
 			 "memory usage in current proc is %d MB",
-			 procInfo->memUsage);
+			 procInfo->memUsage << shift);
 	}
 }
 
@@ -636,7 +639,7 @@ ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks, bool *waiverUsed)
 	/*
 	 * Bypass the limit check when we are not in a valid resource group.
 	 * But will update the memory usage of this proc, and it will be added up
-	 * when this proc is assigned to a valid resource group. 
+	 * when this proc is assigned to a valid resource group.
 	 */
 	procInfo->memUsage += memoryChunks;
 	if (sharedInfo == NULL || procInfo->groupId == InvalidOid ||
@@ -657,17 +660,21 @@ ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks, bool *waiverUsed)
 
 	if (slotMemSharedNeeded > 0)
 	{
-		pg_atomic_uint32 *memSharedUsage =
-			(pg_atomic_uint32 *)&sharedInfo->memSharedUsage;
+		int32 total;
+
+		slotMemSharedNeeded = Min(slotMemSharedNeeded, memoryChunks);
 
 		/* reserve from shared zone */
-		int32 total = pg_atomic_add_fetch_u32(memSharedUsage, slotMemSharedNeeded);
+		total = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)&sharedInfo->memSharedUsage,
+										slotMemSharedNeeded);
 
 		if (CritSectionCount == 0 &&
 			total > slot->memSharedQuota + overuseChunks)
 		{
-			pg_atomic_sub_fetch_u32(memSharedUsage, slotMemSharedNeeded);
-			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&slot->memUsage, memoryChunks);
+			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&sharedInfo->memSharedUsage,
+									slotMemSharedNeeded);
+			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&slot->memUsage,
+									memoryChunks);
 			procInfo->memUsage -= memoryChunks;
 
 			if (overuseChunks == 0)
@@ -1049,8 +1056,8 @@ AssignResGroupOnMaster(void)
 	float	memoryLimit, sharedQuota, spillRatio;
 	int		slotId;
 	Oid		groupId;
-	int32	slotMemoryUsage;
-	int32	sharedMemoryUsage;
+	int32	slotMemUsage;
+	int32	sharedMemUsage;
 
 	/* Acquire slot */
 	procInfo = MyResGroupProcInfo;
@@ -1072,12 +1079,14 @@ AssignResGroupOnMaster(void)
 	sharedInfo = MyResGroupSharedInfo;
 	slot = &sharedInfo->slots[slotId];
 	slot->sessionId = gp_session_id;
-	slot->segmentMem = ResGroupOps_GetTotalMemory() * gp_resource_group_memory_limit
-		/ pResGroupControl->segmentsOnMaster;
-	slot->memLimit = slot->segmentMem * memoryLimit;
-	slot->memSharedQuota = slot->segmentMem * sharedQuota;
-	slot->memQuota = slot->segmentMem * memoryLimit * (1 - sharedQuota) / concurrency;
+	slot->segmentChunks = ResGroupOps_GetTotalMemory()
+		* gp_resource_group_memory_limit / pResGroupControl->segmentsOnMaster;
+	slot->memLimit = slot->segmentChunks * memoryLimit;
+	slot->memSharedQuota = slot->memLimit * sharedQuota;
+	slot->memQuota = slot->memLimit * (1 - sharedQuota) / concurrency;
 	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->nProcs, 1);
+	Assert(slot->memLimit > 0);
+	Assert(slot->memQuota > 0);
 
 	/* Init MyResGroupProcInfo */
 	procInfo->slotId = slotId;
@@ -1089,13 +1098,16 @@ AssignResGroupOnMaster(void)
 	Assert(pResGroupControl->segmentsOnMaster > 0);
 
 	/* Add proc memory accounting info to slot */
-	slotMemoryUsage = pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->memUsage,
+	slotMemUsage = pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->memUsage,
 											  procInfo->memUsage);
 
 	/* Add proc memory accounting info to memSharedUsage in sharedInfo */
-	sharedMemoryUsage = slotMemoryUsage - slot->memQuota;
-	if (sharedMemoryUsage > 0)
-		pg_atomic_add_fetch_u32((pg_atomic_uint32*)&sharedInfo->memSharedUsage, sharedMemoryUsage);
+	sharedMemUsage = slotMemUsage - slot->memQuota;
+	if (sharedMemUsage > 0)
+	{
+		sharedMemUsage = Min(sharedMemUsage, procInfo->memUsage);
+		pg_atomic_add_fetch_u32((pg_atomic_uint32*)&sharedInfo->memSharedUsage, sharedMemUsage);
+	}
 
 	/* Add proc memory accounting info to memUsage in sharedInfo */
 	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&sharedInfo->memUsage,
@@ -1114,7 +1126,7 @@ UnassignResGroupOnMaster(void)
 	ResGroupData		*sharedInfo;
 	ResGroupSlotData	*slot;
 	ResGroupProcData	*procInfo;
-	int32		sharedMemoryUsage;
+	int32		sharedMemUsage;
 
 	if (MyResGroupSharedInfo == NULL)
 		return;
@@ -1132,19 +1144,20 @@ UnassignResGroupOnMaster(void)
 	pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&MyResGroupSharedInfo->memUsage,
 							MyResGroupProcInfo->memUsage);
 
+	/* Sub proc memory accounting info from slot */
+	int slotMemUsage = pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&slot->memUsage,
+												  procInfo->memUsage);
+	slotMemUsage += procInfo->memUsage;
+
 	/* Sub proc memory accounting info from memSharedUsage in sharedInfo */
-	sharedMemoryUsage = slot->memUsage - slot->memQuota;
-	if (sharedMemoryUsage > 0)
+	sharedMemUsage = slotMemUsage - slot->memQuota;
+	if (sharedMemUsage > 0)
 	{
-		int32 returnSize = Min(procInfo->memUsage, sharedMemoryUsage);
+		int32 returnSize = Min(procInfo->memUsage, sharedMemUsage);
 
 		pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&sharedInfo->memSharedUsage,
 								returnSize);
 	}
-
-	/* Sub proc memory accounting info from slot */
-	pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&slot->memUsage,
-							procInfo->memUsage);
 
 	/* Cleanup procInfo */
 	if (procInfo->memUsage > 10)
@@ -1166,7 +1179,7 @@ UnassignResGroupOnMaster(void)
 /*
  * QEs are not assigned/unassigned to a resource group on segments for each
  * transaction, instead, they switch resource group when a new resource group
- * id or slot id is dispatched. 
+ * id or slot id is dispatched.
  */
 void
 SwitchResGroupOnSegment(const char *buf, int len)
@@ -1205,28 +1218,6 @@ SwitchResGroupOnSegment(const char *buf, int len)
 		prevSharedInfo = MyResGroupSharedInfo;
 		Assert(prevSharedInfo->groupId == prevGroupId);
 		prevSlot = &prevSharedInfo->slots[prevSlotId];
-
-#if 0
-		pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&prevSlot->nProcs, 1);
-
-		/* Sub proc memory accounting info from memUsage in previous sharedInfo */
-		pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&prevSharedInfo->memUsage,
-								procInfo->memUsage);
-
-		/* Sub proc memory accounting info from memSharedUsage in previous sharedInfo */
-		int32 sharedMemoryUsage = prevSlot->memUsage - prevSlot->memQuota;
-		if (sharedMemoryUsage > 0)
-		{
-			int32 returnSize = Min(procInfo->memUsage, sharedMemoryUsage);
-
-			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&prevSharedInfo->memSharedUsage,
-									returnSize);
-		}
-
-		/* Sub proc memory accounting info from slot */
-		pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&prevSlot->memUsage,
-								procInfo->memUsage);
-#endif
 	}
 
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
@@ -1242,21 +1233,21 @@ SwitchResGroupOnSegment(const char *buf, int len)
 	/* Init slot */
 	slot = &sharedInfo->slots[procInfo->slotId];
 	slot->sessionId = gp_session_id;
-	slot->segmentMem = ResGroupOps_GetTotalMemory()
+	slot->segmentChunks = ResGroupOps_GetTotalMemory()
 		* gp_resource_group_memory_limit / host_segments;
-	slot->memLimit = slot->segmentMem * procInfo->config.memoryLimit / 100;
-	slot->memSharedQuota = slot->segmentMem * procInfo->config.sharedQuota / 100;
-	slot->memQuota = slot->segmentMem
-		* procInfo->config.memoryLimit
+	slot->memLimit = slot->segmentChunks * procInfo->config.memoryLimit / 100;
+	slot->memSharedQuota = slot->memLimit * procInfo->config.sharedQuota / 100;
+	slot->memQuota = slot->memLimit
 		* (100 - procInfo->config.sharedQuota)
 		/ procInfo->config.concurrency
-		/ 10000;
-	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->nProcs, 1);
+		/ 100;
+	Assert(slot->memLimit > 0);
+	Assert(slot->memQuota > 0);
 
 	if (prevSharedInfo != sharedInfo || prevSlot != slot)
 	{
-		int32		slotMemoryUsage;
-		int32		sharedMemoryUsage;
+		int32		slotMemUsage;
+		int32		sharedMemUsage;
 
 		if (prevSharedInfo != NULL)
 		{
@@ -1266,49 +1257,39 @@ SwitchResGroupOnSegment(const char *buf, int len)
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&prevSharedInfo->memUsage,
 									procInfo->memUsage);
 
+			/* Sub proc memory accounting info from slot */
+			slotMemUsage = pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&prevSlot->memUsage,
+												   procInfo->memUsage);
+			slotMemUsage += procInfo->memUsage;
+
 			/* Sub proc memory accounting info from memSharedUsage in previous sharedInfo */
-			int32 sharedMemoryUsage = prevSlot->memUsage - prevSlot->memQuota;
-			if (sharedMemoryUsage > 0)
+			sharedMemUsage = slotMemUsage - prevSlot->memQuota;
+			if (sharedMemUsage > 0)
 			{
-				int32 returnSize = Min(procInfo->memUsage, sharedMemoryUsage);
+				int32 returnSize = Min(procInfo->memUsage, sharedMemUsage);
 
 				pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&prevSharedInfo->memSharedUsage,
 										returnSize);
 			}
+		}
 
-			/* Sub proc memory accounting info from slot */
-			pg_atomic_sub_fetch_u32((pg_atomic_uint32*)&prevSlot->memUsage,
-									procInfo->memUsage);
-		}	
-
+		pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->nProcs, 1);
 		/* Add proc memory accounting info to slot */
-		slotMemoryUsage = pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->memUsage,
+		slotMemUsage = pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->memUsage,
 												  procInfo->memUsage);
 
 		/* Add proc memory accounting info to memSharedUsage in sharedInfo */
-		sharedMemoryUsage = slotMemoryUsage - slot->memQuota;
-		if (sharedMemoryUsage > 0)
-			pg_atomic_add_fetch_u32((pg_atomic_uint32*)&sharedInfo->memSharedUsage, sharedMemoryUsage);
+		sharedMemUsage = slotMemUsage - slot->memQuota;
+		if (sharedMemUsage > 0)
+		{
+			sharedMemUsage = Min(sharedMemUsage, procInfo->memUsage);
+			pg_atomic_add_fetch_u32((pg_atomic_uint32*)&sharedInfo->memSharedUsage, sharedMemUsage);
+		}
 
 		/* Add proc memory accounting info to memUsage in sharedInfo */
 		pg_atomic_add_fetch_u32((pg_atomic_uint32*)&sharedInfo->memUsage,
 								procInfo->memUsage);
 	}
-
-#if 0
-	/* Add proc memory accounting info to slot */
-	int32 slotMemoryUsage = pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->memUsage,
-												procInfo->memUsage);
-
-	/* Add proc memory accounting info to memSharedUsage in sharedInfo */
-	int32 sharedMemoryUsage = slotMemoryUsage - slot->memQuota;
-	if (sharedMemoryUsage > 0)
-		pg_atomic_add_fetch_u32((pg_atomic_uint32*)&sharedInfo->memSharedUsage, sharedMemoryUsage);
-
-	/* Add proc memory accounting info to memUsage in sharedInfo */
-	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&sharedInfo->memUsage,
-							procInfo->memUsage);
-#endif
 
 	/* Add into cgroup */
 	ResGroupOps_AssignGroup(sharedInfo->groupId, MyProcPid);
@@ -1547,4 +1528,21 @@ ResGroupWaitCancel()
 	localResWaiting = false;
 	pgstat_report_waiting(PGBE_WAITING_NONE);
 	MyResGroupSharedInfo = NULL;
+}
+
+void
+ResGroupGetMemInfo(int *memLimit, int *slotQuota, int *sharedQuota)
+{
+	ResGroupProcData *procInfo = MyResGroupProcInfo;
+	int totalMem = ResGroupOps_GetTotalMemory();
+	int hostSegment = Gp_role == GP_ROLE_EXECUTE ? host_segments : pResGroupControl->segmentsOnMaster;
+	int segmentMem = totalMem * gp_resource_group_memory_limit / hostSegment;
+
+	*memLimit = segmentMem * procInfo->config.memoryLimit / 100;
+	*slotQuota = segmentMem
+		* procInfo->config.memoryLimit
+		* (100 - procInfo->config.sharedQuota)
+		/ procInfo->config.concurrency
+		/ 10000;
+	*sharedQuota = segmentMem * procInfo->config.memoryLimit * procInfo->config.sharedQuota / 10000;
 }

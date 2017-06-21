@@ -47,6 +47,8 @@
  */
 typedef struct ResourceGroupOptions
 {
+	unsigned int mask;
+
 	int concurrency;
 	float cpuRateLimit;
 	float memoryLimit;
@@ -968,6 +970,7 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 	ListCell *cell;
 	int types = 0;
 
+	options->mask = 0;
 	foreach(cell, stmt->options)
 	{
 		DefElem *defel = (DefElem *) lfirst(cell);
@@ -1039,16 +1042,16 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				errmsg("must specify both memory_limit and cpu_rate_limit")));
 
-	if (options->concurrency == 0)
+	if (!(types & (1 << RESGROUP_LIMIT_TYPE_CONCURRENCY)))
 		options->concurrency = RESGROUP_DEFAULT_CONCURRENCY;
 
-	if (options->redzoneLimit == 0)
+	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_REDZONE)))
 		options->redzoneLimit = RESGROUP_DEFAULT_REDZONE_LIMIT;
 
-	if (options->memSharedQuota == 0)
+	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA)))
 		options->memSharedQuota = RESGROUP_DEFAULT_MEM_SHARED_QUOTA;
 
-	if (options->memSpillRatio == 0)
+	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO)))
 		options->memSpillRatio = RESGROUP_DEFAULT_MEM_SPILL_RATIO;
 
 	if (options->memSpillRatio + options->memSharedQuota > 1.f)

@@ -410,6 +410,15 @@ VmemTracker_GetVmemLimitChunks(void)
 }
 
 /*
+ * Return the chunk size in bits.
+ */
+int32
+VmemTracker_GetChunkSizeInBits(void)
+{
+	return chunkSizeInBits;
+}
+
+/*
  * Returns the vmem usage of current process in "chunks" unit.
  */
 int32
@@ -623,6 +632,15 @@ VmemTracker_RequestWaiver(int64 waiver_bytes)
 	}
 
 	waivedChunks = Max(chunks, waivedChunks);
+}
+
+/*
+ * Reset requested waiver to zero.
+ */
+void
+VmemTracker_ResetWaiver(void)
+{
+	waivedChunks = 0;
 }
 
 /*

@@ -68,6 +68,9 @@ extern void ResGroupDropCheckForWakeup(Oid groupId, bool isCommit);
 extern void ResGroupCheckForDrop(Oid groupId, char *name);
 extern int CalcConcurrencyValue(int groupId, int val, int proposed, int newProposed);
 
+/* test helper function */
+extern void ResGroupGetMemInfo(int *memLimit, int *slotQuota, int *sharedQuota);
+
 #define LOG_RESGROUP_DEBUG(...) \
 	do {if (Debug_resource_group) elog(__VA_ARGS__); } while(false);
 

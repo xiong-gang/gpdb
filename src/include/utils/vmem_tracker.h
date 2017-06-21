@@ -42,6 +42,7 @@ extern int64 VmemTracker_GetMaxReservedVmemMB(void);
 extern int64 VmemTracker_GetMaxReservedVmemBytes(void);
 extern int64 VmemTracker_GetVmemLimitBytes(void);
 extern int32 VmemTracker_GetVmemLimitChunks(void);
+extern int32 VmemTracker_GetChunkSizeInBits(void);
 extern int32 VmemTracker_GetAvailableVmemMB(void);
 extern int64 VmemTracker_GetAvailableVmemBytes(void);
 extern int32 VmemTracker_GetAvailableQueryVmemMB(void);
@@ -52,6 +53,7 @@ extern void VmemTracker_ResetMaxVmemReserved(void);
 extern MemoryAllocationStatus VmemTracker_ReserveVmem(int64 newly_requested);
 extern void VmemTracker_ReleaseVmem(int64 to_be_freed_requested);
 extern void VmemTracker_RequestWaiver(int64 waiver_bytes);
+extern void VmemTracker_ResetWaiver(void);
 extern int64 VmemTracker_Fault(int32 reason, int64 arg);
 
 extern int32 RedZoneHandler_GetRedZoneLimitChunks(void);
