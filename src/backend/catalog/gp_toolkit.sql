@@ -1823,6 +1823,39 @@ AS
 GRANT SELECT ON gp_toolkit.gp_resqueue_status TO public;
 
 --------------------------------------------------------------------------------
+-- @function:
+--              gp_toolkit.gp_resgroup_get_status
+-- @in:
+--              groupid - oid of resource group, null means all resource groups
+-- @out:
+--              groupid - resource group id
+--              num_running - number of running transactions
+--              num_queueing - number of queueing transactions
+--              num_queued - number of queued transactions
+--              num_executed - number of executed transactions
+--              total_queue_duration - total queue duration
+--              cpu_usage - host cpu usage. e.g. "1":50.0 means the cpu usage
+--                          on segment1's host is 50%
+--              memory_usage - memory usage on each segment
+--
+-- @doc:
+--              Get resource group status
+--
+--------------------------------------------------------------------------------
+
+CREATE FUNCTION gp_toolkit.gp_resgroup_get_status(groupid oid)
+RETURNS TABLE(groupid oid,
+              num_running int,
+              num_queueing int,
+              num_queued int,
+              num_executed int,
+              total_queue_duration interval,
+              cpu_usage json,
+              memory_usage json)
+AS '$libdir/gp_resgroup_helper', 'gp_resgroup_get_status'
+LANGUAGE C VOLATILE;
+
+--------------------------------------------------------------------------------
 -- @view:
 --              gp_toolkit.gp_resgroup_config
 --
@@ -1870,31 +1903,10 @@ GRANT SELECT ON gp_toolkit.gp_resgroup_config TO public;
 --------------------------------------------------------------------------------
 
 CREATE VIEW gp_toolkit.gp_resgroup_status AS
-    SELECT
-        T1.rsgid AS groupid,
-        T1.value AS num_running,
-        T2.value AS num_queueing,
-        T3.value AS cpu_usage,
-        T4.value AS memory_usage,
-        T5.value AS total_queue_duration,
-        T6.value AS num_queued,
-        T7.value AS num_executed
-    FROM
-        pg_resgroup_get_status_kv('num_running') AS T1,
-        pg_resgroup_get_status_kv('num_queueing') AS T2,
-        pg_resgroup_get_status_kv('cpu_usage') AS T3,
-        pg_resgroup_get_status_kv('memory_usage') AS T4,
-        pg_resgroup_get_status_kv('total_queue_duration') AS T5,
-        pg_resgroup_get_status_kv('num_queued') AS T6,
-        pg_resgroup_get_status_kv('num_executed') AS T7
-    WHERE
-        T1.rsgid = T2.rsgid
-    AND T1.rsgid = T3.rsgid
-    AND T1.rsgid = T4.rsgid
-    AND T1.rsgid = T5.rsgid
-    AND T1.rsgid = T6.rsgid
-    AND T1.rsgid = T7.rsgid
-    ;
+    SELECT r.rsgname, s.*
+    FROM gp_toolkit.gp_resgroup_get_status(null) AS s,
+         pg_resgroup AS r
+    WHERE s.groupid = r.oid;
 
 GRANT SELECT ON gp_toolkit.gp_resgroup_status TO public;
 

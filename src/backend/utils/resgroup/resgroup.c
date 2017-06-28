@@ -521,13 +521,13 @@ void ResGroupAlterCheckForWakeup(Oid groupId, int value, int proposed)
 /*
  *  Retrieve statistic information of type from resource group
  */
-void
-ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen, const char *prop)
+Datum
+ResGroupGetStat(Oid groupId, ResGroupStatType type)
 {
 	ResGroupData	*group;
+	Datum result;
 
-	if (!IsResGroupEnabled())
-		return;
+	Assert(IsResGroupEnabled());
 
 	LWLockAcquire(ResGroupLock, LW_SHARED);
 
@@ -544,35 +544,32 @@ ResGroupGetStat(Oid groupId, ResGroupStatType type, char *retStr, int retStrLen,
 	switch (type)
 	{
 		case RES_GROUP_STAT_NRUNNING:
-			snprintf(retStr, retStrLen, "%d", group->nRunning);
+			result = Int32GetDatum(group->nRunning);
 			break;
 		case RES_GROUP_STAT_NQUEUEING:
-			snprintf(retStr, retStrLen, "%d", group->waitProcs.size);
+			result = Int32GetDatum(group->waitProcs.size);
 			break;
 		case RES_GROUP_STAT_TOTAL_EXECUTED:
-			snprintf(retStr, retStrLen, "%d", group->totalExecuted);
+			result = Int32GetDatum(group->totalExecuted);
 			break;
 		case RES_GROUP_STAT_TOTAL_QUEUED:
-			snprintf(retStr, retStrLen, "%d", group->totalQueued);
+			result = Int32GetDatum(group->totalQueued);
 			break;
 		case RES_GROUP_STAT_TOTAL_QUEUE_TIME:
-		{
-			Datum durationDatum = DirectFunctionCall1(interval_out, IntervalPGetDatum(&group->totalQueuedTime));
-			char *durationStr = DatumGetCString(durationDatum);
-			strncpy(retStr, durationStr, retStrLen);
+			result = IntervalPGetDatum(&group->totalQueuedTime);
 			break;
-		}
 		case RES_GROUP_STAT_MEM_USAGE:
-			snprintf(retStr, retStrLen, "%d",
-					 VmemTracker_ConvertVmemChunksToMB(group->memUsage));
+			result = Int32GetDatum(VmemTracker_ConvertVmemChunksToMB(group->memUsage));
 			break;
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("Invalid stat type %s", prop)));
+					 errmsg("Invalid stat type %d", type)));
 	}
 
 	LWLockRelease(ResGroupLock);
+
+	return result;
 }
 
 /*

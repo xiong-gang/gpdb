@@ -33,12 +33,11 @@ CREATE OR REPLACE VIEW eat_memory_on_slices AS
 	;
 
 CREATE VIEW memory_usage AS
-	SELECT g.rsgname, s.value::json->'-1' AS master_mem,
-	s.value::json->'0' AS seg0_mem,
-	s.value::json->'1' AS seg1_mem,
-	s.value::json->'2' AS seg2_mem
-	FROM pg_resgroup_get_status_kv('memory_usage') s, pg_resgroup g
-	WHERE s.rsgid=g.oid;
+	SELECT s.rsgname, s.memory_usage::json->'-1' AS master_mem,
+	s.memory_usage::json->'0' AS seg0_mem,
+	s.memory_usage::json->'1' AS seg1_mem,
+	s.memory_usage::json->'2' AS seg2_mem
+	FROM gp_toolkit.gp_resgroup_status s;
 
 CREATE FUNCTION round_test(text, integer) RETURNS text AS $$
 	SELECT (round($1::integer / $2) * $2)::text

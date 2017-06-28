@@ -15,21 +15,21 @@ DROP RESOURCE GROUP g2;
 --
 
 CREATE TABLE bigtable AS
-	SELECT i AS c1, 'abc' AS c2
-	FROM generate_series(1,100000) i;
+    SELECT i AS c1, 'abc' AS c2
+    FROM generate_series(1,100000) i;
 
 -- the cpu usage limitation has an error rate about +-7.5%,
 -- and also we want to satisfy the 0.1:0.2 rate under 90% overall limitation
 -- so we round the cpu rate by 15%
-CREATE FUNCTION round_percentage(text) RETURNS text AS $$
-    SELECT (round(rtrim($1, '%') :: double precision / 15) * 15) :: text || '%'
+CREATE OR REPLACE FUNCTION round_percentage(json) RETURNS text AS $$
+    SELECT (round(avg(value::text::float)/15)*15)::text||'%'
+    FROM json_each_text($1)
 $$ LANGUAGE sql;
 
-CREATE VIEW cpu_status AS
-    SELECT g.rsgname, round_percentage(s.cpu_usage)
-    FROM gp_toolkit.gp_resgroup_status s, pg_resgroup g
-    WHERE s.groupid=g.oid
-    ORDER BY g.oid;
+CREATE OR REPLACE VIEW cpu_status AS
+    SELECT s.rsgname, round_percentage(s.cpu_usage)
+    FROM gp_toolkit.gp_resgroup_status s
+    ORDER BY s.groupid;
 
 CREATE VIEW busy AS
     SELECT count(*)
@@ -47,9 +47,9 @@ CREATE VIEW busy AS
     ;
 
 CREATE VIEW cancel_all AS
-	SELECT pg_cancel_backend(procpid)
-	FROM pg_stat_activity
-	WHERE current_query LIKE 'SELECT * FROM busy%';
+    SELECT pg_cancel_backend(procpid)
+    FROM pg_stat_activity
+    WHERE current_query LIKE 'SELECT * FROM busy%';
 
 --
 -- check gpdb cgroup configuration

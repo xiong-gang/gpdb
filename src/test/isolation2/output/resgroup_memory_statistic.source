@@ -24,7 +24,7 @@ CREATE
 CREATE OR REPLACE VIEW eat_memory_on_slices AS SELECT count(*) FROM gp_dist_random('gp_id') t1, gp_dist_random('gp_id') t2 WHERE hold_memory(t1.dbid,20)=0 AND hold_memory(t2.dbid,20)=0 ;
 CREATE
 
-CREATE VIEW memory_usage AS SELECT g.rsgname, s.value::json->'-1' AS master_mem, s.value::json->'0' AS seg0_mem, s.value::json->'1' AS seg1_mem, s.value::json->'2' AS seg2_mem FROM pg_resgroup_get_status_kv('memory_usage') s, pg_resgroup g WHERE s.rsgid=g.oid;
+CREATE VIEW memory_usage AS SELECT s.rsgname, s.memory_usage::json->'-1' AS master_mem, s.memory_usage::json->'0' AS seg0_mem, s.memory_usage::json->'1' AS seg1_mem, s.memory_usage::json->'2' AS seg2_mem FROM gp_toolkit.gp_resgroup_status s;
 CREATE
 
 CREATE FUNCTION round_test(text, integer) RETURNS text AS $$ SELECT (round($1::integer / $2) * $2)::text $$ LANGUAGE sql;

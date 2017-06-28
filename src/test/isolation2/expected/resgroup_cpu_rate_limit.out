@@ -29,10 +29,10 @@ CREATE 100000
 -- the cpu usage limitation has an error rate about +-7.5%,
 -- and also we want to satisfy the 0.1:0.2 rate under 90% overall limitation
 -- so we round the cpu rate by 15%
-CREATE FUNCTION round_percentage(text) RETURNS text AS $$ SELECT (round(rtrim($1, '%') :: double precision / 15) * 15) :: text || '%' $$ LANGUAGE sql;
+CREATE OR REPLACE FUNCTION round_percentage(json) RETURNS text AS $$ SELECT (round(avg(value::text::float)/15)*15)::text||'%' FROM json_each_text($1) $$ LANGUAGE sql;
 CREATE
 
-CREATE VIEW cpu_status AS SELECT g.rsgname, round_percentage(s.cpu_usage) FROM gp_toolkit.gp_resgroup_status s, pg_resgroup g WHERE s.groupid=g.oid ORDER BY g.oid;
+CREATE OR REPLACE VIEW cpu_status AS SELECT s.rsgname, round_percentage(s.cpu_usage) FROM gp_toolkit.gp_resgroup_status s ORDER BY s.groupid;
 CREATE
 
 CREATE VIEW busy AS SELECT count(*) FROM bigtable t1, bigtable t2, bigtable t3, bigtable t4, bigtable t5 WHERE 0 = (t1.c1 % 2 + 10000)! AND 0 = (t2.c1 % 2 + 10000)! AND 0 = (t3.c1 % 2 + 10000)! AND 0 = (t4.c1 % 2 + 10000)! AND 0 = (t5.c1 % 2 + 10000)! ;
