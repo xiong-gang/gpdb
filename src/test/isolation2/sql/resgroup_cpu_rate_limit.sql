@@ -22,7 +22,7 @@ CREATE TABLE bigtable AS
 -- and also we want to satisfy the 0.1:0.2 rate under 90% overall limitation
 -- so we round the cpu rate by 15%
 CREATE OR REPLACE FUNCTION round_percentage(json) RETURNS text AS $$
-    SELECT (round(avg(value::text::float)/15)*15)::text||'%'
+    SELECT (round(avg(value::float)/15)*15)::text||'%'
     FROM json_each_text($1)
 $$ LANGUAGE sql;
 

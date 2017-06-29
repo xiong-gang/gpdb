@@ -37,7 +37,6 @@
 #include "utils/syscache.h"
 
 #define RESGROUP_DEFAULT_CONCURRENCY (20)
-#define RESGROUP_DEFAULT_REDZONE_LIMIT (0.8)
 #define RESGROUP_DEFAULT_MEM_SHARED_QUOTA (0.2)
 #define RESGROUP_DEFAULT_MEM_SPILL_RATIO (0.2)
 
@@ -50,7 +49,6 @@ typedef struct ResourceGroupOptions
 	int concurrency;
 	float cpuRateLimit;
 	float memoryLimit;
-	float redzoneLimit;
 	float memSharedQuota;
 	float memSpillRatio;
 } ResourceGroupOptions;
@@ -565,7 +563,6 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 				options.concurrency = 0;
 				options.cpuRateLimit = cpuRateLimitNew;
 				options.memoryLimit = 0;
-				options.redzoneLimit = 0;
 
 				/*
 				 * In validateCapabilities() we scan all the resource groups
@@ -759,8 +756,6 @@ getResgroupOptionType(const char* defname)
 		return RESGROUP_LIMIT_TYPE_MEMORY;
 	else if (strcmp(defname, "concurrency") == 0)
 		return RESGROUP_LIMIT_TYPE_CONCURRENCY;
-	else if (strcmp(defname, "memory_redzone_limit") == 0)
-		return RESGROUP_LIMIT_TYPE_MEMORY_REDZONE;
 	else if (strcmp(defname, "memory_shared_quota") == 0)
 		return RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA;
 	else if (strcmp(defname, "memory_spill_ratio") == 0)
@@ -825,14 +820,6 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 							errmsg("memory_limit range is (.01, 1)")));
 				break;
 
-			case RESGROUP_LIMIT_TYPE_MEMORY_REDZONE:
-				options->redzoneLimit = roundf(defGetNumeric(defel) * 100) / 100;
-				if (options->redzoneLimit <= .5f || options->redzoneLimit > 1.0)
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							errmsg("memory_redzone_limit range is (.5, 1]")));
-				break;
-
 			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
 				options->memSharedQuota = roundf(defGetNumeric(defel) * 100) / 100;
 				break;
@@ -854,9 +841,6 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 
 	if (!(types & (1 << RESGROUP_LIMIT_TYPE_CONCURRENCY)))
 		options->concurrency = RESGROUP_DEFAULT_CONCURRENCY;
-
-	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_REDZONE)))
-		options->redzoneLimit = RESGROUP_DEFAULT_REDZONE_LIMIT;
 
 	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA)))
 		options->memSharedQuota = RESGROUP_DEFAULT_MEM_SHARED_QUOTA;
@@ -1015,9 +999,6 @@ insertResgroupCapabilities(Oid groupid,
 
 	sprintf(value, "%.2f", options->memoryLimit);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY, value);
-
-	sprintf(value, "%.2f", options->redzoneLimit);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_REDZONE, value);
 
 	sprintf(value, "%.2f", options->memSharedQuota);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA, value);
@@ -1227,8 +1208,6 @@ getResgroupCapabilityEntry(int groupId, int type, char **value, char **proposed)
 	tuple = systable_getnext(sscan);
 	if (!HeapTupleIsValid(tuple))
 	{
-		char buf[64];
-
 		systable_endscan(sscan);
 		heap_close(relResGroupCapability, AccessShareLock);
 
@@ -1236,22 +1215,6 @@ getResgroupCapabilityEntry(int groupId, int type, char **value, char **proposed)
 		{
 			CurrentResourceOwner = NULL;
 			ResourceOwnerDelete(owner);
-		}
-
-		/* for backward compatibility */
-		switch (type)
-		{
-			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-				snprintf(buf, sizeof(buf), "%.2f", RESGROUP_DEFAULT_MEM_SHARED_QUOTA);
-				*value = pstrdup(buf);
-				*proposed = pstrdup(buf);
-				return;
-
-			case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-				snprintf(buf, sizeof(buf), "%.2f", RESGROUP_DEFAULT_MEM_SPILL_RATIO);
-				*value = pstrdup(buf);
-				*proposed = pstrdup(buf);
-				return;
 		}
 
 		ereport(ERROR,

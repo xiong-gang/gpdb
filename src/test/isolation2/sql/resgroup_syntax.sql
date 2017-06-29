@@ -41,19 +41,19 @@ DROP RESOURCE GROUP rg_test_group;
 DROP RESOURCE GROUP rg_test_group;
 
 -- can't create the reserved resource groups
-CREATE RESOURCE GROUP default_group WITH (concurrency=1, cpu_rate_limit=.5, memory_limit=.5, memory_redzone_limit=.7);
-CREATE RESOURCE GROUP admin_group WITH (concurrency=1, cpu_rate_limit=.5, memory_limit=.5, memory_redzone_limit=.7);
-CREATE RESOURCE GROUP none WITH (concurrency=1, cpu_rate_limit=.5, memory_limit=.5, memory_redzone_limit=.7);
+CREATE RESOURCE GROUP default_group WITH (concurrency=1, cpu_rate_limit=.5, memory_limit=.5, memory_shared_quota=.7, memory_spill_ratio=.3);
+CREATE RESOURCE GROUP admin_group WITH (concurrency=1, cpu_rate_limit=.5, memory_limit=.5, memory_shared_quota=.7, memory_spill_ratio=.3);
+CREATE RESOURCE GROUP none WITH (concurrency=1, cpu_rate_limit=.5, memory_limit=.5, memory_shared_quota=.7, memory_spill_ratio=.3);
 
 -- must specify both memory_limit and cpu_rate_limit
-CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, memory_limit=.5, memory_redzone_limit=.7);
-CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.5, memory_redzone_limit=.7);
+CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, memory_limit=.5, memory_shared_quota=.7, memory_spill_ratio=.3);
+CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.5, memory_shared_quota=.7, memory_spill_ratio=.3);
 
-CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.5, memory_limit=.6, memory_redzone_limit=.7);
-SELECT groupname,concurrency,proposed_concurrency,cpu_rate_limit,memory_limit,proposed_memory_limit,memory_redzone_limit FROM gp_toolkit.gp_resgroup_config WHERE groupname='rg_test_group';
+CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.5, memory_limit=.6, memory_shared_quota=.7, memory_spill_ratio=.3);
+SELECT groupname,concurrency,proposed_concurrency,cpu_rate_limit,memory_limit,proposed_memory_limit,memory_shared_quota,memory_spill_ratio FROM gp_toolkit.gp_resgroup_config WHERE groupname='rg_test_group';
 
 -- multiple resource groups can't share the same name
-CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_redzone_limit=.7);
+CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_shared_quota=.7, memory_spill_ratio=.3);
 
 -- cpu_rate_limit/memory_limit range is (0.01, 1)
 CREATE RESOURCE GROUP rg2_test_group WITH (cpu_rate_limit=.5, memory_limit=.05);
@@ -62,10 +62,10 @@ CREATE RESOURCE GROUP rg2_test_group WITH (cpu_rate_limit=.01, memory_limit=.05)
 CREATE RESOURCE GROUP rg2_test_group WITH (cpu_rate_limit=.05, memory_limit=.01);
 
 -- can't specify the resource limit type multiple times
-CREATE RESOURCE GROUP rg2_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_redzone_limit=.7, concurrency=1);
-CREATE RESOURCE GROUP rg2_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_redzone_limit=.7, cpu_rate_limit=.05);
-CREATE RESOURCE GROUP rg2_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_redzone_limit=.7, memory_limit=.05);
-CREATE RESOURCE GROUP rg2_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_redzone_limit=.7, memory_redzone_limit=.8);
+CREATE RESOURCE GROUP rg2_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_shared_quota=.7, concurrency=1);
+CREATE RESOURCE GROUP rg2_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_shared_quota=.7, cpu_rate_limit=.05);
+CREATE RESOURCE GROUP rg2_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_shared_quota=.7, memory_limit=.05);
+CREATE RESOURCE GROUP rg2_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_shared_quota=.7, memory_shared_quota=.8);
 
 DROP RESOURCE GROUP rg_test_group;
 
@@ -80,7 +80,7 @@ DROP RESOURCE GROUP rg_non_exist_group;
 -- ----------------------------------------------------------------------
 -- Test: alter a resource group
 -- ----------------------------------------------------------------------
-CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_redzone_limit=.7);
+CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_shared_quota=.7, memory_spill_ratio=.3);
 
 -- ALTER RESOURCE GROUP SET CONCURRENCY N
 -- negative
@@ -123,13 +123,13 @@ DROP RESOURCE GROUP rg_test_group;
 -- CREATE RESOURCE GROUP cannot run inside a subtransaction
 BEGIN;
 SAVEPOINT rg_savepoint;
-CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_redzone_limit=.7);
+CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_shared_quota=.7, memory_spill_ratio=.3);
 ROLLBACK TO SAVEPOINT rg_savepoint;
 ABORT;
 
 -- ALTER RESOURCE GROUP cannot run inside a subtransaction
 BEGIN;
-CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_redzone_limit=.7);
+CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_shared_quota=.7, memory_spill_ratio=.3);
 SAVEPOINT rg_savepoint;
 ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY 10;
 ROLLBACK TO SAVEPOINT rg_savepoint;
@@ -137,7 +137,7 @@ ABORT;
 
 -- DROP RESOURCE GROUP cannot run inside a subtransaction
 BEGIN;
-CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_redzone_limit=.7);
+CREATE RESOURCE GROUP rg_test_group WITH (concurrency=1, cpu_rate_limit=.05, memory_limit=.05, memory_shared_quota=.7, memory_spill_ratio=.3);
 SAVEPOINT rg_savepoint;
 DROP RESOURCE GROUP rg_test_group;
 ROLLBACK TO SAVEPOINT rg_savepoint;
