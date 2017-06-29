@@ -491,9 +491,7 @@ void ResGroupAlterCheckForWakeup(Oid groupId, int value, int proposed)
 
 	waitQueue = &(group->waitProcs);
 
-	if (proposed == RESGROUP_CONCURRENCY_UNLIMITED)
-		wakeNum = waitQueue->size;
-	else if (proposed <= group->nRunning)
+	if (proposed <= group->nRunning)
 		wakeNum = 0;
 	else
 		wakeNum = Min(proposed - group->nRunning, waitQueue->size);
@@ -778,7 +776,7 @@ CalcConcurrencyValue(int groupId, int val, int proposed, int newProposed)
 				 errmsg("Cannot find resource group with Oid %d in shared memory", groupId)));
 	}
 
-	if (newProposed == RESGROUP_CONCURRENCY_UNLIMITED || group->nRunning <= newProposed)
+	if (group->nRunning <= newProposed)
 		ret = newProposed;
 	else if (group->nRunning <= proposed)
 		ret = proposed;
@@ -900,7 +898,7 @@ retry:
 	}
 
 	/* acquire a slot */
-	if (concurrencyProposed == RESGROUP_CONCURRENCY_UNLIMITED || group->nRunning < concurrencyProposed)
+	if (group->nRunning < concurrencyProposed)
 	{
 		group->nRunning++;
 		group->totalExecuted++;
@@ -962,8 +960,7 @@ ResGroupSlotRelease(void)
 
 	waitQueue = &(group->waitProcs);
 
-	/* If the concurrency is RESGROUP_CONCURRENCY_UNLIMITED, the wait queue should also be empty */
-	if ((RESGROUP_CONCURRENCY_UNLIMITED != concurrencyProposed  && group->nRunning > concurrencyProposed) ||
+	if ((group->nRunning > concurrencyProposed) ||
 		waitQueue->size == 0)
 	{
 		AssertImply(waitQueue->size == 0,
@@ -1091,9 +1088,6 @@ AssignResGroupOnMaster(void)
 	/* Get config information */
 	GetMemoryCapabilitiesForResGroup(groupId, &memoryLimit, &sharedQuota, &spillRatio);
 	GetConcurrencyForResGroup(groupId, NULL, &concurrency);
-	/* TODO: handle (concurrency == -1) properly */
-	if (concurrency == RESGROUP_CONCURRENCY_UNLIMITED)
-		concurrency = 20; /* FIXME */
 
 	/* Init slot */
 	sharedInfo = MyResGroupSharedInfo;

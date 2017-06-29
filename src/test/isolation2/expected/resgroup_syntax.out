@@ -151,8 +151,12 @@ CREATE
 
 -- ALTER RESOURCE GROUP SET CONCURRENCY N
 -- negative
-ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY -2;
-ERROR:  concurrency limit cannot be less than -1
+ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY 0;
+ERROR:  concurrency limit cannot be less than 1
+ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY -1;
+ERROR:  concurrency limit cannot be less than 1
+ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY 26;
+ERROR:  concurrency limit cannot be greater than 'max_connections'
 ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY -0.5;
 ERROR:  syntax error at or near "0.5"
 LINE 1: ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY -0.5;
@@ -174,13 +178,11 @@ ERROR:  syntax error at or near "'1'"
 LINE 1: ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY '1';
                                                            ^
 -- positive
-ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY -1;
-ALTER
 ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY 1;
 ALTER
 ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY 2;
 ALTER
-ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY 1000;
+ALTER RESOURCE GROUP rg_test_group SET CONCURRENCY 25;
 ALTER
 
 -- ALTER RESOURCE GROUP SET CPU_RATE_LIMIT VALUE

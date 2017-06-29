@@ -29,7 +29,7 @@ CREATE 100000
 -- the cpu usage limitation has an error rate about +-7.5%,
 -- and also we want to satisfy the 0.1:0.2 rate under 90% overall limitation
 -- so we round the cpu rate by 15%
-CREATE OR REPLACE FUNCTION round_percentage(json) RETURNS text AS $$ SELECT (round(avg(value::float)/15)*15)::text||'%' FROM json_each_text($1) $$ LANGUAGE sql;
+CREATE OR REPLACE FUNCTION round_percentage(json) RETURNS text AS $$ SELECT (round(avg(value::text::float)/15)*15)::text||'%' FROM json_each_text($1) $$ LANGUAGE sql;
 CREATE
 
 CREATE OR REPLACE VIEW cpu_status AS SELECT s.rsgname, round_percentage(s.cpu_usage) FROM gp_toolkit.gp_resgroup_status s ORDER BY s.groupid;

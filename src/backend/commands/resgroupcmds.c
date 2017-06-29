@@ -40,6 +40,8 @@
 #define RESGROUP_DEFAULT_MEM_SHARED_QUOTA (0.2)
 #define RESGROUP_DEFAULT_MEM_SPILL_RATIO (0.2)
 
+#define RESGROUP_MIN_CONCURRENCY	(1)
+#define RESGROUP_MAX_CONCURRENCY	(MaxConnections)
 
 /*
  * Internal struct to store the group settings.
@@ -473,11 +475,15 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	{
 		case RESGROUP_LIMIT_TYPE_CONCURRENCY:
 			concurrency = defGetInt64(defel);
-			if (concurrency < RESGROUP_CONCURRENCY_UNLIMITED)
+			if (concurrency < RESGROUP_MIN_CONCURRENCY)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
 						 errmsg("concurrency limit cannot be less than %d",
-								RESGROUP_CONCURRENCY_UNLIMITED)));
+								RESGROUP_MIN_CONCURRENCY)));
+			if (concurrency > RESGROUP_MAX_CONCURRENCY)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
+						 errmsg("concurrency limit cannot be greater than 'max_connections'")));
 			break;
 
 		case RESGROUP_LIMIT_TYPE_CPU:
@@ -798,10 +804,12 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 		{
 			case RESGROUP_LIMIT_TYPE_CONCURRENCY:
 				options->concurrency = defGetInt64(defel);
-				if (options->concurrency < 0 || options->concurrency > MaxConnections)
+				if (options->concurrency < RESGROUP_MIN_CONCURRENCY ||
+					options->concurrency > RESGROUP_MAX_CONCURRENCY)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							errmsg("concurrency range is [0, MaxConnections]")));
+							errmsg("concurrency range is [%d, 'max_connections']",
+								   RESGROUP_MIN_CONCURRENCY)));
 				break;
 
 			case RESGROUP_LIMIT_TYPE_CPU:

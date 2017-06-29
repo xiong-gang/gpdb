@@ -71,8 +71,6 @@ DATA(insert OID = 6438 ( admin_group, 0 ));
 #define RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA 4
 #define RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO  5
 
-#define RESGROUP_CONCURRENCY_UNLIMITED (-1)
-
 CATALOG(pg_resgroupcapability,6439) BKI_SHARED_RELATION
 {
 	Oid		resgroupid;	/* OID of the group with this capability  */
@@ -117,7 +115,7 @@ DATA(insert ( 6437, 4, 0.5, 0.5 ));
 
 DATA(insert ( 6437, 5, 0.2, 0.2 ));
 
-DATA(insert ( 6438, 1, -1, -1 ));
+DATA(insert ( 6438, 1, 10, 10 ));
 
 DATA(insert ( 6438, 2, 0.1, 0.1 ));
 
