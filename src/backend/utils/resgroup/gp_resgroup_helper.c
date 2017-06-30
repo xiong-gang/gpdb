@@ -3,7 +3,7 @@
  * gp_resgroup_helper.c
  *	  Helper functions for resource group.
  *
- * Copyright (c) 2017-Present, Greenplum inc.
+ * Copyright (c) 2017-Present Pivotal Software, Inc.
  *
  *
  *-------------------------------------------------------------------------
