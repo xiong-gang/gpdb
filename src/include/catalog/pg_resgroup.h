@@ -107,22 +107,22 @@ typedef FormData_pg_resgroupcapability *Form_pg_resgroupcapability;
 
 DATA(insert ( 6437, 1, 20, 20 ));
 
-DATA(insert ( 6437, 2, 0.3, 0.3 ));
+DATA(insert ( 6437, 2, 30, 30 ));
 
-DATA(insert ( 6437, 3, 0.3, 0.3 ));
+DATA(insert ( 6437, 3, 30, 30 ));
 
-DATA(insert ( 6437, 4, 0.5, 0.5 ));
+DATA(insert ( 6437, 4, 50, 50 ));
 
-DATA(insert ( 6437, 5, 0.2, 0.2 ));
+DATA(insert ( 6437, 5, 20, 20 ));
 
 DATA(insert ( 6438, 1, 10, 10 ));
 
-DATA(insert ( 6438, 2, 0.1, 0.1 ));
+DATA(insert ( 6438, 2, 10, 10 ));
 
-DATA(insert ( 6438, 3, 0.1, 0.1 ));
+DATA(insert ( 6438, 3, 10, 10 ));
 
-DATA(insert ( 6438, 4, 0.5, 0.5 ));
+DATA(insert ( 6438, 4, 50, 50 ));
 
-DATA(insert ( 6438, 5, 0.2, 0.2 ));
+DATA(insert ( 6438, 5, 20, 20 ));
 
 #endif   /* PG_RESGROUP_H */

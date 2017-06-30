@@ -37,11 +37,23 @@
 #include "utils/syscache.h"
 
 #define RESGROUP_DEFAULT_CONCURRENCY (20)
-#define RESGROUP_DEFAULT_MEM_SHARED_QUOTA (0.2)
-#define RESGROUP_DEFAULT_MEM_SPILL_RATIO (0.2)
+#define RESGROUP_DEFAULT_MEM_SHARED_QUOTA (20)
+#define RESGROUP_DEFAULT_MEM_SPILL_RATIO (20)
 
 #define RESGROUP_MIN_CONCURRENCY	(1)
 #define RESGROUP_MAX_CONCURRENCY	(MaxConnections)
+
+#define RESGROUP_MIN_CPU_RATE_LIMIT	(1)
+#define RESGROUP_MAX_CPU_RATE_LIMIT	(100)
+
+#define RESGROUP_MIN_MEMORY_LIMIT	(1)
+#define RESGROUP_MAX_MEMORY_LIMIT	(100)
+
+#define RESGROUP_MIN_MEMORY_SHARED_QUOTA	(0)
+#define RESGROUP_MAX_MEMORY_SHARED_QUOTA	(100)
+
+#define RESGROUP_MIN_MEMORY_SPILL_RATIO		(1)
+#define RESGROUP_MAX_MEMORY_SPILL_RATIO		(100)
 
 /*
  * Internal struct to store the group settings.
@@ -49,10 +61,10 @@
 typedef struct ResourceGroupOptions
 {
 	int concurrency;
-	float cpuRateLimit;
-	float memoryLimit;
-	float memSharedQuota;
-	float memSpillRatio;
+	int cpuRateLimit;
+	int memoryLimit;
+	int memSharedQuota;
+	int memSpillRatio;
 } ResourceGroupOptions;
 
 /*
@@ -95,8 +107,8 @@ static ResourceGroupCallbackItem ResourceGroup_callbacks_head =
 
 static ResourceGroupCallbackItem *ResourceGroup_callbacks = &ResourceGroup_callbacks_head;
 
-static float str2Float(const char *str, const char *prop);
-static float text2Float(const text *text, const char *prop);
+static int str2Int(const char *str, const char *prop);
+static int text2Int(const text *text, const char *prop);
 static int getResgroupOptionType(const char* defname);
 static void parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options);
 static void validateCapabilities(Relation rel, Oid groupid, ResourceGroupOptions *options, bool newGroup);
@@ -447,8 +459,8 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	int			concurrencyVal;
 	int			concurrencyProposed;
 	int			newConcurrency;
-	float		cpuRateLimitVal;
-	float		cpuRateLimitNew;
+	int			cpuRateLimitVal;
+	int			cpuRateLimitNew;
 	DefElem		*defel;
 	int			limitType;
 	bool		needDispatch = true;
@@ -488,14 +500,16 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 
 		case RESGROUP_LIMIT_TYPE_CPU:
 			cpuRateLimitNew = defGetNumeric(defel);
-			if (cpuRateLimitNew <= .01f)
+			if (cpuRateLimitNew < RESGROUP_MIN_CPU_RATE_LIMIT)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("cpu rate limit must be greater than 0.01")));
-			if (cpuRateLimitNew >= 1.0)
+						 errmsg("cpu rate limit must be greater than %d",
+								RESGROUP_MIN_CPU_RATE_LIMIT)));
+			if (cpuRateLimitNew > RESGROUP_MAX_CPU_RATE_LIMIT)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("cpu rate limit must be less than 1.00")));
+						 errmsg("cpu rate limit must be less than %d",
+								RESGROUP_MAX_CPU_RATE_LIMIT)));
 			/* overall limit will be verified later after groupid is known */
 			break;
 
@@ -560,7 +574,6 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 
 		case RESGROUP_LIMIT_TYPE_CPU:
 			cpuRateLimitVal = GetCpuRateLimitForResGroup(groupid);
-			cpuRateLimitVal = roundf(cpuRateLimitVal * 100) / 100;
 
 			if (cpuRateLimitVal < cpuRateLimitNew)
 			{
@@ -572,7 +585,7 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 
 				/*
 				 * In validateCapabilities() we scan all the resource groups
-				 * to check whether the total cpu_rate_limit exceed 1.0 or not.
+				 * to check whether the total cpu_rate_limit exceed 100 or not.
 				 * We need to use ExclusiveLock here to prevent concurrent
 				 * increase on different resource group.
 				 */
@@ -583,10 +596,8 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 				heap_close(resgroup_capability_rel, NoLock);
 			}
 
-			snprintf(valueStr, sizeof(valueStr),
-					 "%.2f", cpuRateLimitNew);
-			snprintf(proposedStr, sizeof(proposedStr),
-					 "%.2f", cpuRateLimitNew);
+			snprintf(valueStr, sizeof(valueStr), "%d", cpuRateLimitNew);
+			snprintf(proposedStr, sizeof(proposedStr), "%d", cpuRateLimitNew);
 			updateResgroupCapabilityEntry(groupid, limitType,
 										  valueStr, proposedStr);
 
@@ -640,7 +651,7 @@ GetConcurrencyForResGroup(int groupId, int *value, int *proposed)
 /*
  * Get 'cpu_rate_limit' of one resource group in pg_resgroupcapability.
  */
-float
+int
 GetCpuRateLimitForResGroup(int groupId)
 {
 	char *valueStr;
@@ -649,7 +660,7 @@ GetCpuRateLimitForResGroup(int groupId)
 	getResgroupCapabilityEntry(groupId, RESGROUP_LIMIT_TYPE_CPU,
 							   &valueStr, &proposedStr);
 
-	return str2Float(valueStr, "cpu_rate_limit");
+	return str2Int(valueStr, "cpu_rate_limit");
 }
 
 /*
@@ -657,22 +668,22 @@ GetCpuRateLimitForResGroup(int groupId)
  * TODO: scan the catalog table only once?
  */
 void
-GetMemoryCapabilitiesForResGroup(int groupId, float *memoryLimit, float *sharedQuota, float *spillRatio)
+GetMemoryCapabilitiesForResGroup(int groupId, int *memoryLimit, int *sharedQuota, int *spillRatio)
 {
 	char *valueStr;
 	char *proposedStr;
 
 	getResgroupCapabilityEntry(groupId, RESGROUP_LIMIT_TYPE_MEMORY,
 							   &valueStr, &proposedStr);
-	*memoryLimit = str2Float(valueStr, "memory_limit");
+	*memoryLimit = str2Int(valueStr, "memory_limit");
 
 	getResgroupCapabilityEntry(groupId, RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA,
 							   &valueStr, &proposedStr);
-	*sharedQuota = str2Float(valueStr, "memory_shared_quota");
+	*sharedQuota = str2Int(valueStr, "memory_shared_quota");
 
 	getResgroupCapabilityEntry(groupId, RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO,
 							   &valueStr, &proposedStr);
-	*spillRatio = str2Float(valueStr, "memory_spill_ratio");
+	*spillRatio = str2Int(valueStr, "memory_spill_ratio");
 }
 
 /*
@@ -813,27 +824,47 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 				break;
 
 			case RESGROUP_LIMIT_TYPE_CPU:
-				options->cpuRateLimit = roundf(defGetNumeric(defel) * 100) / 100;
-				if (options->cpuRateLimit <= .01f || options->cpuRateLimit >= 1.0)
+				options->cpuRateLimit = defGetNumeric(defel);
+				if (options->cpuRateLimit < RESGROUP_MIN_CPU_RATE_LIMIT ||
+					options->cpuRateLimit > RESGROUP_MAX_CPU_RATE_LIMIT)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							errmsg("cpu_rate_limit range is (.01, 1)")));
+							errmsg("cpu_rate_limit range is [%d, %d]",
+								   RESGROUP_MIN_CPU_RATE_LIMIT,
+								   RESGROUP_MAX_CPU_RATE_LIMIT)));
 				break;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY:
-				options->memoryLimit = roundf(defGetNumeric(defel) * 100) / 100;
-				if (options->memoryLimit <= .01f || options->memoryLimit >= 1.0)
+				options->memoryLimit = defGetNumeric(defel);
+				if (options->memoryLimit < RESGROUP_MIN_MEMORY_LIMIT ||
+					options->memoryLimit > RESGROUP_MAX_MEMORY_LIMIT)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							errmsg("memory_limit range is (.01, 1)")));
+							errmsg("memory_limit range is [%d, %d]",
+								   RESGROUP_MIN_MEMORY_LIMIT,
+								   RESGROUP_MAX_MEMORY_LIMIT)));
 				break;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-				options->memSharedQuota = roundf(defGetNumeric(defel) * 100) / 100;
+				options->memSharedQuota = defGetNumeric(defel);
+				if (options->memSharedQuota < RESGROUP_MIN_MEMORY_SHARED_QUOTA ||
+					options->memSharedQuota > RESGROUP_MAX_MEMORY_SHARED_QUOTA)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("memory_shared_quota range is [%d, %d]",
+								   RESGROUP_MIN_MEMORY_SHARED_QUOTA,
+								   RESGROUP_MAX_MEMORY_SHARED_QUOTA)));
 				break;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-				options->memSpillRatio = roundf(defGetNumeric(defel) * 100) / 100;
+				options->memSpillRatio = defGetNumeric(defel);
+				if (options->memSpillRatio < RESGROUP_MIN_MEMORY_SPILL_RATIO ||
+					options->memSpillRatio > RESGROUP_MAX_MEMORY_SPILL_RATIO)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("memory_spill_ratio range is [%d, %d]",
+								   RESGROUP_MIN_MEMORY_SPILL_RATIO,
+								   RESGROUP_MAX_MEMORY_SPILL_RATIO)));
 				break;
 
 			default:
@@ -856,11 +887,12 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResourceGroupOptions *options)
 	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO)))
 		options->memSpillRatio = RESGROUP_DEFAULT_MEM_SPILL_RATIO;
 
-	if (options->memSpillRatio + options->memSharedQuota > 1.f)
+	if (options->memSpillRatio + options->memSharedQuota > RESGROUP_MAX_MEMORY_LIMIT)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("The sum of memory_shared_quota (%.2f) and memory_spill_ratio (%.2f) exceeds 1.0",
-						options->memSharedQuota, options->memSpillRatio)));
+				 errmsg("The sum of memory_shared_quota (%d) and memory_spill_ratio (%d) exceeds %d",
+						options->memSharedQuota, options->memSpillRatio,
+						RESGROUP_MAX_MEMORY_LIMIT)));
 }
 
 /*
@@ -1002,16 +1034,16 @@ insertResgroupCapabilities(Oid groupid,
 	sprintf(value, "%d", options->concurrency);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_CONCURRENCY, value);
 
-	sprintf(value, "%.2f", options->cpuRateLimit);
+	sprintf(value, "%d", options->cpuRateLimit);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_CPU, value);
 
-	sprintf(value, "%.2f", options->memoryLimit);
+	sprintf(value, "%d", options->memoryLimit);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY, value);
 
-	sprintf(value, "%.2f", options->memSharedQuota);
+	sprintf(value, "%d", options->memSharedQuota);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA, value);
 
-	sprintf(value, "%.2f", options->memSpillRatio);
+	sprintf(value, "%d", options->memSpillRatio);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO, value);
 
 	heap_close(resgroup_capability_rel, NoLock);
@@ -1084,7 +1116,7 @@ updateResgroupCapabilityEntry(Oid groupid, uint16 type, char *value, char *propo
  * Validate the capabilities.
  *
  * The policy is resouces can't be over used, take memory for example,
- * all the allocated memory can not exceed 1.0.
+ * all the allocated memory can not exceed 100.
  *
  * Also detect for duplicate settings for the group.
  *
@@ -1100,8 +1132,8 @@ validateCapabilities(Relation rel,
 {
 	HeapTuple tuple;
 	SysScanDesc sscan;
-	float totalCpu = options->cpuRateLimit;
-	float totalMem = options->memoryLimit;
+	int totalCpu = options->cpuRateLimit;
+	int totalMem = options->memoryLimit;
 
 	sscan = systable_beginscan(rel, InvalidOid, false, SnapshotNow, 0, NULL);
 
@@ -1122,19 +1154,21 @@ validateCapabilities(Relation rel,
 
 		if (resgCapability->reslimittype == RESGROUP_LIMIT_TYPE_CPU)
 		{
-			totalCpu += text2Float(&resgCapability->value, "cpu_rate_limit");
-			if (totalCpu > 1.0)
+			totalCpu += text2Int(&resgCapability->value, "cpu_rate_limit");
+			if (totalCpu > RESGROUP_MAX_CPU_RATE_LIMIT)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						errmsg("total cpu_rate_limit exceeded the limit of 1.0")));
+						errmsg("total cpu_rate_limit exceeded the limit of %d",
+							   RESGROUP_MAX_CPU_RATE_LIMIT)));
 		}
 		else if (resgCapability->reslimittype == RESGROUP_LIMIT_TYPE_MEMORY)
 		{
-			totalMem += text2Float(&resgCapability->value, "memory_limit");
-			if (totalMem > 1.0)
+			totalMem += text2Int(&resgCapability->value, "memory_limit");
+			if (totalMem > RESGROUP_MAX_MEMORY_LIMIT)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						errmsg("total memory_limit exceeded the limit of 1.0")));
+						errmsg("total memory_limit exceeded the limit of %d",
+							   RESGROUP_MAX_MEMORY_LIMIT)));
 		}
 	}
 
@@ -1359,13 +1393,13 @@ GetResGroupNameForId(Oid oid, LOCKMODE lockmode)
 }
 
 /*
- * Convert a C str to a float value.
+ * Convert a C str to a integer value.
  *
  * @param str   the C str
  * @param prop  the property name
  */
-static float
-str2Float(const char *str, const char *prop)
+static int
+str2Int(const char *str, const char *prop)
 {
 	char *end = NULL;
 	double val = strtod(str, &end);
@@ -1377,20 +1411,20 @@ str2Float(const char *str, const char *prop)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				errmsg("%s requires a numeric value", prop)));
 
-	return (float) val;
+	return floor(val);
 }
 
 /*
- * Convert a text to a float value.
+ * Convert a text to a integer value.
  *
  * @param text  the text
  * @param prop  the property name
  */
-static float
-text2Float(const text *text, const char *prop)
+static int
+text2Int(const text *text, const char *prop)
 {
 	char *str = DatumGetCString(DirectFunctionCall1(textout,
 								 PointerGetDatum(text)));
 
-	return str2Float(str, prop);
+	return str2Int(str, prop);
 }

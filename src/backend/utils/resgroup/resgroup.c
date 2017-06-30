@@ -40,7 +40,7 @@
 #include "utils/vmem_tracker.h"
 
 #define InvalidSlotId	(-1)
-#define RESGROUP_MAX_CONCURRENCY	90
+#define RESGROUP_MAX_SLOTS	90
 
 /*
  * Data structures
@@ -121,7 +121,7 @@ typedef struct ResGroupData
 	uint32		memUsage;
 	uint32		memSharedUsage;
 
-	ResGroupSlotData slots[RESGROUP_MAX_CONCURRENCY];
+	ResGroupSlotData slots[RESGROUP_MAX_SLOTS];
 } ResGroupData;
 
 typedef struct ResGroupControl
@@ -335,7 +335,7 @@ InitResGroups(void)
 	{
 		Oid groupId = HeapTupleGetOid(tuple);
 		bool groupOK = ResGroupCreate(groupId);
-		float cpu_rate_limit = GetCpuRateLimitForResGroup(groupId);
+		int cpu_rate_limit = GetCpuRateLimitForResGroup(groupId);
 
 		if (!groupOK)
 			ereport(PANIC,
@@ -827,7 +827,7 @@ getFreeSlot(void)
 
 	Assert(LWLockHeldExclusiveByMe(ResGroupLock));
 
-	for (i = 0; i < RESGROUP_MAX_CONCURRENCY; i++)
+	for (i = 0; i < RESGROUP_MAX_SLOTS; i++)
 	{
 		if (MyResGroupSharedInfo->slots[i].inUse)
 			continue;
@@ -1070,7 +1070,7 @@ AssignResGroupOnMaster(void)
 	ResGroupSlotData	*slot;
 	ResGroupProcData	*procInfo;
 	int		concurrency;
-	float	memoryLimit, sharedQuota, spillRatio;
+	int		memoryLimit, sharedQuota, spillRatio;
 	int		slotId;
 	Oid		groupId;
 	int32	slotMemUsage;
@@ -1095,18 +1095,18 @@ AssignResGroupOnMaster(void)
 	slot->sessionId = gp_session_id;
 	slot->segmentChunks = ResGroupOps_GetTotalMemory()
 		* gp_resource_group_memory_limit / pResGroupControl->segmentsOnMaster;
-	slot->memLimit = slot->segmentChunks * memoryLimit;
-	slot->memSharedQuota = slot->memLimit * sharedQuota;
-	slot->memQuota = slot->memLimit * (1 - sharedQuota) / concurrency;
+	slot->memLimit = slot->segmentChunks * memoryLimit / 100;
+	slot->memSharedQuota = slot->memLimit * sharedQuota / 100;
+	slot->memQuota = slot->memLimit * (100 - sharedQuota) / concurrency / 100;
 	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->nProcs, 1);
 	Assert(slot->memLimit > 0);
 	Assert(slot->memQuota > 0);
 
 	/* Init MyResGroupProcInfo */
 	procInfo->slotId = slotId;
-	procInfo->config.memoryLimit = memoryLimit * 100;
-	procInfo->config.sharedQuota = sharedQuota * 100;
-	procInfo->config.spillRatio = spillRatio * 100;
+	procInfo->config.memoryLimit = memoryLimit;
+	procInfo->config.sharedQuota = sharedQuota;
+	procInfo->config.spillRatio = spillRatio;
 	procInfo->config.concurrency = concurrency;
 	Assert(pResGroupControl != NULL);
 	Assert(pResGroupControl->segmentsOnMaster > 0);

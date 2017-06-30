@@ -79,14 +79,14 @@ calcCpuUsage(StringInfoData *str, int ncores,
 }
 
 /*
- * Get memory usage.
+ * Get resource usage.
  *
  * On QD this function dispatch the request to all QEs, collecting both
- * QEs' and QD's memory usage.
+ * QEs' and QD's resource usage.
  *
- * On QE this function only collect the memory usage on itself.
+ * On QE this function only collect the resource usage on itself.
  *
- * Memory usage is returned in JSON format.
+ * Memory & cpu usage are returned in JSON format.
  */
 static void
 getResUsage(ResGroupStatCtx *ctx, Oid inGroupId)
@@ -279,7 +279,7 @@ gp_resgroup_get_status(PG_FUNCTION_ARGS)
 			}
 			systable_endscan(sscan);
 			heap_close(pg_resgroup_rel, AccessShareLock);
-			
+
 			ctx->nGroups = funcctx->max_calls;
 			qsort(ctx->groups, ctx->nGroups, sizeof(ctx->groups[0]), compareRow);
 

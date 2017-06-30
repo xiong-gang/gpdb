@@ -52,10 +52,10 @@ CREATE VIEW memory_result AS
 	WHERE rsgname='rg1_memory_test' OR rsgname='rg2_memory_test';
 
 CREATE RESOURCE GROUP rg1_memory_test
-	WITH (concurrency=2, cpu_rate_limit=0.1, memory_limit=0.29);
+	WITH (concurrency=2, cpu_rate_limit=10, memory_limit=30);
 CREATE ROLE role1_memory_test RESOURCE GROUP rg1_memory_test;
 CREATE RESOURCE GROUP rg2_memory_test
-	WITH (concurrency=2, cpu_rate_limit=0.1, memory_limit=0.29);
+	WITH (concurrency=2, cpu_rate_limit=10, memory_limit=30);
 CREATE ROLE role2_memory_test RESOURCE GROUP rg2_memory_test;
 
 GRANT ALL ON eat_memory_on_qd TO role1_memory_test;
