@@ -24,10 +24,6 @@
 #include "utils/resgroup.h"
 #include "utils/resource_manager.h"
 
-#ifdef PG_MODULE_MAGIC
-PG_MODULE_MAGIC;
-#endif
-
 typedef struct ResGroupStat
 {
 	Datum groupId;
@@ -46,7 +42,6 @@ static void calcCpuUsage(StringInfoData *str, int ncores,
 						 int64 usageBegin, TimestampTz timestampBegin,
 						 int64 usageEnd, TimestampTz timestampEnd);
 static void getResUsage(ResGroupStatCtx *ctx, Oid inGroupId);
-Datum gp_resgroup_get_status(PG_FUNCTION_ARGS);
 
 static void
 calcCpuUsage(StringInfoData *str, int ncores,
@@ -118,13 +113,13 @@ getResUsage(ResGroupStatCtx *ctx, Oid inGroupId)
 		initStringInfo(&buffer);
 		appendStringInfo(&buffer,
 						 "SELECT groupid, cpu_usage, memory_usage "
-						 "FROM gp_toolkit.gp_resgroup_get_status(%d)",
+						 "FROM pg_resgroup_get_status(%d)",
 						 inGroupId);
 
 		CdbDispatchCommand(buffer.data, DF_WITH_SNAPSHOT, &cdb_pgresults);
 
 		if (cdb_pgresults.numResults == 0)
-			elog(ERROR, "gp_resgroup_get_status() didn't get back any resource statistic from the segDBs");
+			elog(ERROR, "pg_resgroup_get_status() didn't get back any resource statistic from the segDBs");
 
 		for (i = 0; i < cdb_pgresults.numResults; i++)
 		{
@@ -138,7 +133,7 @@ getResUsage(ResGroupStatCtx *ctx, Oid inGroupId)
 			if (PQresultStatus(pg_result) != PGRES_TUPLES_OK)
 			{
 				cdbdisp_clearCdbPgResults(&cdb_pgresults);
-				elog(ERROR, "gp_resgroup_get_status(): resultStatus not tuples_Ok");
+				elog(ERROR, "pg_resgroup_get_status(): resultStatus not tuples_Ok");
 			}
 
 			Assert(PQntuples(pg_result) == ctx->nGroups);
@@ -210,13 +205,11 @@ compareRow(const void *ptr1, const void *ptr2)
 	return row1->groupId - row2->groupId;
 }
 
-PG_FUNCTION_INFO_V1(gp_resgroup_get_status);
-
 /*
  * Get status of resource groups
  */
 Datum
-gp_resgroup_get_status(PG_FUNCTION_ARGS)
+pg_resgroup_get_status(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
 	ResGroupStatCtx *ctx;
@@ -334,6 +327,49 @@ gp_resgroup_get_status(PG_FUNCTION_ARGS)
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 
 		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
+	}
+	else
+	{
+		/* nothing left */
+		SRF_RETURN_DONE(funcctx);
+	}
+}
+
+/*
+ * Get status of resource groups in key-value style
+ */
+Datum
+pg_resgroup_get_status_kv(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *funcctx;
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		MemoryContext oldcontext;
+		TupleDesc	tupdesc;
+		int			nattr = 3;
+
+		funcctx = SRF_FIRSTCALL_INIT();
+
+		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		tupdesc = CreateTemplateTupleDesc(nattr, false);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "groupid", OIDOID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "prop", TEXTOID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "value", TEXTOID, -1, 0);
+
+		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
+		funcctx->max_calls = 0;
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	/* stuff done on every call of the function */
+	funcctx = SRF_PERCALL_SETUP();
+
+	if (funcctx->call_cntr < funcctx->max_calls)
+	{
+		SRF_RETURN_DONE(funcctx);
 	}
 	else
 	{

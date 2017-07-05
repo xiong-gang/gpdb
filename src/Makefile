@@ -18,7 +18,6 @@ all install installdirs uninstall distprep:
 	$(MAKE) -C timezone $@
 	$(MAKE) -C backend $@
 	$(MAKE) -C backend/utils/mb/conversion_procs $@
-	$(MAKE) -C backend/utils/resgroup $@
 	$(MAKE) -C backend/snowball $@
 	$(MAKE) -C include $@
 	$(MAKE) -C interfaces $@

@@ -1099,6 +1099,10 @@ extern Datum mpp_global_xid_map(PG_FUNCTION_ARGS);
 extern Datum pg_resqueue_status(PG_FUNCTION_ARGS);
 extern Datum pg_resqueue_status_kv(PG_FUNCTION_ARGS);
 
+/* utils/resgroup/resgroup.c */
+extern Datum pg_resgroup_get_status(PG_FUNCTION_ARGS);
+extern Datum pg_resgroup_get_status_kv(PG_FUNCTION_ARGS);
+
 /* utils/adt/matrix.c */
 extern Datum matrix_add(PG_FUNCTION_ARGS);
 
