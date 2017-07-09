@@ -2848,7 +2848,7 @@ retry5:
 	 * authentication_timeout and pre_auth_delay. Most likely, it's long enough
 	 * to make sure the process forked by the postmaster on segment is finished.
 	 */
-	pollRet = poll(pollFds, 1, 660 * 1000);
+	pollRet = poll(pollFds, 1, (MAX_AUTHENTICATION_TIMEOUT + MAX_PRE_AUTH_DELAY) * 1000);
 	if (pollRet == 0)
 	{
 		/* timeout */
