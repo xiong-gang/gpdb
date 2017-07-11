@@ -12501,19 +12501,19 @@ done
 
 
 # Check for bzlib.h
-if test "$PORTNAME" = "win32"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: *** bzip2 not required for windows partial build --- disabling." >&5
-$as_echo "$as_me: WARNING: *** bzip2 not required for windows partial build --- disabling." >&2;}
-else
-  ac_fn_c_check_header_mongrel "$LINENO" "bzlib.h" "ac_cv_header_bzlib_h" "$ac_includes_default"
-if test "x$ac_cv_header_bzlib_h" = xyes; then :
-
-else
-  as_fn_error $? "header file <bzlib.h> is required for bzip2 support" "$LINENO" 5
-fi
-
-
-fi
+#if test "$PORTNAME" = "win32"; then
+#  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: *** bzip2 not required for windows partial build --- disabling." >&5
+#$as_echo "$as_me: WARNING: *** bzip2 not required for windows partial build --- disabling." >&2;}
+#else
+#  ac_fn_c_check_header_mongrel "$LINENO" "bzlib.h" "ac_cv_header_bzlib_h" "$ac_includes_default"
+#if test "x$ac_cv_header_bzlib_h" = xyes; then :
+#
+#else
+#  as_fn_error $? "header file <bzlib.h> is required for bzip2 support" "$LINENO" 5
+#fi
+#
+#
+#fi
 
 # On BSD, cpp test for net/if.h will fail unless sys/socket.h
 # is included first.
