@@ -155,6 +155,8 @@ unassignGroup(Oid group, const char *comp, int fddir)
 	}
 
 	close(fdr);
+	if (buflen == 0)
+		return;
 
 	buildPath(0, comp, "cgroup.procs", path, pathsize);
 
