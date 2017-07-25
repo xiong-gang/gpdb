@@ -559,12 +559,16 @@ detectCgroupMountPoint(void)
 		if (strcmp(me->mnt_type, "cgroup"))
 			continue;
 
-		Assert(strlen(me->mnt_dir) < sizeof(cgdir));
-		strncpy(cgdir, me->mnt_dir, sizeof(cgdir));
+		strncpy(cgdir, me->mnt_dir, sizeof(cgdir) - 1);
 
 		p = strrchr(cgdir, '/');
-		Assert(p != NULL);
-		*p = 0;
+		if (p == NULL)
+		{
+			CGROUP_ERROR("cgroup mount point parse error: %s",
+						 strerror(errno));
+		}
+		else
+			*p = 0;
 		break;
 	}
 
