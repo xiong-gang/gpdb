@@ -22,7 +22,11 @@ prepare_cgroups() {
                 mount -t cgroup -o $options,\$group cgroup $basedir/\$group; \
         done; \
         mkdir -p $basedir/cpu/gpdb; \
-        find $basedir -type d | xargs chmod 777; \
+        chown -R gpadmin:gpadmin $basedir/cpu/gpdb; \
+        chmod 777 $basedir/cpu/gpdb; \
+        mkdir -p $basedir/cpuacct/gpdb; \
+        chown -R gpadmin:gpadmin $basedir/cpuacct/gpdb; \
+        chmod 777 $basedir/cpuacct/gpdb; \
     )'"
 }
 
