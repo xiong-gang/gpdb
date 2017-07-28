@@ -21,12 +21,14 @@ prepare_cgroups() {
                 mkdir -p $basedir/\$group; \
                 mount -t cgroup -o $options,\$group cgroup $basedir/\$group; \
         done; \
+        chmod -R 777 $basedir/cpu; \
+        chmod -R 777 $basedir/cpuacct; \
         mkdir -p $basedir/cpu/gpdb; \
         chown -R gpadmin:gpadmin $basedir/cpu/gpdb; \
-        chmod 777 $basedir/cpu/gpdb; \
+        chmod -R 777 $basedir/cpu/gpdb; \
         mkdir -p $basedir/cpuacct/gpdb; \
         chown -R gpadmin:gpadmin $basedir/cpuacct/gpdb; \
-        chmod 777 $basedir/cpuacct/gpdb; \
+        chmod -R 777 $basedir/cpuacct/gpdb; \
     )'"
 }
 
