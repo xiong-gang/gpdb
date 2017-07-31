@@ -17,14 +17,14 @@ CREATE OR REPLACE VIEW eat_memory_on_qd AS
 	SELECT hold_memory(0,20);
 
 CREATE OR REPLACE VIEW eat_memory_on_one_slice AS
-	SELECT count(*)
+	SELECT count(null)
 	FROM
 	gp_dist_random('gp_id') t1
 	WHERE hold_memory(t1.dbid,20)=0
 	;
 
 CREATE OR REPLACE VIEW eat_memory_on_slices AS
-	SELECT count(*)
+	SELECT count(null)
 	FROM
 	gp_dist_random('gp_id') t1,
 	gp_dist_random('gp_id') t2

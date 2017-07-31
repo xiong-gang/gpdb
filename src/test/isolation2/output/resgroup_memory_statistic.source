@@ -18,10 +18,10 @@ CREATE
 CREATE OR REPLACE VIEW eat_memory_on_qd AS SELECT hold_memory(0,20);
 CREATE
 
-CREATE OR REPLACE VIEW eat_memory_on_one_slice AS SELECT count(*) FROM gp_dist_random('gp_id') t1 WHERE hold_memory(t1.dbid,20)=0 ;
+CREATE OR REPLACE VIEW eat_memory_on_one_slice AS SELECT count(null) FROM gp_dist_random('gp_id') t1 WHERE hold_memory(t1.dbid,20)=0 ;
 CREATE
 
-CREATE OR REPLACE VIEW eat_memory_on_slices AS SELECT count(*) FROM gp_dist_random('gp_id') t1, gp_dist_random('gp_id') t2 WHERE hold_memory(t1.dbid,20)=0 AND hold_memory(t2.dbid,20)=0 ;
+CREATE OR REPLACE VIEW eat_memory_on_slices AS SELECT count(null) FROM gp_dist_random('gp_id') t1, gp_dist_random('gp_id') t2 WHERE hold_memory(t1.dbid,20)=0 AND hold_memory(t2.dbid,20)=0 ;
 CREATE
 
 CREATE FUNCTION round_test(float, integer) RETURNS float AS $$ SELECT round($1 / $2) * $2 $$ LANGUAGE sql;
@@ -248,12 +248,12 @@ SET
 1: SELECT * FROM eat_memory_on_slices;
 count
 -----
-9    
+0    
 (1 row)
 2: SELECT * FROM eat_memory_on_slices;
 count
 -----
-9    
+0    
 (1 row)
 SELECT * FROM memory_result;
 rsgname        |ismaster|avg_mem
