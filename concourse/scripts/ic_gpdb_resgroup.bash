@@ -39,7 +39,7 @@ run_resgroup_test() {
     ssh $gpdb_master_alias "bash -c '(\
         source /usr/local/greenplum-db-devel/greenplum_path.sh; \
         export PGPORT=5432; \
-        export MASTER_DATA_DIRECTORY=/data/master/gpseg-1; \
+        export MASTER_DATA_DIRECTORY=/data/gpdata/master/gpseg-1; \
 
         cd /home/gpadmin/gpdb_src; \
         ./configure --prefix=/usr/local/greenplum-db-devel --without-zlib --without-rt --without-libcurl --without-libedit-preferred --without-docdir --without-PACKAGE --without-readline --disable-gpcloud --disable-gpfdist --disable-orca ${CONFIGURE_FLAGS}; \
