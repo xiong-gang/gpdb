@@ -33,16 +33,20 @@ prepare_cgroups() {
 run_resgroup_test() {
     local gpdb_master_alias=$1
 
-    ssh $gpdb_master_alias "bash -c \"\
+    ssh $gpdb_master_alias "bash -c '(\
         source /usr/local/greenplum-db-devel/greenplum_path.sh; \
         export PGPORT=5432; \
         export MASTER_DATA_DIRECTORY=/data/gpdata/master/gpseg-1; \
 
         cd /home/gpadmin/gpdb_src; \
         ./configure --prefix=/usr/local/greenplum-db-devel --without-zlib --without-rt --without-libcurl --without-libedit-preferred --without-docdir --without-PACKAGE --without-readline --disable-gpcloud --disable-gpfdist --disable-orca ${CONFIGURE_FLAGS}; \
+        cd /home/gpadmin/gpdb_src/src/test/regress && make;\
+        ssh sdw1 \"mkdir -p /home/gpadmin/gpdb_src/src/test/regress\";\
+        ssh sdw1 \"mkdir -p /home/gpadmin/gpdb_src/src/test/isolation2\";\
+        scp /home/gpadmin/gpdb_src/src/test/regress/regress.so gpadmin@sdw1:/home/gpadmin/gpdb_src/src/test/regress/ ; \
         cd /home/gpadmin/gpdb_src; \
         make installcheck-resgroup; \
-    \""
+		)'"
 }
 prepare_cgroups ccp-${CLUSTER_NAME}-0
 prepare_cgroups ccp-${CLUSTER_NAME}-1
