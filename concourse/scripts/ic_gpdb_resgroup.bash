@@ -49,6 +49,9 @@ run_resgroup_test() {
         scp /home/gpadmin/gpdb_src/src/test/regress/regress.so gpadmin@sdw1:/home/gpadmin/gpdb_src/src/test/regress/ ; \
         cd /home/gpadmin/gpdb_src; \
         make installcheck-resgroup; \
+        gpconfig -c gp_resource_manager -v group; \
+        gpstop -rai;\
+        make PGOPTIONS=\"-c optimizer=off\" installcheck-world; \
 		)'"
 }
 prepare_cgroups ccp-${CLUSTER_NAME}-0

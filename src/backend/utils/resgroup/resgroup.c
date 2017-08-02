@@ -41,7 +41,7 @@
 #include "utils/vmem_tracker.h"
 
 #define InvalidSlotId	(-1)
-#define RESGROUP_MAX_SLOTS	90
+#define RESGROUP_MAX_SLOTS	300
 
 /*
  * Data structures
