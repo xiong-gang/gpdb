@@ -18,6 +18,8 @@ typedef enum ResManagerMemoryPolicy
 	RESMANAGER_MEMORY_POLICY_EAGER_FREE
 } ResManagerMemoryPolicy;
 
+extern ResManagerMemoryPolicy   gp_resqueue_memory_policy;
+extern ResManagerMemoryPolicy   gp_resgroup_memory_policy;
 extern ResManagerMemoryPolicy gp_resmanager_memory_policy_default;
 extern bool						gp_log_resmanager_memory_default;
 extern int						gp_resmanager_memory_policy_auto_fixed_mem_default;
