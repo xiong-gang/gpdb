@@ -2236,6 +2236,10 @@ StartTransaction(void)
 		SIMPLE_FAULT_INJECTOR(TransactionStartUnderEntryDbSingleton);
 	}
 
+	/* Acquire a resource group slot at the beginning of a transaction */
+	if (ShouldAssignResGroupOnMaster())
+		AssignResGroupOnMaster();
+
 	/*
 	 * Let's just make sure the state stack is empty
 	 */
@@ -2248,11 +2252,6 @@ StartTransaction(void)
 	if (s->state != TRANS_DEFAULT)
 		elog(WARNING, "StartTransaction while in %s state",
 			 TransStateAsString(s->state));
-
-	/* Acquire a resource group slot at the beginning of a transaction */
-	if (ShouldAssignResGroupOnMaster())
-		AssignResGroupOnMaster();
-
 	/*
 	 * set the current transaction state information appropriately during
 	 * start processing

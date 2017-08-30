@@ -1,0 +1,40 @@
+-- If the function AssignResGroupOnMaster() fails after getting a slot,
+-- test the slot will be unassigned correctly.
+CREATE EXTENSION IF NOT EXISTS gp_inject_fault;
+CREATE
+
+DROP ROLE IF EXISTS role_test;
+DROP
+-- start_ignore
+DROP RESOURCE GROUP rg_test;
+DROP
+-- end_ignore
+CREATE RESOURCE GROUP rg_test WITH (concurrency=2, cpu_rate_limit=10, memory_limit=10);
+CREATE
+CREATE ROLE role_test RESOURCE GROUP rg_test;
+CREATE
+
+1: SET ROLE role_test;
+SET
+1: BEGIN;
+BEGIN
+2: SET ROLE role_test;
+SET
+SELECT gp_inject_fault('resgroup_assgined_on_master', 'error', 1);
+ERROR:  Failure: could not insert fault injection, entry already exists (gp_inject_fault.c:67)
+2: BEGIN;
+BEGIN
+2: BEGIN;
+BEGIN
+1: END;
+END
+2: END;
+END
+1q: ... <quitting>
+2q: ... <quitting>
+
+--clean up
+DROP ROLE role_test;
+DROP
+DROP RESOURCE GROUP rg_test;
+DROP

@@ -396,6 +396,11 @@ InitResGroups(void)
 	/* These initialization must be done before ResGroupCreate() */
 	pResGroupControl->totalChunks = getSegmentChunks();
 	pResGroupControl->freeChunks = pResGroupControl->totalChunks;
+	if (pResGroupControl->totalChunks == 0)
+		ereport(PANIC,
+				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
+				 errmsg("insufficient memory available"),
+				 errhint("Increase gp_resource_group_memory_limit")));
 
 	ResGroupOps_Init();
 
@@ -414,7 +419,7 @@ InitResGroups(void)
 		if (!group)
 			ereport(PANIC,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
-			 		errmsg("not enough shared memory for resource groups")));
+					 errmsg("not enough shared memory for resource groups")));
 
 		ResGroupOps_CreateGroup(groupId);
 		ResGroupOps_SetCpuRateLimit(groupId, cpuRateLimit);
@@ -1568,7 +1573,7 @@ groupGetMemSpillTotal(const ResGroupCaps *caps)
 static int32
 slotGetMemQuotaExpected(const ResGroupCaps *caps)
 {
-	return groupGetMemQuotaExpected(caps) / caps->concurrency.proposed;
+	return Max(1, groupGetMemQuotaExpected(caps) / caps->concurrency.proposed);
 }
 
 /*
@@ -1898,40 +1903,53 @@ AssignResGroupOnMaster(void)
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 
-	/* Acquire slot */
-	slotId = ResGroupSlotAcquire();
-	Assert(slotId != InvalidSlotId);
-	Assert(MyResGroupSharedInfo != NULL);
-	sharedInfo = MyResGroupSharedInfo;
-	groupId = sharedInfo->groupId;
-	Assert(groupId != InvalidOid);
-	Assert(!MyResGroupProcInfo->doMemCheck);
+	PG_TRY();
+	{
+		/* Acquire slot */
+		slotId = ResGroupSlotAcquire();
+		Assert(slotId != InvalidSlotId);
+		Assert(MyResGroupSharedInfo != NULL);
+		sharedInfo = MyResGroupSharedInfo;
+		groupId = sharedInfo->groupId;
+		Assert(groupId != InvalidOid);
+		Assert(!MyResGroupProcInfo->doMemCheck);
 
-	/* Init slot */
-	slot = &sharedInfo->slots[slotId];
-	Assert(slot->memQuota > 0);
-	slot->sessionId = gp_session_id;
-	ResGroupSetMemorySpillRatio(&slot->caps);
-	pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->nProcs, 1);
-	Assert(slot->memQuota > 0);
+		/* Init slot */
+		slot = &sharedInfo->slots[slotId];
+		Assert(slot->memQuota > 0);
+		slot->sessionId = gp_session_id;
+		pg_atomic_add_fetch_u32((pg_atomic_uint32*)&slot->nProcs, 1);
 
-	/* Init MyResGroupProcInfo */
-	procInfo = MyResGroupProcInfo;
-	procInfo->groupId = groupId;
-	procInfo->slotId = slotId;
-	procInfo->caps = slot->caps;
-	Assert(pResGroupControl != NULL);
-	Assert(pResGroupControl->segmentsOnMaster > 0);
+		/* Init MyResGroupProcInfo */
+		procInfo = MyResGroupProcInfo;
+		procInfo->groupId = groupId;
+		procInfo->slotId = slotId;
+		procInfo->caps = slot->caps;
+		Assert(pResGroupControl != NULL);
+		Assert(pResGroupControl->segmentsOnMaster > 0);
 
-	attachToSlot(sharedInfo, slot, procInfo);
+		attachToSlot(sharedInfo, slot, procInfo);
 
-	/* Start memory limit checking */
-	Assert(procInfo->groupId != InvalidOid);
-	Assert(procInfo->slotId != InvalidSlotId);
-	procInfo->doMemCheck = true;
+		/* Start memory limit checking */
+		Assert(procInfo->groupId != InvalidOid);
+		Assert(procInfo->slotId != InvalidSlotId);
+		procInfo->doMemCheck = true;
 
-	/* Add into cgroup */
-	ResGroupOps_AssignGroup(sharedInfo->groupId, MyProcPid);
+		/* Don't error out before this line in this function */
+		SIMPLE_FAULT_INJECTOR(ResGroupAssignedOnMaster);
+
+		/* Add into cgroup */
+		ResGroupOps_AssignGroup(sharedInfo->groupId, MyProcPid);
+
+		/* Set spill guc */
+		ResGroupSetMemorySpillRatio(&slot->caps);
+	}
+	PG_CATCH();
+	{
+		UnassignResGroupOnMaster();
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 }
 
 /*
