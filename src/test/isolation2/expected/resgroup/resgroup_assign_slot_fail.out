@@ -7,7 +7,7 @@ DROP ROLE IF EXISTS role_test;
 DROP
 -- start_ignore
 DROP RESOURCE GROUP rg_test;
-DROP
+ERROR:  resource group "rg_test" does not exist
 -- end_ignore
 CREATE RESOURCE GROUP rg_test WITH (concurrency=2, cpu_rate_limit=10, memory_limit=10);
 CREATE
@@ -20,10 +20,20 @@ SET
 BEGIN
 2: SET ROLE role_test;
 SET
-SELECT gp_inject_fault('resgroup_assgined_on_master', 'error', 1);
-ERROR:  Failure: could not insert fault injection, entry already exists (gp_inject_fault.c:67)
+-- start_ignore
+SELECT gp_inject_fault('resgroup_assigned_on_master', 'reset', 1);
+gp_inject_fault
+---------------
+t              
+(1 row)
+SELECT gp_inject_fault('resgroup_assigned_on_master', 'error', 1);
+gp_inject_fault
+---------------
+t              
+(1 row)
+-- end_ignore
 2: BEGIN;
-BEGIN
+ERROR:  fault triggered, fault name:'resgroup_assigned_on_master' fault type:'error'
 2: BEGIN;
 BEGIN
 1: END;

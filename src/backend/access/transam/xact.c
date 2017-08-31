@@ -2236,7 +2236,15 @@ StartTransaction(void)
 		SIMPLE_FAULT_INJECTOR(TransactionStartUnderEntryDbSingleton);
 	}
 
-	/* Acquire a resource group slot at the beginning of a transaction */
+	/*
+	 * Acquire a resource group slot.
+	 *
+	 * AssignResGroupOnMaster() might throw error, so call it before touch
+	 * transaction state.
+	 * Slot is successfully acquired when AssignResGroupOnMaster() is returned,
+	 * this slot will be release when transaction is committed or abortted,
+	 * so don't error out before transaction state is set to TRANS_START.
+	 */
 	if (ShouldAssignResGroupOnMaster())
 		AssignResGroupOnMaster();
 
