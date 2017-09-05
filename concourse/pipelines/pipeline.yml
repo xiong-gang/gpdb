@@ -12,7 +12,11 @@ groups:
   - icw_gporca_centos7
   - icw_gporca_sles11
   - icw_planner_ictcp_centos6
+<<<<<<< f819890bf0ebcc3bb39db810f7f0d930a7cbb5f3
   - mpp_resource_group
+=======
+  - icw_resource_group
+>>>>>>> Resgroup pipeline
   - MU_check_centos
   - MM_gpperfmon
   - MM_gpcheck
@@ -69,9 +73,13 @@ groups:
 
 - name: Adopted CCP
   jobs:
+<<<<<<< f819890bf0ebcc3bb39db810f7f0d930a7cbb5f3
   - cs_walrep_1
   - cs_walrep_2
   - mpp_resource_group
+=======
+  - icw_resource_group
+>>>>>>> Resgroup pipeline
   - DPM_backup-restore
   - MM_gppkg
   - MM_gprecoverseg
@@ -765,7 +773,11 @@ jobs:
       BLDWRAP_POSTGRES_CONF_ADDONS: "fsync=off"
       TEST_OS: centos
 
+<<<<<<< f819890bf0ebcc3bb39db810f7f0d930a7cbb5f3
 - name: mpp_resource_group
+=======
+- name: icw_resource_group
+>>>>>>> Resgroup pipeline
   plan:
   - aggregate:
     - get: gpdb_src
@@ -1795,7 +1807,11 @@ jobs:
     - icw_gporca_centos7
     - icw_gporca_sles11
     - icw_planner_ictcp_centos6
+<<<<<<< f819890bf0ebcc3bb39db810f7f0d930a7cbb5f3
     - mpp_resource_group
+=======
+    - icw_resource_group
+>>>>>>> Resgroup pipeline
     - MU_check_centos
     - MM_analyzedb
     - MM_gpinitsystem
