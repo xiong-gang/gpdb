@@ -1155,8 +1155,6 @@ getSlot(ResGroupData *group)
 	caps = &group->caps;
 
 	/* First check if the concurrency limit is reached */
-	Assert(caps->concurrency.proposed > 0);
-
 	if (group->nRunning >= caps->concurrency.proposed)
 		return InvalidSlotId;
 
@@ -1263,11 +1261,21 @@ ResGroupSlotAcquire(void)
 
 	Assert(MyResGroupProcInfo->groupId == InvalidOid);
 
-	groupId = GetResGroupIdForRole(GetUserId());
-	if (groupId == InvalidOid)
-		groupId = superuser() ? ADMINRESGROUP_OID : DEFAULTRESGROUP_OID;
-
 retry:
+	/* always find out the up-to-date resgroup id */
+	PG_TRY();
+	{
+		groupId = GetResGroupIdForRole(GetUserId());
+		if (groupId == InvalidOid)
+			groupId = superuser() ? ADMINRESGROUP_OID : DEFAULTRESGROUP_OID;
+	}
+	PG_CATCH();
+	{
+		MyResGroupSharedInfo = NULL;
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 
 	group = ResGroupHashFind(groupId);
@@ -1295,6 +1303,7 @@ retry:
 	{
 		Assert(group->nRunning == 0);
 		ResGroupWait(group, true);
+		Assert(MyProc->resSlotId == InvalidSlotId);
 
 		/* retry if the drop resource group transaction is finished */
 		retried = true;
@@ -1309,35 +1318,32 @@ retry:
 
 		/* so try to get one directly */
 		MyProc->resSlotId = getSlot(group);
-
-		/* if can't get one */
-		if (MyProc->resSlotId == InvalidSlotId)
-		{
-			/* then wait one from some others */
-			ResGroupWait(group, true);
-			LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
-
-			Assert(MyProc->resSlotId != InvalidSlotId);
-		}
-
-		group->totalExecuted++;
-		LWLockRelease(ResGroupLock);
-		pgstat_report_resgroup(0, group->groupId);
-		Assert(MyProc->resSlotId != InvalidSlotId);
-		return MyProc->resSlotId;
 	}
 
-	/* We have to wait for the slot */
-	ResGroupWait(group, false);
+	/* if can't get one */
+	if (MyProc->resSlotId == InvalidSlotId)
+	{
+		/* then wait one from some others */
+		ResGroupWait(group, false);
+		LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
+		addTotalQueueDuration(group);
+	}
+
+	if (MyProc->resSlotId == InvalidSlotId)
+	{
+		/* the resource group might be dropped, retry */
+		LWLockRelease(ResGroupLock);
+		retried = true;
+		goto retry;
+	}
 
 	/*
 	 * The waking process has granted us the slot.
 	 * Update the statistic information of the resource group.
 	 */
-	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 	group->totalExecuted++;
-	addTotalQueueDuration(group);
 	LWLockRelease(ResGroupLock);
+	pgstat_report_resgroup(0, group->groupId);
 	Assert(MyProc->resSlotId != InvalidSlotId);
 	return MyProc->resSlotId;
 }
@@ -1693,7 +1699,7 @@ groupReleaseMemQuota(ResGroupData *group, ResGroupSlotData *slot)
 	memQuotaNeedFree = group->memQuotaGranted - groupGetMemQuotaExpected(caps);
 	memQuotaToFree = memQuotaNeedFree > 0 ? Min(memQuotaNeedFree, slot->memQuota) : 0;
 
-	if (caps->concurrency.proposed >= group->nRunning)
+	if (caps->concurrency.proposed > 0)
 	{
 		/*
 		 * Under this situation, when this slot is released,
@@ -2391,7 +2397,7 @@ ResGroupGetMemInfo(int *memLimit, int *slotQuota, int *sharedQuota)
 	const ResGroupCaps *caps = &procInfo->caps;
 
 	*memLimit = groupGetMemExpected(caps);
-	*slotQuota = slotGetMemQuotaExpected(caps);
+	*slotQuota = caps->concurrency.proposed ? slotGetMemQuotaExpected(caps) : -1;
 	*sharedQuota = groupGetMemSharedExpected(caps);
 }
 
