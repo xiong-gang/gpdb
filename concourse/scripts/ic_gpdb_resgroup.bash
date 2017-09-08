@@ -46,7 +46,7 @@ run_resgroup_test() {
         ssh sdw1 \"mkdir -p /home/gpadmin/gpdb_src/src/test/isolation2\";\
         scp /home/gpadmin/gpdb_src/src/test/regress/regress.so gpadmin@sdw1:/home/gpadmin/gpdb_src/src/test/regress/ ; \
         cd /home/gpadmin/gpdb_src; \
-        make installcheck-resgroup; \
+        make installcheck-world; \
 		)'"
 }
 prepare_cgroups ccp-${CLUSTER_NAME}-0
