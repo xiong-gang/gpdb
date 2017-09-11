@@ -1273,9 +1273,12 @@ retry:
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 	group = ResGroupHashFind(groupId);
 	if (group == NULL)
+	{
+		LWLockRelease(ResGroupLock);
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
 				 errmsg("Cannot find resource group %d in shared memory", groupId)));
+	}
 
 	MyResGroupSharedInfo = group;
 
@@ -2134,9 +2137,9 @@ ResGroupWait(ResGroupData *group)
 
 			CHECK_FOR_INTERRUPTS();
 
-			if (!MyProc->resWaiting)
+			if (!proc->resWaiting)
 				break;
-			WaitLatch(&MyProc->procLatch, WL_LATCH_SET | WL_POSTMASTER_DEATH, -1);
+			WaitLatch(&proc->procLatch, WL_LATCH_SET | WL_POSTMASTER_DEATH, -1);
 		}
 	}
 	PG_CATCH();
