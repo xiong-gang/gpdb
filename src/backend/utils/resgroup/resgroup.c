@@ -1317,7 +1317,7 @@ retry:
 	/*
 	 * wait on the queue
 	 * slot will be assigned by the proc wakes me up
-	 * if it's waken up by DROP RESOURCE GROUP statement, the
+	 * if i am waken up by DROP RESOURCE GROUP statement, the
 	 * resSlotId will be InvalidSlotId.
 	 */
 	ResGroupWait(group);
