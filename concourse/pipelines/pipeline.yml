@@ -459,23 +459,15 @@ resources:
 ## ======================================================================
 ## reusable anchors
 ## ======================================================================
-ccp_create_params_anchor: &ccp_create_common_params
+ccp_create_params_anchor: &ccp_default_params
   action: create
   delete_on_failure: true
   generate_random_name: true
   terraform_source: ccp_src/aws/
 
-ccp_create_params_anchor: &ccp_create_params_centos6
-  <<: *ccp_common
-  vars:
-    aws_instance-node-instance_type: t2.medium
-    platform: centos6
-
-ccp_create_params_anchor: &ccp_create_params_centos7
-  <<: *ccp_common
-  vars:
-    aws_instance-node-instance_type: t2.medium
-    platform: centos7
+ccp_vars_anchor: &ccp_default_vars
+  aws_instance-node-instance_type: t2.medium
+  platform: centos6
 
 ccp_destroy_anchor: &ccp_destroy
   put: terraform
@@ -790,7 +782,9 @@ jobs:
     - get: centos-gpdb-dev-6
   - put: terraform
     params:
-      <<: *ccp_create_params_centos6
+      <<: *ccp_default_params
+      vars:
+        <<: *ccp_default_vars
   - task: gen_cluster
     file: ccp_src/ci/tasks/gen_cluster.yml
     input_mapping:
@@ -819,7 +813,10 @@ jobs:
     - get: centos-gpdb-dev-7
   - put: terraform
     params:
-      <<: *ccp_create_params_centos7
+      <<: *ccp_default_params
+      vars:
+        <<: *ccp_default_vars
+        platform: centos7
   - task: gen_cluster
     file: ccp_src/ci/tasks/gen_cluster.yml
     input_mapping:
@@ -945,7 +942,9 @@ jobs:
     - get: centos-gpdb-dev-6
   - put: terraform
     params:
-      <<: *ccp_create_params_centos6
+      <<: *ccp_default_params
+      vars:
+        <<: *ccp_default_vars
   - task: gen_cluster
     file: ccp_src/ci/tasks/gen_cluster.yml
     on_failure:
@@ -978,7 +977,9 @@ jobs:
     - get: centos-gpdb-dev-6
   - put: terraform
     params:
-      <<: *ccp_create_params_centos6
+      <<: *ccp_default_params
+      vars:
+        <<: *ccp_default_vars
   - task: setup_gpdb4
     config:
       platform: linux
@@ -1067,7 +1068,9 @@ jobs:
     - get: centos-gpdb-dev-6
   - put: terraform
     params:
-      <<: *ccp_create_params_centos6
+      <<: *ccp_default_params
+      vars:
+        <<: *ccp_default_vars
   - task: gen_cluster
     file: ccp_src/ci/tasks/gen_cluster.yml
     on_failure:
@@ -1224,7 +1227,9 @@ jobs:
     - get: centos-gpdb-dev-6
   - put: terraform
     params:
-      <<: *ccp_create_params_centos6
+      <<: *ccp_default_params
+      vars:
+        <<: *ccp_default_vars
   - task: gen_cluster
     file: ccp_src/ci/tasks/gen_cluster.yml
     on_failure:
@@ -1251,7 +1256,9 @@ jobs:
     - get: centos-gpdb-dev-6
   - put: terraform
     params:
-      <<: *ccp_create_params_centos6
+      <<: *ccp_default_params
+      vars:
+        <<: *ccp_default_vars
   - task: gen_cluster
     file: ccp_src/ci/tasks/gen_cluster.yml
     on_failure:
@@ -1561,7 +1568,9 @@ jobs:
     - get: centos-gpdb-dev-6
   - put: terraform
     params:
-      <<: *ccp_create_params_centos6
+      <<: *ccp_default_params
+      vars:
+        <<: *ccp_default_vars
   - task: gen_cluster
     file: ccp_src/ci/tasks/gen_cluster.yml
     on_failure:
@@ -1591,7 +1600,9 @@ jobs:
     - get: centos-gpdb-dev-6
   - put: terraform
     params:
-      <<: *ccp_create_params_centos6
+      <<: *ccp_default_params
+      vars:
+        <<: *ccp_default_vars
   - task: gen_cluster
     file: ccp_src/ci/tasks/gen_cluster.yml
     on_failure:
@@ -1850,7 +1861,8 @@ jobs:
     - icw_gporca_centos7
     - icw_gporca_sles11
     - icw_planner_ictcp_centos6
-    - mpp_resource_group
+    - mpp_resource_group_centos6
+    - mpp_resource_group_centos7
     - MU_check_centos
     - MM_analyzedb
     - MM_gpinitsystem
