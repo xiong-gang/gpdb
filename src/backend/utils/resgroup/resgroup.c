@@ -1217,7 +1217,6 @@ getSlot(ResGroupData *group)
 	/* Calculate the expected per slot quota */
 	slotMemQuota = slotGetMemQuotaExpected(caps);
 
-	Assert(slotMemQuota > 0);
 	Assert(group->memQuotaUsed >= 0);
 	Assert(group->memQuotaUsed <= group->memQuotaGranted);
 
@@ -1268,7 +1267,6 @@ putSlot(void)
 	selfUnsetSlot();
 
 	Assert(slot->inUse);
-	Assert(slot->memQuota > 0);
 
 	/* Return the memory quota granted to this slot */
 #ifdef USE_ASSERT_CHECKING
@@ -1628,7 +1626,7 @@ static int32
 slotGetMemQuotaExpected(const ResGroupCaps *caps)
 {
 	Assert(caps->concurrency.proposed != 0);
-	return Max(1, groupGetMemQuotaExpected(caps) / caps->concurrency.proposed);
+	return groupGetMemQuotaExpected(caps) / caps->concurrency.proposed;
 }
 
 /*
@@ -2114,8 +2112,6 @@ SwitchResGroupOnSegment(const char *buf, int len)
 	selfAttachToSlot(group, slot);
 
 	ResGroupSetMemorySpillRatio(&caps);
-	//TODO: delete
-	Assert(slot->memQuota > 0);
 
 	groupAcquireMemQuota(group, &slot->caps);
 	LWLockRelease(ResGroupLock);
