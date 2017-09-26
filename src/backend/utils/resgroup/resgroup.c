@@ -211,6 +211,7 @@ static int32 groupIncMemUsage(ResGroupData *group,
 static void groupDecMemUsage(ResGroupData *group,
 							 ResGroupSlotData *slot,
 							 int32 chunks);
+static void initSlot(ResGroupSlotData *slot, ResGroupCaps *caps, int sessionId);
 static void selfAttachToSlot(ResGroupData *group, ResGroupSlotData *slot);
 static void selfDetachSlot(ResGroupData *group, ResGroupSlotData *slot);
 static int getFreeSlot(ResGroupData *group);
@@ -1131,26 +1132,37 @@ groupDecMemUsage(ResGroupData *group, ResGroupSlotData *slot, int32 chunks)
 	}
 }
 
+/*
+ * Attach a process (QD or QE) to a slot.
+ */
 static void
 selfAttachToSlot(ResGroupData *group, ResGroupSlotData *slot)
 {
+	AssertImply(slot->nProcs == 0, slot->memUsage == 0);
 	groupIncMemUsage(group, slot, self->memUsage);
 	slot->nProcs++;
 }
 
+/*
+ * Detach a process (QD or QE) from a slot.
+ */
 static void
 selfDetachSlot(ResGroupData *group, ResGroupSlotData *slot)
 {
 	groupDecMemUsage(group, slot, self->memUsage);
 	slot->nProcs--;
+	AssertImply(slot->nProcs == 0, slot->memUsage == 0);
 }
 
+/*
+ * Initialize the members of a slot
+ */
 static void
-initSlot(ResGroupSlotData *slot, ResGroupCaps *caps)
+initSlot(ResGroupSlotData *slot, ResGroupCaps *caps, int sessionId)
 {
 	Assert(slot->inUse);
 
-	slot->sessionId = gp_session_id;
+	slot->sessionId = sessionId;
 	slot->caps = *caps;
 	slot->memQuota = slotGetMemQuotaExpected(caps);
 	slot->memUsage = 0;
@@ -1236,7 +1248,6 @@ getSlot(ResGroupData *group)
 	slotId = getFreeSlot(group);
 	Assert(slotId != InvalidSlotId);
 
-	initSlot(&group->slots[slotId], caps);
 	group->nRunning++;
 
 	return slotId;
@@ -1340,6 +1351,7 @@ retry:
 		if (slotId != InvalidSlotId)
 		{
 			/* got one, lucky */
+			initSlot(&group->slots[slotId], &group->caps, gp_session_id);
 			selfSetSlot(slotId);
 
 			group->totalExecuted++;
@@ -1662,6 +1674,7 @@ wakeupSlots(ResGroupData *group)
 		Assert(waitProc->resWaiting != false);
 		Assert(waitProc->resSlotId == InvalidSlotId);
 
+		initSlot(&group->slots[slotId], &group->caps, waitProc->mppSessionId);
 		waitProc->resWaiting = false;
 		waitProc->resSlotId = slotId;
 		SetLatch(&waitProc->procLatch);
@@ -1830,6 +1843,7 @@ ResGroupSlotRelease(void)
 		Assert(waitProc->resWaiting != false);
 		Assert(waitProc->resSlotId == InvalidSlotId);
 
+		initSlot(&group->slots[slotId], &group->caps, waitProc->mppSessionId);
 		waitProc->resSlotId = slotId;	/* pass the slot to new query */
 		waitProc->resWaiting = false;
 		SetLatch(&waitProc->procLatch);
@@ -2023,19 +2037,22 @@ UnassignResGroup(void)
 		ResGroupSlotRelease();
 		Assert(!selfHasSlot());
 	}
-	else if (slot->nProcs == 0)
+	else
 	{
 		Assert(Gp_role == GP_ROLE_EXECUTE);
-
-		/* Release the slot memory */
-		groupReleaseMemQuota(group, slot);
-
-		/* Mark the slot as free */
 		selfUnsetSlot();
-		slot->inUse = false;
 
-		/* And finally decrease nRunning */
-		group->nRunning--; 
+		if (slot->nProcs == 0)
+		{
+			/* Release the slot memory */
+			groupReleaseMemQuota(group, slot);
+
+			/* Mark the slot as free */
+			slot->inUse = false;
+
+			/* And finally decrease nRunning */
+			group->nRunning--;
+		}
 	}
 
 	/* Cleanup group */
@@ -2096,17 +2113,17 @@ SwitchResGroupOnSegment(const char *buf, int len)
 	Assert(selfHasSlot());
 
 	/* Init slot */
-	slot = &group->slots[self->slotId];
+	slot = self->slot;
 	if (slot->nProcs != 0)
 	{
-		Assert(slot->sessionId = gp_session_id);
-		Assert(slot->memQuota = slotGetMemQuotaExpected(&caps));
+		Assert(slot->sessionId == gp_session_id);
+		Assert(slot->memQuota == slotGetMemQuotaExpected(&caps));
 	}
 	else
 	{
 		Assert(!slot->inUse);
 		slot->inUse = true;
-		initSlot(slot, &caps);
+		initSlot(slot, &caps, gp_session_id);
 		group->nRunning++;
 	}
 	selfAttachToSlot(group, slot);
