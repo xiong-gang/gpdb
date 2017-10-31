@@ -76,18 +76,11 @@ typedef void (*ResourceGroupCallback) (bool isCommit, void *arg);
  */
 typedef struct ResourceGroupCallbackItem
 {
-	struct ResourceGroupCallbackItem *next;
-	struct ResourceGroupCallbackItem *prev;
 	ResourceGroupCallback callback;
 	void *arg;
 } ResourceGroupCallbackItem;
 
-static ResourceGroupCallbackItem ResourceGroup_callbacks_head =
-{
-	&ResourceGroup_callbacks_head, &ResourceGroup_callbacks_head, NULL, NULL
-};
-
-static ResourceGroupCallbackItem *ResourceGroup_callbacks = &ResourceGroup_callbacks_head;
+static ResourceGroupCallbackItem *ResourceGroup_callback = NULL;
 
 static int str2Int(const char *str, const char *prop);
 static ResGroupLimitType getResgroupOptionType(const char* defname);
@@ -105,54 +98,32 @@ static void registerResourceGroupCallback(ResourceGroupCallback callback, void *
 
 /*
  * Register callback functions for resource group related operations.
- *
- * At transaction end, the callback occurs post-commit or post-abort, so the
- * callback functions can only do non-critical cleanup.
  */
 static void
 registerResourceGroupCallback(ResourceGroupCallback callback, void *arg)
 {
-	ResourceGroupCallbackItem *item;
-
-	item = (ResourceGroupCallbackItem *)
+	ResourceGroup_callback = (ResourceGroupCallbackItem *)
 		MemoryContextAlloc(TopMemoryContext,
 						   sizeof(ResourceGroupCallbackItem));
-	item->callback = callback;
-	item->arg = arg;
-
-	item->prev = ResourceGroup_callbacks->prev;
-	item->next = ResourceGroup_callbacks;
-	item->prev->next = item;
-	item->next->prev = item;
+	ResourceGroup_callback->callback = callback;
+	ResourceGroup_callback->arg = arg;
 }
 
 /*
  * Call resource group related callback functions at transaction end.
- *
- * On COMMIT, the callback functions are processed as FIFO.
- * On ABORT,  the callback functions are processed as LIFO.
  *
  * Note the callback functions would be removed as being processed.
  */
 void
 AtEOXact_ResGroup(bool isCommit)
 {
-	ResourceGroupCallbackItem *current =
-		isCommit ? ResourceGroup_callbacks->next : ResourceGroup_callbacks->prev;
-	while (current != ResourceGroup_callbacks)
-	{
-		ResourceGroupCallbackItem *tmp = isCommit? current->next : current->prev;
+	if (ResourceGroup_callback == NULL)
+		return;
 
-		ResourceGroupCallback callback = current->callback;
-		void *arg =  current->arg;
+	ResourceGroup_callback->callback(isCommit, ResourceGroup_callback->arg);
 
-		current->prev->next = current->next;
-		current->next->prev = current->prev;
-		pfree(current);
-		current = tmp;
-
-		callback(isCommit, arg);
-	}
+	pfree(ResourceGroup_callback);
+	ResourceGroup_callback = NULL;
 }
 
 /*
