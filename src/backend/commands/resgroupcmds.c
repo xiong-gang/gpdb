@@ -49,6 +49,7 @@
 #define RESGROUP_MAX_CPU_RATE_LIMIT	(100)
 
 #define RESGROUP_MIN_MEMORY_LIMIT	(1)
+#define RESGROUP_MAX_MEMORY_LIMIT	(100)
 
 #define RESGROUP_MIN_MEMORY_SHARED_QUOTA	(0)
 #define RESGROUP_MAX_MEMORY_SHARED_QUOTA	(100)
@@ -85,6 +86,8 @@ static ResourceGroupCallbackItem *ResourceGroup_callback = NULL;
 static int str2Int(const char *str, const char *prop);
 static ResGroupLimitType getResgroupOptionType(const char* defname);
 static const char * getResgroupOptionName(ResGroupLimitType type);
+static int getResGroupCapValue(DefElem *defel);
+static void checkResGroupCapLimit(ResGroupLimitType type, int value);
 static void parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupOpts *options);
 static void validateCapabilities(Relation rel, Oid groupid, ResGroupOpts *options, bool newGroup);
 static void insertResgroupCapabilityEntry(Relation rel, Oid groupid, uint16 type, char *value);
@@ -393,11 +396,6 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	SysScanDesc	sscan;
 	Oid			groupid;
 	ResourceGroupAlterCallbackContext *callbackCtx;
-	int			concurrency = -1;
-	int			cpuRateLimitNew = -1;
-	int			memSharedQuotaNew = -1;
-	int			memSpillRatioNew = -1;
-	int			memLimitNew = -1;
 	DefElem		*defel;
 	ResGroupLimitType	limitType;
 	ResGroupCaps		caps;
@@ -414,84 +412,13 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	defel = (DefElem *) lfirst(list_head(stmt->options));
 
 	limitType = getResgroupOptionType(defel->defname);
+	if (limitType == RESGROUP_LIMIT_TYPE_UNKNOWN)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("option \"%s\" not recognized", defel->defname)));
 
-	switch (limitType)
-	{
-		case RESGROUP_LIMIT_TYPE_CONCURRENCY:
-			concurrency = defGetInt64(defel);
-			if (concurrency < RESGROUP_MIN_CONCURRENCY)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("concurrency limit cannot be less than %d",
-								RESGROUP_MIN_CONCURRENCY)));
-			if (concurrency > RESGROUP_MAX_CONCURRENCY)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("concurrency limit cannot be greater than 'max_connections'")));
-			break;
-
-		case RESGROUP_LIMIT_TYPE_CPU:
-			cpuRateLimitNew = defGetInt64(defel);
-			if (cpuRateLimitNew < RESGROUP_MIN_CPU_RATE_LIMIT)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("cpu rate limit cannot be less than %d",
-								RESGROUP_MIN_CPU_RATE_LIMIT)));
-			if (cpuRateLimitNew > RESGROUP_MAX_CPU_RATE_LIMIT)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("cpu rate limit cannot be greater than %d",
-								RESGROUP_MAX_CPU_RATE_LIMIT)));
-			/* overall limit will be verified later after groupid is known */
-			break;
-
-		case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-			memSharedQuotaNew = defGetInt64(defel);
-			if (memSharedQuotaNew < RESGROUP_MIN_MEMORY_SHARED_QUOTA)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("memory shared quota cannot be less than %d",
-								RESGROUP_MIN_MEMORY_SHARED_QUOTA)));
-			if (memSharedQuotaNew > RESGROUP_MAX_MEMORY_SHARED_QUOTA)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("memory shared quota cannot be greater than %d",
-								RESGROUP_MAX_MEMORY_SHARED_QUOTA)));
-			break;
-
-		case RESGROUP_LIMIT_TYPE_MEMORY:
-			memLimitNew = defGetInt64(defel);
-			if (memLimitNew < RESGROUP_MIN_MEMORY_LIMIT)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("memory limit cannot be less than %d",
-								RESGROUP_MIN_MEMORY_LIMIT)));
-			if (memLimitNew > RESGROUP_MAX_MEMORY_LIMIT)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("memory limit cannot be greater than %d",
-								RESGROUP_MAX_MEMORY_LIMIT)));
-			/* overall limit will be verified later after groupid is known */
-			break;
-		case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-			memSpillRatioNew = defGetInt64(defel);
-			if (memSpillRatioNew < RESGROUP_MIN_MEMORY_SPILL_RATIO)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("memory spill ratio cannot be less than %d",
-								RESGROUP_MIN_MEMORY_SPILL_RATIO)));
-			if (memSpillRatioNew > RESGROUP_MAX_MEMORY_SPILL_RATIO)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_LIMIT_VALUE),
-						 errmsg("memory spill ratio cannot be greater than %d",
-								RESGROUP_MAX_MEMORY_SPILL_RATIO)));
-			break;
-
-		default:
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("unsupported resource group limit type '%s'", defel->defname)));
-	}
+	value = getResGroupCapValue(defel);
+	checkResGroupCapLimit(limitType, value);
 
 	/*
 	 * Check the pg_resgroup relation to be certain the resource group already
@@ -519,7 +446,7 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	heap_close(pg_resgroup_rel, NoLock);
 
 	if (limitType == RESGROUP_LIMIT_TYPE_CONCURRENCY &&
-		concurrency == 0 &&
+		value == 0 &&
 		groupid == ADMINRESGROUP_OID)
 	{
 		ereport(ERROR,
@@ -555,37 +482,37 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	switch (limitType)
 	{
 		case RESGROUP_LIMIT_TYPE_CONCURRENCY:
-			opts.concurrency = concurrency;
+			opts.concurrency = value;
 			ResGroupDecideConcurrencyCaps(groupid, &caps, &opts);
 			break;
 
 		case RESGROUP_LIMIT_TYPE_CPU:
-			opts.cpuRateLimit = cpuRateLimitNew;
-			if (caps.cpuRateLimit.proposed < cpuRateLimitNew)
+			opts.cpuRateLimit = value;
+			if (caps.cpuRateLimit.proposed < value)
 				validateCapabilities(pg_resgroupcapability_rel,
 									 groupid, &opts, false);
 
-			caps.cpuRateLimit.value = cpuRateLimitNew;
-			caps.cpuRateLimit.proposed = cpuRateLimitNew;
+			caps.cpuRateLimit.value = value;
+			caps.cpuRateLimit.proposed = value;
 			break;
 
 		case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-			opts.memSharedQuota = memSharedQuotaNew;
+			opts.memSharedQuota = value;
 
 			ResGroupDecideMemoryCaps(groupid, &caps, &opts);
 			break;
 
 		case RESGROUP_LIMIT_TYPE_MEMORY:
-			opts.memLimit = memLimitNew;
-			if (caps.memLimit.proposed < memLimitNew)
+			opts.memLimit = value;
+			if (caps.memLimit.proposed < value)
 				validateCapabilities(pg_resgroupcapability_rel,
 									 groupid, &opts, false);
 
 			ResGroupDecideMemoryCaps(groupid, &caps, &opts);
 			break;
 		case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-			caps.memSpillRatio.value = memSpillRatioNew;
-			caps.memSpillRatio.proposed = memSpillRatioNew;
+			caps.memSpillRatio.value = value;
+			caps.memSpillRatio.proposed = value;
 			break;
 
 		default:
@@ -842,6 +769,83 @@ getResgroupOptionName(ResGroupLimitType type)
 }
 
 /*
+ * Check if capability value exceeds max and min value
+ */
+static void
+checkResGroupCapLimit(ResGroupLimitType type, int value)
+{
+		switch (type)
+		{
+			case RESGROUP_LIMIT_TYPE_CONCURRENCY:
+				if (value < RESGROUP_MIN_CONCURRENCY ||
+					value > RESGROUP_MAX_CONCURRENCY)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("concurrency range is [%d, 'max_connections']",
+								   RESGROUP_MIN_CONCURRENCY)));
+				break;
+
+			case RESGROUP_LIMIT_TYPE_CPU:
+				if (value < RESGROUP_MIN_CPU_RATE_LIMIT ||
+					value > RESGROUP_MAX_CPU_RATE_LIMIT)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("cpu_rate_limit range is [%d, %d]",
+								   RESGROUP_MIN_CPU_RATE_LIMIT,
+								   RESGROUP_MAX_CPU_RATE_LIMIT)));
+				break;
+
+			case RESGROUP_LIMIT_TYPE_MEMORY:
+				if (value < RESGROUP_MIN_MEMORY_LIMIT ||
+					value > RESGROUP_MAX_MEMORY_LIMIT)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("memory_limit range is [%d, %d]",
+								   RESGROUP_MIN_MEMORY_LIMIT,
+								   RESGROUP_MAX_MEMORY_LIMIT)));
+				break;
+
+			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
+				if (value < RESGROUP_MIN_MEMORY_SHARED_QUOTA ||
+					value > RESGROUP_MAX_MEMORY_SHARED_QUOTA)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("memory_shared_quota range is [%d, %d]",
+								   RESGROUP_MIN_MEMORY_SHARED_QUOTA,
+								   RESGROUP_MAX_MEMORY_SHARED_QUOTA)));
+				break;
+
+			case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
+				if (value < RESGROUP_MIN_MEMORY_SPILL_RATIO ||
+					value > RESGROUP_MAX_MEMORY_SPILL_RATIO)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("memory_spill_ratio range is [%d, %d]",
+								   RESGROUP_MIN_MEMORY_SPILL_RATIO,
+								   RESGROUP_MAX_MEMORY_SPILL_RATIO)));
+				break;
+
+			default:
+				Assert(!"unexpected options");
+				break;
+		}
+}
+
+/*
+ * Get capability value from DefElem, convert from int64 to int
+ */
+static int
+getResGroupCapValue(DefElem *defel)
+{
+	int64 value = defGetInt64(defel);
+	if (value > INT_MAX)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("capability %s is too big", defel->defname)));
+	return (int)value;
+}
+
+/*
  * Parse a statement and store the settings in options.
  *
  * @param stmt     the statement
@@ -851,6 +855,7 @@ static void
 parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupOpts *options)
 {
 	ListCell *cell;
+	int value;
 	int types = 0;
 
 	foreach(cell, stmt->options)
@@ -871,60 +876,28 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupOpts *options)
 		else
 			types |= 1 << type;
 
+		value = getResGroupCapValue(defel);
+		checkResGroupCapLimit(type, value);
 		switch (type)
 		{
 			case RESGROUP_LIMIT_TYPE_CONCURRENCY:
-				options->concurrency = defGetInt64(defel);
-				if (options->concurrency < RESGROUP_MIN_CONCURRENCY ||
-					options->concurrency > RESGROUP_MAX_CONCURRENCY)
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							errmsg("concurrency range is [%d, 'max_connections']",
-								   RESGROUP_MIN_CONCURRENCY)));
+				options->concurrency = value;
 				break;
 
 			case RESGROUP_LIMIT_TYPE_CPU:
-				options->cpuRateLimit = defGetInt64(defel);
-				if (options->cpuRateLimit < RESGROUP_MIN_CPU_RATE_LIMIT ||
-					options->cpuRateLimit > RESGROUP_MAX_CPU_RATE_LIMIT)
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							errmsg("cpu_rate_limit range is [%d, %d]",
-								   RESGROUP_MIN_CPU_RATE_LIMIT,
-								   RESGROUP_MAX_CPU_RATE_LIMIT)));
+				options->cpuRateLimit = value;
 				break;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY:
-				options->memLimit = defGetInt64(defel);
-				if (options->memLimit < RESGROUP_MIN_MEMORY_LIMIT ||
-					options->memLimit > RESGROUP_MAX_MEMORY_LIMIT)
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							errmsg("memory_limit range is [%d, %d]",
-								   RESGROUP_MIN_MEMORY_LIMIT,
-								   RESGROUP_MAX_MEMORY_LIMIT)));
+				options->memLimit = value;
 				break;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-				options->memSharedQuota = defGetInt64(defel);
-				if (options->memSharedQuota < RESGROUP_MIN_MEMORY_SHARED_QUOTA ||
-					options->memSharedQuota > RESGROUP_MAX_MEMORY_SHARED_QUOTA)
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							errmsg("memory_shared_quota range is [%d, %d]",
-								   RESGROUP_MIN_MEMORY_SHARED_QUOTA,
-								   RESGROUP_MAX_MEMORY_SHARED_QUOTA)));
+				options->memSharedQuota = value;
 				break;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-				options->memSpillRatio = defGetInt64(defel);
-				if (options->memSpillRatio < RESGROUP_MIN_MEMORY_SPILL_RATIO ||
-					options->memSpillRatio > RESGROUP_MAX_MEMORY_SPILL_RATIO)
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							errmsg("memory_spill_ratio range is [%d, %d]",
-								   RESGROUP_MIN_MEMORY_SPILL_RATIO,
-								   RESGROUP_MAX_MEMORY_SPILL_RATIO)));
+				options->memSpillRatio = value;
 				break;
 
 			default:
@@ -933,7 +906,8 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupOpts *options)
 		}
 	}
 
-	if (options->memLimit == 0 || options->cpuRateLimit == 0)
+	if (!(types & (1 << RESGROUP_LIMIT_TYPE_CPU)) ||
+		!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY)))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				errmsg("must specify both memory_limit and cpu_rate_limit")));

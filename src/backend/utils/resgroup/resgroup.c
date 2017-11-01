@@ -998,7 +998,6 @@ ResGroupDecideConcurrencyCaps(Oid groupId,
 	/* If resource group is not in use we can always pick the new settings. */
 	if (!IsResGroupActivated())
 	{
-		caps->concurrency.value = opts->concurrency;
 		caps->concurrency.proposed = opts->concurrency;
 		return;
 	}

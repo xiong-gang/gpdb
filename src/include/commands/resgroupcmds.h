@@ -17,8 +17,6 @@
 #include "nodes/parsenodes.h"
 #include "utils/resgroup.h"
 
-#define RESGROUP_MAX_MEMORY_LIMIT	(100)
-
 extern void CreateResourceGroup(CreateResourceGroupStmt *stmt);
 extern void DropResourceGroup(DropResourceGroupStmt *stmt);
 extern void AlterResourceGroup(AlterResourceGroupStmt *stmt);
