@@ -402,8 +402,9 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	DefElem		*defel;
 	ResGroupLimitType	limitType;
 	ResGroupCaps		caps;
-	ResGroupCaps		oldCaps;
+	ResGroupCap			*capArray;
 	ResGroupCap			value;
+	ResGroupCap			oldValue;
 
 	/* Permission check - only superuser can alter resource groups. */
 	if (!superuser())
@@ -475,42 +476,15 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 
 	/* Load current resource group capabilities */
 	GetResGroupCapabilities(groupid, &caps);
-	oldCaps = caps;
 
-	switch (limitType)
-	{
-		case RESGROUP_LIMIT_TYPE_CONCURRENCY:
-			caps.concurrency = value;
-			break;
+	capArray = (ResGroupCap *) &caps;
+	oldValue = capArray[limitType];
+	capArray[limitType] = value;
 
-		case RESGROUP_LIMIT_TYPE_CPU:
-			caps.cpuRateLimit = value;
-			if (oldCaps.cpuRateLimit < value)
-				validateCapabilities(pg_resgroupcapability_rel,
-									 groupid, &caps, false);
-			break;
-
-		case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-			caps.memSharedQuota = value;
-			break;
-
-		case RESGROUP_LIMIT_TYPE_MEMORY:
-			caps.memLimit = value;
-			if (oldCaps.memLimit < value)
-				validateCapabilities(pg_resgroupcapability_rel,
-									 groupid, &caps, false);
-			break;
-
-		case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-			caps.memSpillRatio = value;
-			break;
-
-		default:
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("unsupported resource group limit type '%s'",
-							defel->defname)));
-	}
+	if ((limitType == RESGROUP_LIMIT_TYPE_CPU ||
+		 limitType == RESGROUP_LIMIT_TYPE_MEMORY) &&
+		oldValue < value)
+		validateCapabilities(pg_resgroupcapability_rel, groupid, &caps, false);
 
 	updateResgroupCapabilities(pg_resgroupcapability_rel,
 							   groupid, limitType, value);
@@ -847,7 +821,8 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupCaps *caps)
 {
 	ListCell *cell;
 	ResGroupCap value;
-	int types = 0;
+	ResGroupCap *capArray = (ResGroupCap *)caps;
+	int mask = 0;
 
 	foreach(cell, stmt->options)
 	{
@@ -859,57 +834,33 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupCaps *caps)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("option \"%s\" not recognized", defel->defname)));
 
-		if (types & (1 << type))
+		if (mask & (1 << type))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					errmsg("Find duplicate resoure group resource type: %s",
 						   defel->defname)));
 		else
-			types |= 1 << type;
+			mask |= 1 << type;
 
 		value = getResGroupCapValue(defel);
 		checkResGroupCapLimit(type, value);
-		switch (type)
-		{
-			case RESGROUP_LIMIT_TYPE_CONCURRENCY:
-				caps->concurrency = value;
-				break;
 
-			case RESGROUP_LIMIT_TYPE_CPU:
-				caps->cpuRateLimit = value;
-				break;
-
-			case RESGROUP_LIMIT_TYPE_MEMORY:
-				caps->memLimit = value;
-				break;
-
-			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-				caps->memSharedQuota = value;
-				break;
-
-			case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-				caps->memSpillRatio = value;
-				break;
-
-			default:
-				Assert(!"unexpected options");
-				break;
-		}
+		capArray[type] = value;
 	}
 
-	if (!(types & (1 << RESGROUP_LIMIT_TYPE_CPU)) ||
-		!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY)))
+	if (!(mask & (1 << RESGROUP_LIMIT_TYPE_CPU)) ||
+		!(mask & (1 << RESGROUP_LIMIT_TYPE_MEMORY)))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				errmsg("must specify both memory_limit and cpu_rate_limit")));
 
-	if (!(types & (1 << RESGROUP_LIMIT_TYPE_CONCURRENCY)))
+	if (!(mask & (1 << RESGROUP_LIMIT_TYPE_CONCURRENCY)))
 		caps->concurrency = RESGROUP_DEFAULT_CONCURRENCY;
 
-	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA)))
+	if (!(mask & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA)))
 		caps->memSharedQuota = RESGROUP_DEFAULT_MEM_SHARED_QUOTA;
 
-	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO)))
+	if (!(mask & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO)))
 		caps->memSpillRatio = RESGROUP_DEFAULT_MEM_SPILL_RATIO;
 }
 
