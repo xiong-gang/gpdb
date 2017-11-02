@@ -895,9 +895,9 @@ ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks, bool *waiverUsed)
 		selfUnassignDroppedGroup();
 		self->doMemCheck = false;
 
-		LOG_RESGROUP_DEBUG(LOG, "resource group is concurrently dropped while reserving memory: "
-						   "dropped group=%d, my group=%d",
-						   groupGroupId, selfGroupId);
+		LOG_RESGROUP_DEBUG(LOG, "resource group is concurrently dropped while "
+							"reserving memory: dropped group=%d, my group=%d",
+							groupGroupId, selfGroupId);
 
 		return true;
 	}
@@ -967,9 +967,9 @@ ResGroupReleaseMemory(int32 memoryChunks)
 		selfUnassignDroppedGroup();
 		self->doMemCheck = false;
 
-		LOG_RESGROUP_DEBUG(LOG, "resource group is concurrently dropped while releasing memory: "
-						   "dropped group=%d, my group=%d",
-						   groupGroupId, selfGroupId);
+		LOG_RESGROUP_DEBUG(LOG, "resource group is concurrently dropped while "
+							"releasing memory: dropped group=%d, my group=%d",
+							groupGroupId, selfGroupId);
 
 		return;
 	}
@@ -2014,8 +2014,10 @@ addTotalQueueDuration(ResGroupData *group)
 
 	TimestampTz start = pgstat_fetch_resgroup_queue_timestamp();
 	TimestampTz now = GetCurrentTimestamp();
-	Datum durationDatum = DirectFunctionCall2(timestamptz_age, TimestampTzGetDatum(now), TimestampTzGetDatum(start));
-	Datum sumDatum = DirectFunctionCall2(interval_pl, IntervalPGetDatum(&group->totalQueuedTime), durationDatum);
+	Datum durationDatum = DirectFunctionCall2(timestamptz_age,
+						TimestampTzGetDatum(now), TimestampTzGetDatum(start));
+	Datum sumDatum = DirectFunctionCall2(interval_pl,
+						IntervalPGetDatum(&group->totalQueuedTime), durationDatum);
 	memcpy(&group->totalQueuedTime, DatumGetIntervalP(sumDatum), sizeof(Interval));
 }
 
@@ -2488,7 +2490,10 @@ groupHashRemove(Oid groupId)
 
 	Assert(LWLockHeldExclusiveByMe(ResGroupLock));
 
-	entry = (ResGroupHashEntry*)hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_FIND, &found);
+	entry = (ResGroupHashEntry*)hash_search(pResGroupControl->htbl,
+											(void *) &groupId,
+											HASH_REMOVE,
+											&found);
 	if (!found)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -2500,8 +2505,6 @@ groupHashRemove(Oid groupId)
 	group->memQuotaGranted = 0;
 	group->memSharedGranted = 0;
 	group->groupId = InvalidOid;
-
-	hash_search(pResGroupControl->htbl, (void *) &groupId, HASH_REMOVE, &found);
 
 	wakeupGroups(groupId);
 }
@@ -2595,7 +2598,8 @@ groupSetMemorySpillRatio(const ResGroupCaps *caps)
 	char value[64];
 
 	snprintf(value, sizeof(value), "%d", caps->memSpillRatio.proposed);
-	set_config_option("memory_spill_ratio", value, PGC_USERSET, PGC_S_RESGROUP, GUC_ACTION_SET, true);
+	set_config_option("memory_spill_ratio", value, PGC_USERSET, PGC_S_RESGROUP,
+			GUC_ACTION_SET, true);
 }
 
 void
@@ -3287,7 +3291,8 @@ resgroupDumpCaps(StringInfo str, ResGroupCap *caps)
 	appendStringInfo(str, "\"caps\":[");
 	for (i = 1; i < RESGROUP_LIMIT_TYPE_COUNT; i++)
 	{
-		appendStringInfo(str, "{\"value\":%d,\"proposed\":%d}", caps[i].value, caps[i].proposed);
+		appendStringInfo(str, "{\"value\":%d,\"proposed\":%d}",
+						caps[i].value, caps[i].proposed);
 		if (i < RESGROUP_LIMIT_TYPE_COUNT - 1)
 			appendStringInfo(str, ",");
 	}

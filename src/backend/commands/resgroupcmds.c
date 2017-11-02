@@ -211,7 +211,7 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 	new_record[Anum_pg_resgroup_rsgname - 1] =
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->name));
 
-	new_record[Anum_pg_resgroup_parent - 1] = Int64GetDatum(0);
+	new_record[Anum_pg_resgroup_parent - 1] = ObjectIdGetDatum(0);
 
 	pg_resgroup_dsc = RelationGetDescr(pg_resgroup_rel);
 	tuple = heap_form_tuple(pg_resgroup_dsc, new_record, new_record_nulls);
@@ -469,7 +469,7 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	pg_resgroupcapability_rel = heap_open(ResGroupCapabilityRelationId,
 										  AccessExclusiveLock);
 
-	/* Load currency resource group capabilities */
+	/* Load current resource group capabilities */
 	GetResGroupCapabilities(groupid, &caps);
 
 	/* Pick up the effective settings from caps */
@@ -518,7 +518,8 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("unsupported resource group limit type '%s'", defel->defname)));
+					 errmsg("unsupported resource group limit type '%s'",
+							defel->defname)));
 	}
 
 	updateResgroupCapabilities(groupid, &caps);
@@ -535,7 +536,10 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 									NULL);
 	}
 
-	/* Bump command counter to make this change visible in the callback function alterResGroupCommitCallback() */
+	/*
+	 * Bump command counter to make this change visible in the callback
+	 * function alterResGroupCommitCallback()
+	 */
 	CommandCounterIncrement();
 
 	if (IsResGroupActivated())
@@ -609,11 +613,13 @@ GetResGroupCapabilities(Oid groupId, ResGroupCaps *resgroupCaps)
 
 		mask |= 1 << type;
 
-		valueDatum = heap_getattr(tuple, Anum_pg_resgroupcapability_value, relResGroupCapability->rd_att, &isNull);
+		valueDatum = heap_getattr(tuple, Anum_pg_resgroupcapability_value,
+								  relResGroupCapability->rd_att, &isNull);
 		value = TextDatumGetCString(valueDatum);
 		caps[type].value = str2Int(value, getResgroupOptionName(type));
 
-		proposedDatum = heap_getattr(tuple, Anum_pg_resgroupcapability_proposed, relResGroupCapability->rd_att, &isNull);
+		proposedDatum = heap_getattr(tuple, Anum_pg_resgroupcapability_proposed,
+									 relResGroupCapability->rd_att, &isNull);
 		proposed = TextDatumGetCString(proposedDatum);
 		caps[type].proposed = str2Int(proposed, getResgroupOptionName(type));
 	}
@@ -695,7 +701,8 @@ GetResGroupIdForRole(Oid roleid)
 	}
 
 	/* must access tuple before systable_endscan */
-	groupId = DatumGetObjectId(heap_getattr(tuple, Anum_pg_authid_rolresgroup, rel->rd_att, NULL));
+	groupId = DatumGetObjectId(heap_getattr(tuple, Anum_pg_authid_rolresgroup,
+							   rel->rd_att, NULL));
 
 	systable_endscan(sscan);
 
@@ -996,24 +1003,30 @@ insertResgroupCapabilities(Oid groupid,
 						   ResGroupOpts *options)
 {
 	char value[64];
-	Relation resgroup_capability_rel = heap_open(ResGroupCapabilityRelationId, RowExclusiveLock);
+	Relation resgroup_capability_rel;
 
+	resgroup_capability_rel = heap_open(ResGroupCapabilityRelationId, RowExclusiveLock);
 	validateCapabilities(resgroup_capability_rel, groupid, options, true);
 
 	sprintf(value, "%d", options->concurrency);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_CONCURRENCY, value);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+								  RESGROUP_LIMIT_TYPE_CONCURRENCY, value);
 
 	sprintf(value, "%d", options->cpuRateLimit);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_CPU, value);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+								  RESGROUP_LIMIT_TYPE_CPU, value);
 
 	sprintf(value, "%d", options->memLimit);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY, value);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+								  RESGROUP_LIMIT_TYPE_MEMORY, value);
 
 	sprintf(value, "%d", options->memSharedQuota);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA, value);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+								  RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA, value);
 
 	sprintf(value, "%d", options->memSpillRatio);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid, RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO, value);
+	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+								  RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO, value);
 
 	heap_close(resgroup_capability_rel, NoLock);
 }
@@ -1046,14 +1059,16 @@ updateResgroupCapabilities(Oid groupid, const ResGroupCaps *resgroupCaps)
 	 */
 	int			mask = 0;
 
-	Relation resgroupCapabilityRel = heap_open(ResGroupCapabilityRelationId, RowExclusiveLock);
+	Relation resgroupCapabilityRel;
 
+	resgroupCapabilityRel = heap_open(ResGroupCapabilityRelationId, RowExclusiveLock);
 	ScanKeyInit(&scankey,
 				Anum_pg_resgroupcapability_resgroupid,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(groupid));
 
-	sscan = systable_beginscan(resgroupCapabilityRel, ResGroupCapabilityResgroupidIndexId, true,
+	sscan = systable_beginscan(resgroupCapabilityRel,
+							   ResGroupCapabilityResgroupidIndexId, true,
 							   SnapshotNow, 1, &scankey);
 
 	MemSet(values, 0, sizeof(values));
@@ -1129,7 +1144,8 @@ validateCapabilities(Relation rel,
 	int totalCpu = options->cpuRateLimit;
 	int totalMem = options->memLimit;
 
-	sscan = systable_beginscan(rel, ResGroupCapabilityResgroupidIndexId, true, SnapshotNow, 0, NULL);
+	sscan = systable_beginscan(rel, ResGroupCapabilityResgroupidIndexId,
+							   true, SnapshotNow, 0, NULL);
 
 	while (HeapTupleIsValid(tuple = systable_getnext(sscan)))
 	{
@@ -1331,7 +1347,8 @@ GetResGroupNameForId(Oid oid, LOCKMODE lockmode)
 	if (HeapTupleIsValid(tuple))
 	{
 		bool isnull;
-		Datum nameDatum = heap_getattr(tuple, Anum_pg_resgroup_rsgname, rel->rd_att, &isnull);
+		Datum nameDatum = heap_getattr(tuple, Anum_pg_resgroup_rsgname,
+									   rel->rd_att, &isnull);
 		Assert (!isnull);
 		Name resGroupName = DatumGetName(nameDatum);
 		name = pstrdup(NameStr(*resGroupName));
