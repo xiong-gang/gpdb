@@ -391,15 +391,13 @@ error_out:
  * Allocate a resource group entry from a hash table
  */
 void
-AllocResGroupEntry(Oid groupId, const ResGroupOpts *opts)
+AllocResGroupEntry(Oid groupId, const ResGroupCaps *caps)
 {
 	ResGroupData	*group;
-	ResGroupCaps	caps;
 
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 
-	ResGroupOptsToCaps(opts, &caps);
-	group = createGroup(groupId, &caps);
+	group = ResGroupCreate(groupId, caps);
 	Assert(group != NULL);
 
 	LWLockRelease(ResGroupLock);
@@ -481,7 +479,7 @@ InitResGroups(void)
 		Oid groupId = HeapTupleGetOid(tuple);
 
 		GetResGroupCapabilities(groupId, &caps);
-		cpuRateLimit = caps.cpuRateLimit.value;
+		cpuRateLimit = caps.cpuRateLimit;
 
 		group = createGroup(groupId, &caps);
 		Assert(group != NULL);
@@ -654,7 +652,7 @@ ResGroupAlterOnCommit(Oid groupId,
 
 		if (limittype == RESGROUP_LIMIT_TYPE_CPU)
 		{
-			ResGroupOps_SetCpuRateLimit(groupId, caps->cpuRateLimit.proposed);
+			ResGroupOps_SetCpuRateLimit(groupId, caps->cpuRateLimit);
 		}
 		else
 		{
@@ -979,100 +977,6 @@ ResGroupReleaseMemory(int32 memoryChunks)
 	groupDecMemUsage(group, slot, memoryChunks);
 }
 
-/*
- * Decide the new resource group concurrency capabilities
- * of pg_resgroupcapability.
- *
- * The decision is based on current runtime information:
- * - 'proposed' will always be set to the latest setting;
- * - 'value' will be set to the most recent version of concurrency
- *   with which current nRunning doesn't exceed the limit;
- */
-void
-ResGroupDecideConcurrencyCaps(Oid groupId,
-							  ResGroupCaps *caps,
-							  const ResGroupOpts *opts)
-{
-	ResGroupData	*group;
-
-	/* If resource group is not in use we can always pick the new settings. */
-	if (!IsResGroupActivated())
-	{
-		caps->concurrency.proposed = opts->concurrency;
-		return;
-	}
-
-	LWLockAcquire(ResGroupLock, LW_SHARED);
-
-	group = groupHashFind(groupId, true);
-
-	/*
-	 * If the runtime usage information doesn't exceed the new setting
-	 * then we can pick this setting as the new 'value'.
-	 */
-	if (group->nRunning <= opts->concurrency)
-		caps->concurrency.value = opts->concurrency;
-
-	/* 'proposed' is always set with latest setting */
-	caps->concurrency.proposed = opts->concurrency;
-
-	LWLockRelease(ResGroupLock);
-}
-
-/*
- * Decide the new resource group memory capabilities
- * of pg_resgroupcapability.
- *
- * The decision is based on current runtime information:
- * - 'proposed' will always be set to the latest setting;
- * - 'value' will be set to the most recent version of memory settings
- *   with which current memory quota usage and memory shared usage
- *   doesn't exceed the limit;
- */
-void
-ResGroupDecideMemoryCaps(int groupId,
-						 ResGroupCaps *caps,
-						 const ResGroupOpts *opts)
-{
-	ResGroupData	*group;
-	ResGroupCaps	capsNew;
-
-	/* If resource group is not in use we can always pick the new settings. */
-	if (!IsResGroupActivated())
-	{
-		caps->memLimit.value = opts->memLimit;
-		caps->memLimit.proposed = opts->memLimit;
-
-		caps->memSharedQuota.value = opts->memSharedQuota;
-		caps->memSharedQuota.proposed = opts->memSharedQuota;
-
-		return;
-	}
-
-	LWLockAcquire(ResGroupLock, LW_SHARED);
-
-	group = groupHashFind(groupId, true);
-
-	ResGroupOptsToCaps(opts, &capsNew);
-	/*
-	 * If the runtime usage information doesn't exceed the new settings
-	 * then we can pick these settings as the new 'value's.
-	 */
-	if (opts->memLimit <= caps->memLimit.proposed &&
-		group->memQuotaUsed <= groupGetMemQuotaExpected(&capsNew) &&
-		group->memSharedUsage <= groupGetMemSharedExpected(&capsNew))
-	{
-		caps->memLimit.value = opts->memLimit;
-		caps->memSharedQuota.value = opts->memSharedQuota;
-	}
-
-	/* 'proposed' is always set with latest setting */
-	caps->memSharedQuota.proposed = opts->memSharedQuota;
-	caps->memLimit.proposed = opts->memLimit;
-
-	LWLockRelease(ResGroupLock);
-}
-
 int64
 ResourceGroupGetQueryMemoryLimit(void)
 {
@@ -1349,7 +1253,7 @@ groupGetSlot(ResGroupData *group)
 	caps = &group->caps;
 
 	/* First check if the concurrency limit is reached */
-	if (group->nRunning >= caps->concurrency.proposed)
+	if (group->nRunning >= caps->concurrency)
 		return NULL;
 
 	if (!groupReserveMemQuota(group))
@@ -1631,14 +1535,14 @@ groupApplyMemCaps(ResGroupData *group, const ResGroupCaps *caps)
 	/* memQuotaAvailable is the total free non-shared quota */
 	memQuotaAvailable = group->memQuotaGranted - group->memQuotaUsed;
 
-	if (caps->concurrency.proposed > group->nRunning)
+	if (caps->concurrency > group->nRunning)
 	{
 		/*
 		 * memQuotaNeeded is the total non-shared quota needed
 		 * by all the free slots
 		 */
 		memQuotaNeeded = slotGetMemQuotaExpected(caps) *
-			(caps->concurrency.proposed - group->nRunning);
+			(caps->concurrency - group->nRunning);
 
 		/*
 		 * if memQuotaToFree > 0 then we can safely release these
@@ -1793,7 +1697,7 @@ static int32
 groupGetMemExpected(const ResGroupCaps *caps)
 {
 	Assert(pResGroupControl->totalChunks > 0);
-	return pResGroupControl->totalChunks * caps->memLimit.proposed / 100;
+	return pResGroupControl->totalChunks * caps->memLimit / 100;
 }
 
 /*
@@ -1802,11 +1706,11 @@ groupGetMemExpected(const ResGroupCaps *caps)
 static int32
 groupGetMemQuotaExpected(const ResGroupCaps *caps)
 {
-	if (caps->concurrency.proposed > 0)
-		return slotGetMemQuotaExpected(caps) * caps->concurrency.proposed;
+	if (caps->concurrency > 0)
+		return slotGetMemQuotaExpected(caps) * caps->concurrency;
 	else
 		return groupGetMemExpected(caps) *
-			(100 - caps->memSharedQuota.proposed) / 100;
+			(100 - caps->memSharedQuota) / 100;
 }
 
 /*
@@ -1833,10 +1737,10 @@ groupGetMemSpillTotal(const ResGroupCaps *caps)
 static int32
 slotGetMemQuotaExpected(const ResGroupCaps *caps)
 {
-	Assert(caps->concurrency.proposed != 0);
+	Assert(caps->concurrency != 0);
 	return groupGetMemExpected(caps) *
-		(100 - caps->memSharedQuota.proposed) / 100 /
-		caps->concurrency.proposed;
+		(100 - caps->memSharedQuota) / 100 /
+		caps->concurrency;
 }
 
 /*
@@ -1845,8 +1749,8 @@ slotGetMemQuotaExpected(const ResGroupCaps *caps)
 static int32
 slotGetMemSpill(const ResGroupCaps *caps)
 {
-	Assert(caps->concurrency.proposed != 0);
-	return groupGetMemSpillTotal(caps) / caps->concurrency.proposed;
+	Assert(caps->concurrency != 0);
+	return groupGetMemSpillTotal(caps) / caps->concurrency;
 }
 
 /*
@@ -1957,7 +1861,7 @@ mempoolAutoRelease(ResGroupData *group, ResGroupSlotData *slot)
 	memQuotaNeedFree = group->memQuotaGranted - groupGetMemQuotaExpected(caps);
 	memQuotaToFree = memQuotaNeedFree > 0 ? Min(memQuotaNeedFree, slot->memQuota) : 0;
 
-	if (caps->concurrency.proposed > 0)
+	if (caps->concurrency > 0)
 	{
 		/*
 		 * Under this situation, when this slot is released,
@@ -2069,11 +1973,8 @@ SerializeResGroupInfo(StringInfo str)
 
 	for (i = 0; i < RESGROUP_LIMIT_TYPE_COUNT; i++)
 	{
-		tmp = htonl(caps[i].value);
-		appendBinaryStringInfo(str, (char *) &tmp, sizeof(caps[i].value));
-
-		tmp = htonl(caps[i].proposed);
-		appendBinaryStringInfo(str, (char *) &tmp, sizeof(caps[i].proposed));
+		tmp = htonl(caps[i]);
+		appendBinaryStringInfo(str, (char *) &tmp, sizeof(caps[i]));
 	}
 }
 
@@ -2099,13 +2000,9 @@ DeserializeResGroupInfo(struct ResGroupCaps *capsOut,
 
 	for (i = 0; i < RESGROUP_LIMIT_TYPE_COUNT; i++)
 	{
-		memcpy(&tmp, ptr, sizeof(caps[i].value));
-		caps[i].value = ntohl(tmp);
-		ptr += sizeof(caps[i].value);
-
-		memcpy(&tmp, ptr, sizeof(caps[i].proposed));
-		caps[i].proposed = ntohl(tmp);
-		ptr += sizeof(caps[i].proposed);
+		memcpy(&tmp, ptr, sizeof(caps[i]));
+		caps[i] = ntohl(tmp);
+		ptr += sizeof(caps[i]);
 	}
 
 	Assert(len == ptr - buf);
@@ -2315,7 +2212,7 @@ SwitchResGroupOnSegment(const char *buf, int len)
 
 	/* Init self */
 	Assert(host_segments > 0);
-	Assert(caps.concurrency.proposed > 0);
+	Assert(caps.concurrency > 0);
 	selfSetGroup(group);
 	self->caps = caps;
 
@@ -2597,7 +2494,7 @@ groupSetMemorySpillRatio(const ResGroupCaps *caps)
 {
 	char value[64];
 
-	snprintf(value, sizeof(value), "%d", caps->memSpillRatio.proposed);
+	snprintf(value, sizeof(value), "%d", caps->memSpillRatio);
 	set_config_option("memory_spill_ratio", value, PGC_USERSET, PGC_S_RESGROUP,
 			GUC_ACTION_SET, true);
 }
@@ -2608,39 +2505,8 @@ ResGroupGetMemInfo(int *memLimit, int *slotQuota, int *sharedQuota)
 	const ResGroupCaps *caps = &self->caps;
 
 	*memLimit = groupGetMemExpected(caps);
-	*slotQuota = caps->concurrency.proposed ? slotGetMemQuotaExpected(caps) : -1;
+	*slotQuota = caps->concurrency ? slotGetMemQuotaExpected(caps) : -1;
 	*sharedQuota = groupGetMemSharedExpected(caps);
-}
-
-/*
- * Convert ResGroupOpts to ResGroupCaps
- */
-void
-ResGroupOptsToCaps(const ResGroupOpts *optsIn, ResGroupCaps *capsOut)
-{
-	int i;
-	ResGroupCap		*caps = (ResGroupCap *) capsOut;
-	const int32		*opts = (int32 *) optsIn;
-
-	for (i = 0; i < RESGROUP_LIMIT_TYPE_COUNT; i++)
-	{
-		caps[i].value = opts[i];
-		caps[i].proposed = opts[i];
-	}
-}
-
-/*
- * Convert ResGroupCaps to ResGroupOpts
- */
-void
-ResGroupCapsToOpts(const ResGroupCaps *capsIn, ResGroupOpts *optsOut)
-{
-	int i;
-	const ResGroupCap	*caps = (ResGroupCap *) capsIn;
-	int32				*opts = (int32 *) optsOut;
-
-	for (i = 0; i < RESGROUP_LIMIT_TYPE_COUNT; i++)
-		opts[i] = caps[i].proposed;
 }
 
 /*
@@ -3291,8 +3157,7 @@ resgroupDumpCaps(StringInfo str, ResGroupCap *caps)
 	appendStringInfo(str, "\"caps\":[");
 	for (i = 1; i < RESGROUP_LIMIT_TYPE_COUNT; i++)
 	{
-		appendStringInfo(str, "{\"value\":%d,\"proposed\":%d}",
-						caps[i].value, caps[i].proposed);
+		appendStringInfo(str, "{\"%d\":%d}", i, caps[i]);
 		if (i < RESGROUP_LIMIT_TYPE_COUNT - 1)
 			appendStringInfo(str, ",");
 	}

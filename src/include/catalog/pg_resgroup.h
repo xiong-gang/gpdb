@@ -77,6 +77,13 @@ typedef enum ResGroupLimitType
 	RESGROUP_LIMIT_TYPE_COUNT,
 } ResGroupLimitType;
 
+/*
+ * TODO:
+ * Alter resource like memory and concurrency cannot take effect immediately,
+ * so we introduce `proposed` for each capability to implement progressively 
+ * change. Turns out we don't really need it and we should remove it in 6.0.
+ * For now, `value` always equals to `proposed`.
+ */
 CATALOG(pg_resgroupcapability,6439) BKI_SHARED_RELATION
 {
 	Oid		resgroupid;	/* OID of the group with this capability  */

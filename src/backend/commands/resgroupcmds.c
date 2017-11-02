@@ -86,13 +86,16 @@ static ResourceGroupCallbackItem *ResourceGroup_callback = NULL;
 static int str2Int(const char *str, const char *prop);
 static ResGroupLimitType getResgroupOptionType(const char* defname);
 static const char * getResgroupOptionName(ResGroupLimitType type);
-static int getResGroupCapValue(DefElem *defel);
-static void checkResGroupCapLimit(ResGroupLimitType type, int value);
-static void parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupOpts *options);
-static void validateCapabilities(Relation rel, Oid groupid, ResGroupOpts *options, bool newGroup);
+static ResGroupCap getResGroupCapValue(DefElem *defel);
+static void checkResGroupCapLimit(ResGroupLimitType type, ResGroupCap value);
+static void parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupCaps *caps);
+static void validateCapabilities(Relation rel, Oid groupid, ResGroupCaps *caps, bool newGroup);
 static void insertResgroupCapabilityEntry(Relation rel, Oid groupid, uint16 type, char *value);
-static void updateResgroupCapabilities(Oid groupid, const ResGroupCaps *resgroupCaps);
-static void insertResgroupCapabilities(Oid groupid, ResGroupOpts *options);
+static void updateResgroupCapabilities(Relation rel,
+									   Oid groupId,
+									   ResGroupLimitType limitType,
+									   ResGroupCap value);
+static void insertResgroupCapabilities(Oid groupid, ResGroupCaps *caps);
 static void deleteResgroupCapabilities(Oid groupid);
 static void createResGroupCallback(bool isCommit, void *arg);
 static void dropResGroupCallback(bool isCommit, void *arg);
@@ -143,7 +146,7 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 	Oid			groupid;
 	Datum		new_record[Natts_pg_resgroup];
 	bool		new_record_nulls[Natts_pg_resgroup];
-	ResGroupOpts options;
+	ResGroupCaps caps;
 	int			nResGroups;
 
 	/* Permission check - only superuser can create groups. */
@@ -161,8 +164,8 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 				(errcode(ERRCODE_RESERVED_NAME),
 				 errmsg("resource group name \"none\" is reserved")));
 
-	MemSet(&options, 0, sizeof(options));
-	parseStmtOptions(stmt, &options);
+	MemSet(&caps, 0, sizeof(caps));
+	parseStmtOptions(stmt, &caps);
 
 	/*
 	 * Grant ExclusiveLock to serialize concurrent 'CREATE RESOURCE GROUP'
@@ -223,7 +226,7 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 	CatalogUpdateIndexes(pg_resgroup_rel, tuple);
 
 	/* process the WITH (...) list items */
-	insertResgroupCapabilities(groupid, &options);
+	insertResgroupCapabilities(groupid, &caps);
 
 	/* Dispatch the statement to segments */
 	if (Gp_role == GP_ROLE_DISPATCH)
@@ -247,7 +250,7 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 	{
 		Oid			*callbackArg;
 
-		AllocResGroupEntry(groupid, &options);
+		AllocResGroupEntry(groupid, &caps);
 
 
 		/* Argument of callback function should be allocated in heap region */
@@ -257,7 +260,7 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 
 		/* Create os dependent part for this resource group */
 		ResGroupOps_CreateGroup(groupid);
-		ResGroupOps_SetCpuRateLimit(groupid, options.cpuRateLimit);
+		ResGroupOps_SetCpuRateLimit(groupid, caps.cpuRateLimit);
 	}
 	else if (Gp_role == GP_ROLE_DISPATCH)
 		ereport(WARNING,
@@ -399,7 +402,8 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	DefElem		*defel;
 	ResGroupLimitType	limitType;
 	ResGroupCaps		caps;
-	ResGroupOpts		opts;
+	ResGroupCaps		oldCaps;
+	ResGroupCap			value;
 
 	/* Permission check - only superuser can alter resource groups. */
 	if (!superuser())
@@ -471,48 +475,34 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 
 	/* Load current resource group capabilities */
 	GetResGroupCapabilities(groupid, &caps);
-
-	/* Pick up the effective settings from caps */
-	ResGroupCapsToOpts(&caps, &opts);
-
-	/* Attempt to pick previous 'proposed' as 'value' */
-	ResGroupDecideConcurrencyCaps(groupid, &caps, &opts);
-	ResGroupDecideMemoryCaps(groupid, &caps, &opts);
+	oldCaps = caps;
 
 	switch (limitType)
 	{
 		case RESGROUP_LIMIT_TYPE_CONCURRENCY:
-			opts.concurrency = value;
-			ResGroupDecideConcurrencyCaps(groupid, &caps, &opts);
+			caps.concurrency = value;
 			break;
 
 		case RESGROUP_LIMIT_TYPE_CPU:
-			opts.cpuRateLimit = value;
-			if (caps.cpuRateLimit.proposed < value)
+			caps.cpuRateLimit = value;
+			if (oldCaps.cpuRateLimit < value)
 				validateCapabilities(pg_resgroupcapability_rel,
-									 groupid, &opts, false);
-
-			caps.cpuRateLimit.value = value;
-			caps.cpuRateLimit.proposed = value;
+									 groupid, &caps, false);
 			break;
 
 		case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-			opts.memSharedQuota = value;
-
-			ResGroupDecideMemoryCaps(groupid, &caps, &opts);
+			caps.memSharedQuota = value;
 			break;
 
 		case RESGROUP_LIMIT_TYPE_MEMORY:
-			opts.memLimit = value;
-			if (caps.memLimit.proposed < value)
+			caps.memLimit = value;
+			if (oldCaps.memLimit < value)
 				validateCapabilities(pg_resgroupcapability_rel,
-									 groupid, &opts, false);
-
-			ResGroupDecideMemoryCaps(groupid, &caps, &opts);
+									 groupid, &caps, false);
 			break;
+
 		case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-			caps.memSpillRatio.value = value;
-			caps.memSpillRatio.proposed = value;
+			caps.memSpillRatio = value;
 			break;
 
 		default:
@@ -522,7 +512,8 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 							defel->defname)));
 	}
 
-	updateResgroupCapabilities(groupid, &caps);
+	updateResgroupCapabilities(pg_resgroupcapability_rel,
+							   groupid, limitType, value);
 
 	heap_close(pg_resgroupcapability_rel, NoLock);
 
@@ -598,9 +589,7 @@ GetResGroupCapabilities(Oid groupId, ResGroupCaps *resgroupCaps)
 	{
 		Datum				typeDatum;
 		ResGroupLimitType	type;
-		Datum				valueDatum;
 		Datum				proposedDatum;
-		char				*value;
 		char				*proposed;
 
 		typeDatum = heap_getattr(tuple, Anum_pg_resgroupcapability_reslimittype,
@@ -613,15 +602,10 @@ GetResGroupCapabilities(Oid groupId, ResGroupCaps *resgroupCaps)
 
 		mask |= 1 << type;
 
-		valueDatum = heap_getattr(tuple, Anum_pg_resgroupcapability_value,
-								  relResGroupCapability->rd_att, &isNull);
-		value = TextDatumGetCString(valueDatum);
-		caps[type].value = str2Int(value, getResgroupOptionName(type));
-
 		proposedDatum = heap_getattr(tuple, Anum_pg_resgroupcapability_proposed,
 									 relResGroupCapability->rd_att, &isNull);
 		proposed = TextDatumGetCString(proposedDatum);
-		caps[type].proposed = str2Int(proposed, getResgroupOptionName(type));
+		caps[type] = str2Int(proposed, getResgroupOptionName(type));
 	}
 
 	systable_endscan(sscan);
@@ -841,7 +825,7 @@ checkResGroupCapLimit(ResGroupLimitType type, int value)
 /*
  * Get capability value from DefElem, convert from int64 to int
  */
-static int
+static ResGroupCap
 getResGroupCapValue(DefElem *defel)
 {
 	int64 value = defGetInt64(defel);
@@ -849,20 +833,20 @@ getResGroupCapValue(DefElem *defel)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("capability %s is too big", defel->defname)));
-	return (int)value;
+	return (ResGroupCap)value;
 }
 
 /*
  * Parse a statement and store the settings in options.
  *
  * @param stmt     the statement
- * @param options  used to store the settings
+ * @param caps     used to store the settings
  */
 static void
-parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupOpts *options)
+parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupCaps *caps)
 {
 	ListCell *cell;
-	int value;
+	ResGroupCap value;
 	int types = 0;
 
 	foreach(cell, stmt->options)
@@ -888,23 +872,23 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupOpts *options)
 		switch (type)
 		{
 			case RESGROUP_LIMIT_TYPE_CONCURRENCY:
-				options->concurrency = value;
+				caps->concurrency = value;
 				break;
 
 			case RESGROUP_LIMIT_TYPE_CPU:
-				options->cpuRateLimit = value;
+				caps->cpuRateLimit = value;
 				break;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY:
-				options->memLimit = value;
+				caps->memLimit = value;
 				break;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA:
-				options->memSharedQuota = value;
+				caps->memSharedQuota = value;
 				break;
 
 			case RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO:
-				options->memSpillRatio = value;
+				caps->memSpillRatio = value;
 				break;
 
 			default:
@@ -920,13 +904,13 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupOpts *options)
 				errmsg("must specify both memory_limit and cpu_rate_limit")));
 
 	if (!(types & (1 << RESGROUP_LIMIT_TYPE_CONCURRENCY)))
-		options->concurrency = RESGROUP_DEFAULT_CONCURRENCY;
+		caps->concurrency = RESGROUP_DEFAULT_CONCURRENCY;
 
 	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA)))
-		options->memSharedQuota = RESGROUP_DEFAULT_MEM_SHARED_QUOTA;
+		caps->memSharedQuota = RESGROUP_DEFAULT_MEM_SHARED_QUOTA;
 
 	if (!(types & (1 << RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO)))
-		options->memSpillRatio = RESGROUP_DEFAULT_MEM_SPILL_RATIO;
+		caps->memSpillRatio = RESGROUP_DEFAULT_MEM_SPILL_RATIO;
 }
 
 /*
@@ -996,35 +980,34 @@ alterResGroupCallback(bool isCommit, void *arg)
  * handle the type conversion etc..
  *
  * @param groupid  oid of the resource group
- * @param options  the capabilities
+ * @param caps     the capabilities
  */
 static void
-insertResgroupCapabilities(Oid groupid,
-						   ResGroupOpts *options)
+insertResgroupCapabilities(Oid groupid, ResGroupCaps *caps)
 {
 	char value[64];
 	Relation resgroup_capability_rel;
 
 	resgroup_capability_rel = heap_open(ResGroupCapabilityRelationId, RowExclusiveLock);
-	validateCapabilities(resgroup_capability_rel, groupid, options, true);
+	validateCapabilities(resgroup_capability_rel, groupid, caps, true);
 
-	sprintf(value, "%d", options->concurrency);
+	sprintf(value, "%d", caps->concurrency);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
 								  RESGROUP_LIMIT_TYPE_CONCURRENCY, value);
 
-	sprintf(value, "%d", options->cpuRateLimit);
+	sprintf(value, "%d", caps->cpuRateLimit);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
 								  RESGROUP_LIMIT_TYPE_CPU, value);
 
-	sprintf(value, "%d", options->memLimit);
+	sprintf(value, "%d", caps->memLimit);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
 								  RESGROUP_LIMIT_TYPE_MEMORY, value);
 
-	sprintf(value, "%d", options->memSharedQuota);
+	sprintf(value, "%d", caps->memSharedQuota);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
 								  RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA, value);
 
-	sprintf(value, "%d", options->memSpillRatio);
+	sprintf(value, "%d", caps->memSpillRatio);
 	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
 								  RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO, value);
 
@@ -1034,91 +1017,64 @@ insertResgroupCapabilities(Oid groupid,
 /*
  * Update all the capabilities of one resgroup in pg_resgroupcapability
  *
- * groupid is the update key, resgroupCaps contains all the capabilities.
+ * groupId and limitType are the scan keys.
  */
 static void
-updateResgroupCapabilities(Oid groupid, const ResGroupCaps *resgroupCaps)
+updateResgroupCapabilities(Relation rel,
+						   Oid groupId,
+						   ResGroupLimitType limitType,
+						   ResGroupCap value)
 {
 	HeapTuple	oldTuple;
 	HeapTuple	newTuple;
 	SysScanDesc	sscan;
-	ScanKeyData	scankey;
+	ScanKeyData	scankey[2];
 	Datum		values[Natts_pg_resgroupcapability];
 	bool		isnull[Natts_pg_resgroupcapability];
 	bool		repl[Natts_pg_resgroupcapability];
-	/*
-	 * By converting caps from (ResGroupCaps *) to an array of (ResGroupCap *)
-	 * we can access the individual capability via index, so we don't need
-	 * to use a switch case when setting them.
-	 */
-	const ResGroupCap	*caps = (ResGroupCap *) resgroupCaps;
-	/*
-	 * We maintain a bit mask to track which resgroup limit capability types
-	 * have been retrieved, when mask is 0 then no limit capability is found
-	 * for the given groupid.
-	 */
-	int			mask = 0;
+	char		valueStr[16];
 
-	Relation resgroupCapabilityRel;
-
-	resgroupCapabilityRel = heap_open(ResGroupCapabilityRelationId, RowExclusiveLock);
-	ScanKeyInit(&scankey,
+	ScanKeyInit(&scankey[0],
 				Anum_pg_resgroupcapability_resgroupid,
 				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(groupid));
+				ObjectIdGetDatum(groupId));
+	ScanKeyInit(&scankey[1],
+				Anum_pg_resgroupcapability_reslimittype,
+				BTEqualStrategyNumber, F_INT2EQ,
+				Int16GetDatum(limitType));
 
-	sscan = systable_beginscan(resgroupCapabilityRel,
-							   ResGroupCapabilityResgroupidIndexId, true,
-							   SnapshotNow, 1, &scankey);
+	sscan = systable_beginscan(rel,
+							   ResGroupCapabilityResgroupidResLimittypeIndexId, true,
+							   SnapshotNow, 2, scankey);
 
 	MemSet(values, 0, sizeof(values));
 	MemSet(isnull, 0, sizeof(isnull));
 	MemSet(repl, 0, sizeof(repl));
 
-	while (HeapTupleIsValid(oldTuple = systable_getnext(sscan)))
-	{
-		Datum				typeDatum;
-		ResGroupLimitType	type;
-		char				value[16];
-		char				proposed[16];
-
-		typeDatum = heap_getattr(oldTuple, Anum_pg_resgroupcapability_reslimittype,
-								 resgroupCapabilityRel->rd_att, isnull);
-		type = (ResGroupLimitType) DatumGetInt16(typeDatum);
-
-		Assert(type > RESGROUP_LIMIT_TYPE_UNKNOWN);
-		Assert(type < RESGROUP_LIMIT_TYPE_COUNT);
-		Assert(!(mask & (1 << type)));
-
-		mask |= 1 << type;
-
-		snprintf(value, sizeof(value), "%d", caps[type].value);
-		snprintf(proposed, sizeof(proposed), "%d", caps[type].proposed);
-
-		values[Anum_pg_resgroupcapability_value - 1] = CStringGetTextDatum(value);
-		isnull[Anum_pg_resgroupcapability_value - 1] = false;
-		repl[Anum_pg_resgroupcapability_value - 1]  = true;
-
-		values[Anum_pg_resgroupcapability_proposed - 1] = CStringGetTextDatum(proposed);
-		isnull[Anum_pg_resgroupcapability_proposed - 1] = false;
-		repl[Anum_pg_resgroupcapability_proposed - 1]  = true;
-
-		newTuple = heap_modify_tuple(oldTuple, RelationGetDescr(resgroupCapabilityRel),
-									 values, isnull, repl);
-
-		simple_heap_update(resgroupCapabilityRel, &oldTuple->t_self, newTuple);
-		CatalogUpdateIndexes(resgroupCapabilityRel, newTuple);
-	}
-
-	systable_endscan(sscan);
-	heap_close(resgroupCapabilityRel, NoLock);
-
-	if (!mask)
-	{
+	oldTuple = systable_getnext(sscan);
+	if (!HeapTupleIsValid(oldTuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("capabilities missing for resource group: %d", groupid)));
-	}
+				 errmsg("capabilities missing for resource group %d type %d",
+						groupId, limitType)));
+
+	snprintf(valueStr, sizeof(valueStr), "%d", value);
+
+	values[Anum_pg_resgroupcapability_value - 1] = CStringGetTextDatum(valueStr);
+	isnull[Anum_pg_resgroupcapability_value - 1] = false;
+	repl[Anum_pg_resgroupcapability_value - 1]  = true;
+
+	values[Anum_pg_resgroupcapability_proposed - 1] = CStringGetTextDatum(valueStr);
+	isnull[Anum_pg_resgroupcapability_proposed - 1] = false;
+	repl[Anum_pg_resgroupcapability_proposed - 1]  = true;
+
+	newTuple = heap_modify_tuple(oldTuple, RelationGetDescr(rel),
+								 values, isnull, repl);
+
+	simple_heap_update(rel, &oldTuple->t_self, newTuple);
+	CatalogUpdateIndexes(rel, newTuple);
+
+	systable_endscan(sscan);
 }
 
 /*
@@ -1131,18 +1087,18 @@ updateResgroupCapabilities(Oid groupid, const ResGroupCaps *resgroupCaps)
  *
  * @param rel      the relation
  * @param groupid  oid of the resource group
- * @param options  the options for the resource group
+ * @param caps     the capabilities for the resource group
  */
 static void
 validateCapabilities(Relation rel,
 					 Oid groupid,
-					 ResGroupOpts *options,
+					 ResGroupCaps *caps,
 					 bool newGroup)
 {
 	HeapTuple tuple;
 	SysScanDesc sscan;
-	int totalCpu = options->cpuRateLimit;
-	int totalMem = options->memLimit;
+	int totalCpu = caps->cpuRateLimit;
+	int totalMem = caps->memLimit;
 
 	sscan = systable_beginscan(rel, ResGroupCapabilityResgroupidIndexId,
 							   true, SnapshotNow, 0, NULL);
