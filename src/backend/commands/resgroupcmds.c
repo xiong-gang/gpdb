@@ -364,11 +364,11 @@ DropResourceGroup(DropResourceGroupStmt *stmt)
 	 */
 	DeleteSharedComments(groupid, ResGroupRelationId);
 
-	/* metadata tracking */
-	MetaTrackDropObject(ResGroupRelationId, groupid);
-
 	if (Gp_role == GP_ROLE_DISPATCH)
 	{
+		/* metadata tracking */
+		MetaTrackDropObject(ResGroupRelationId, groupid);
+
 		CdbDispatchUtilityStatement((Node *) stmt,
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
@@ -493,6 +493,11 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 
 	if (Gp_role == GP_ROLE_DISPATCH)
 	{
+		MetaTrackUpdObject(ResGroupCapabilityRelationId,
+						   groupid,
+						   GetUserId(),
+						   "ALTER", defel->defname);
+
 		CdbDispatchUtilityStatement((Node *) stmt,
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
