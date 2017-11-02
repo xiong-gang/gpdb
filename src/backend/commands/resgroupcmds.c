@@ -394,7 +394,6 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 {
 	Relation	pg_resgroupcapability_rel;
 	Oid			groupid;
-	ResourceGroupAlterCallbackContext *callbackCtx;
 	DefElem		*defel;
 	ResGroupLimitType	limitType;
 	ResGroupCaps		caps;
@@ -441,12 +440,6 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 				 errmsg("admin_group must have at least one concurrency")));
 	}
 
-	/* Argument of callback function should be allocated in heap region */
-	callbackCtx = (ResourceGroupAlterCallbackContext *)
-		MemoryContextAlloc(TopMemoryContext, sizeof(*callbackCtx));
-	callbackCtx->groupid = groupid;
-	callbackCtx->limittype = limitType;
-
 	/*
 	 * In validateCapabilities() we scan all the resource groups
 	 * to check whether the total cpu_rate_limit exceed 100 or not.
@@ -490,6 +483,13 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 
 	if (IsResGroupActivated())
 	{
+		ResourceGroupAlterCallbackContext *callbackCtx;
+
+		/* Argument of callback function should be allocated in heap region */
+		callbackCtx = (ResourceGroupAlterCallbackContext *)
+			MemoryContextAlloc(TopMemoryContext, sizeof(*callbackCtx));
+		callbackCtx->groupid = groupid;
+		callbackCtx->limittype = limitType;
 		callbackCtx->caps = caps;
 		registerResourceGroupCallback(alterResGroupCallback, (void *)callbackCtx);
 	}
