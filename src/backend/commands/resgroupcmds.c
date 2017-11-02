@@ -392,11 +392,7 @@ DropResourceGroup(DropResourceGroupStmt *stmt)
 void
 AlterResourceGroup(AlterResourceGroupStmt *stmt)
 {
-	Relation	pg_resgroup_rel;
 	Relation	pg_resgroupcapability_rel;
-	HeapTuple	tuple;
-	ScanKeyData	scankey;
-	SysScanDesc	sscan;
 	Oid			groupid;
 	ResourceGroupAlterCallbackContext *callbackCtx;
 	DefElem		*defel;
@@ -429,26 +425,12 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 	 * Check the pg_resgroup relation to be certain the resource group already
 	 * exists.
 	 */
-	pg_resgroup_rel = heap_open(ResGroupRelationId, RowExclusiveLock);
-
-	ScanKeyInit(&scankey,
-				Anum_pg_resgroup_rsgname,
-				BTEqualStrategyNumber, F_NAMEEQ,
-				CStringGetDatum(stmt->name));
-
-	sscan = systable_beginscan(pg_resgroup_rel, ResGroupRsgnameIndexId, true,
-							   SnapshotNow, 1, &scankey);
-
-	tuple = systable_getnext(sscan);
-	if (!HeapTupleIsValid(tuple))
+	groupid = GetResGroupIdForName(stmt->name, RowExclusiveLock);
+	if (groupid == InvalidOid)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
 				 errmsg("resource group \"%s\" does not exist",
 						stmt->name)));
-
-	groupid = HeapTupleGetOid(tuple);
-	systable_endscan(sscan);
-	heap_close(pg_resgroup_rel, NoLock);
 
 	if (limitType == RESGROUP_LIMIT_TYPE_CONCURRENCY &&
 		value == 0 &&
