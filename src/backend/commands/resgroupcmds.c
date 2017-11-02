@@ -501,12 +501,6 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 									NULL);
 	}
 
-	/*
-	 * Bump command counter to make this change visible in the callback
-	 * function alterResGroupCommitCallback()
-	 */
-	CommandCounterIncrement();
-
 	if (IsResGroupActivated())
 	{
 		callbackCtx->caps = caps;
