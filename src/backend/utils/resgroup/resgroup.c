@@ -654,7 +654,7 @@ ResGroupAlterOnCommit(Oid groupId,
 		{
 			ResGroupOps_SetCpuRateLimit(groupId, caps->cpuRateLimit);
 		}
-		else
+		else if (limittype != RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO)
 		{
 			shouldWakeUp = groupApplyMemCaps(group, caps);
 
