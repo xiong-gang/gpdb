@@ -95,8 +95,9 @@ static void updateResgroupCapabilityEntry(Relation rel,
 										  Oid groupId,
 										  ResGroupLimitType limitType,
 										  ResGroupCap value);
-static void insertResgroupCapabilities(Oid groupid, ResGroupCaps *caps);
+static void insertResgroupCapabilities(Relation rel, Oid groupId, ResGroupCaps *caps);
 static void deleteResgroupCapabilities(Oid groupid);
+static void checkAuthIdForDrop(Oid groupId);
 static void createResGroupCallback(bool isCommit, void *arg);
 static void dropResGroupCallback(bool isCommit, void *arg);
 static void alterResGroupCallback(bool isCommit, void *arg);
@@ -126,6 +127,7 @@ void
 CreateResourceGroup(CreateResourceGroupStmt *stmt)
 {
 	Relation	pg_resgroup_rel;
+	Relation	pg_resgroupcapability_rel;
 	TupleDesc	pg_resgroup_dsc;
 	ScanKeyData scankey;
 	SysScanDesc sscan;
@@ -155,11 +157,15 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 	parseStmtOptions(stmt, &caps);
 
 	/*
-	 * Grant ExclusiveLock to serialize concurrent 'CREATE RESOURCE GROUP'
+	 * both CREATE and ALTER resource group need check the sum of cpu_rate_limit
+	 * and memory_limit and make sure the sum don't exceed 100. To make it simple,
+	 * acquire AccessExclusiveLock lock on pg_resgroupcapability at the beginning
+	 * of CREATE and ALTER
 	 */
-	pg_resgroup_rel = heap_open(ResGroupRelationId, ExclusiveLock);
+	pg_resgroupcapability_rel = heap_open(ResGroupCapabilityRelationId, AccessExclusiveLock);
+	pg_resgroup_rel = heap_open(ResGroupRelationId, RowExclusiveLock);
 
-	/* Check if max_resource_group limit is reached */
+	/* Check if MaxResourceGroups limit is reached */
 	sscan = systable_beginscan(pg_resgroup_rel, ResGroupRsgnameIndexId, false,
 							   SnapshotNow, 0, NULL);
 	nResGroups = 0;
@@ -213,7 +219,8 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 	CatalogUpdateIndexes(pg_resgroup_rel, tuple);
 
 	/* process the WITH (...) list items */
-	insertResgroupCapabilities(groupid, &caps);
+	validateCapabilities(pg_resgroupcapability_rel, groupid, &caps, true);
+	insertResgroupCapabilities(pg_resgroupcapability_rel, groupid, &caps);
 
 	/* Dispatch the statement to segments */
 	if (Gp_role == GP_ROLE_DISPATCH)
@@ -231,6 +238,7 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 	}
 
 	heap_close(pg_resgroup_rel, NoLock);
+	heap_close(pg_resgroupcapability_rel, NoLock);
 
 	/* Add this group into shared memory */
 	if (IsResGroupActivated())
@@ -262,12 +270,9 @@ void
 DropResourceGroup(DropResourceGroupStmt *stmt)
 {
 	Relation	 pg_resgroup_rel;
-	Relation	 authIdRel;
 	HeapTuple	 tuple;
 	ScanKeyData	 scankey;
 	SysScanDesc	 sscan;
-	ScanKeyData	 authid_scankey;
-	SysScanDesc	 authid_scan;
 	Oid			 groupid;
 	Oid			*callbackArg;
 
@@ -318,23 +323,7 @@ DropResourceGroup(DropResourceGroupStmt *stmt)
 	/*
 	 * Check to see if any roles are in this resource group.
 	 */
-	authIdRel = heap_open(AuthIdRelationId, RowExclusiveLock);
-	ScanKeyInit(&authid_scankey,
-				Anum_pg_authid_rolresgroup,
-				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(groupid));
-
-	authid_scan = systable_beginscan(authIdRel, AuthIdRolResGroupIndexId, true,
-									 SnapshotNow, 1, &authid_scankey);
-
-	if (HeapTupleIsValid(systable_getnext(authid_scan)))
-		ereport(ERROR,
-				(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
-				 errmsg("resource group \"%s\" is used by at least one role",
-						stmt->name)));
-
-	systable_endscan(authid_scan);
-	heap_close(authIdRel, RowExclusiveLock);
+	checkAuthIdForDrop(groupid);
 
 	/*
 	 * Delete the resource group from the catalog.
@@ -979,35 +968,29 @@ alterResGroupCallback(bool isCommit, void *arg)
  * @param caps     the capabilities
  */
 static void
-insertResgroupCapabilities(Oid groupid, ResGroupCaps *caps)
+insertResgroupCapabilities(Relation rel, Oid groupId, ResGroupCaps *caps)
 {
 	char value[64];
-	Relation resgroup_capability_rel;
-
-	resgroup_capability_rel = heap_open(ResGroupCapabilityRelationId, RowExclusiveLock);
-	validateCapabilities(resgroup_capability_rel, groupid, caps, true);
 
 	sprintf(value, "%d", caps->concurrency);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+	insertResgroupCapabilityEntry(rel, groupId,
 								  RESGROUP_LIMIT_TYPE_CONCURRENCY, value);
 
 	sprintf(value, "%d", caps->cpuRateLimit);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+	insertResgroupCapabilityEntry(rel, groupId,
 								  RESGROUP_LIMIT_TYPE_CPU, value);
 
 	sprintf(value, "%d", caps->memLimit);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+	insertResgroupCapabilityEntry(rel, groupId,
 								  RESGROUP_LIMIT_TYPE_MEMORY, value);
 
 	sprintf(value, "%d", caps->memSharedQuota);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+	insertResgroupCapabilityEntry(rel, groupId,
 								  RESGROUP_LIMIT_TYPE_MEMORY_SHARED_QUOTA, value);
 
 	sprintf(value, "%d", caps->memSpillRatio);
-	insertResgroupCapabilityEntry(resgroup_capability_rel, groupid,
+	insertResgroupCapabilityEntry(rel, groupId,
 								  RESGROUP_LIMIT_TYPE_MEMORY_SPILL_RATIO, value);
-
-	heap_close(resgroup_capability_rel, NoLock);
 }
 
 /*
@@ -1222,6 +1205,33 @@ deleteResgroupCapabilities(Oid groupid)
 	heap_close(resgroup_capability_rel, NoLock);
 }
 
+/*
+ * Check to see if any roles are in this resource group.
+ */
+static void
+checkAuthIdForDrop(Oid groupId)
+{
+	Relation	 authIdRel;
+	ScanKeyData	 authidScankey;
+	SysScanDesc	 authidScan;
+
+	authIdRel = heap_open(AuthIdRelationId, RowExclusiveLock);
+	ScanKeyInit(&authidScankey,
+				Anum_pg_authid_rolresgroup,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(groupId));
+
+	authidScan = systable_beginscan(authIdRel, AuthIdRolResGroupIndexId, true,
+									SnapshotNow, 1, &authidScankey);
+
+	if (HeapTupleIsValid(systable_getnext(authidScan)))
+		ereport(ERROR,
+				(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
+				 errmsg("resource group is used by at least one role")));
+
+	systable_endscan(authidScan);
+	heap_close(authIdRel, RowExclusiveLock);
+}
 /*
  * Convert a C str to a integer value.
  *
