@@ -103,19 +103,6 @@ static void alterResGroupCallback(bool isCommit, void *arg);
 static void registerResourceGroupCallback(ResourceGroupCallback callback, void *arg);
 
 /*
- * Register callback functions for resource group related operations.
- */
-static void
-registerResourceGroupCallback(ResourceGroupCallback callback, void *arg)
-{
-	ResourceGroup_callback = (ResourceGroupCallbackItem *)
-		MemoryContextAlloc(TopMemoryContext,
-						   sizeof(ResourceGroupCallbackItem));
-	ResourceGroup_callback->callback = callback;
-	ResourceGroup_callback->arg = arg;
-}
-
-/*
  * Call resource group related callback functions at transaction end.
  *
  * Note the callback functions would be removed as being processed.
@@ -664,6 +651,83 @@ GetResGroupIdForRole(Oid roleid)
 }
 
 /*
+ * GetResGroupIdForName -- Return the Oid for a resource group name
+ *
+ * Notes:
+ *	Used by the various admin commands to convert a user supplied group name
+ *	to Oid.
+ */
+Oid
+GetResGroupIdForName(char *name, LOCKMODE lockmode)
+{
+	Relation	rel;
+	ScanKeyData scankey;
+	SysScanDesc scan;
+	HeapTuple	tuple;
+	Oid			rsgid;
+
+	rel = heap_open(ResGroupRelationId, lockmode);
+
+	/* SELECT oid FROM pg_resgroup WHERE rsgname = :1 */
+	ScanKeyInit(&scankey,
+				Anum_pg_resgroup_rsgname,
+				BTEqualStrategyNumber, F_NAMEEQ,
+				CStringGetDatum(name));
+	scan = systable_beginscan(rel, ResGroupRsgnameIndexId, true,
+							  SnapshotNow, 1, &scankey);
+
+	tuple = systable_getnext(scan);
+	if (HeapTupleIsValid(tuple))
+		rsgid = HeapTupleGetOid(tuple);
+	else
+		rsgid = InvalidOid;
+
+	systable_endscan(scan);
+	heap_close(rel, lockmode);
+
+	return rsgid;
+}
+
+/*
+ * GetResGroupNameForId -- Return the resource group name for an Oid
+ */
+char *
+GetResGroupNameForId(Oid oid, LOCKMODE lockmode)
+{
+	Relation	rel;
+	ScanKeyData scankey;
+	SysScanDesc scan;
+	HeapTuple	tuple;
+	char		*name = NULL;
+
+	rel = heap_open(ResGroupRelationId, lockmode);
+
+	/* SELECT rsgname FROM pg_resgroup WHERE oid = :1 */
+	ScanKeyInit(&scankey,
+				ObjectIdAttributeNumber,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(oid));
+	scan = systable_beginscan(rel, ResGroupOidIndexId, true,
+							  SnapshotNow, 1, &scankey);
+
+	tuple = systable_getnext(scan);
+	if (HeapTupleIsValid(tuple))
+	{
+		bool isnull;
+		Datum nameDatum = heap_getattr(tuple, Anum_pg_resgroup_rsgname,
+									   rel->rd_att, &isnull);
+		Assert (!isnull);
+		Name resGroupName = DatumGetName(nameDatum);
+		name = pstrdup(NameStr(*resGroupName));
+	}
+
+	systable_endscan(scan);
+	heap_close(rel, lockmode);
+
+	return name;
+}
+
+/*
  * Get the option type from a name string.
  *
  * @param defname  the name string
@@ -1159,96 +1223,6 @@ deleteResgroupCapabilities(Oid groupid)
 }
 
 /*
- * GetResGroupIdForName -- Return the Oid for a resource group name
- *
- * Notes:
- *	Used by the various admin commands to convert a user supplied group name
- *	to Oid.
- */
-Oid
-GetResGroupIdForName(char *name, LOCKMODE lockmode)
-{
-	Relation	rel;
-	ScanKeyData scankey;
-	SysScanDesc scan;
-	HeapTuple	tuple;
-	ResourceOwner owner = NULL;
-	Oid			rsgid;
-
-	if (CurrentResourceOwner == NULL)
-	{
-		owner = ResourceOwnerCreate(NULL, "GetResGroupIdForName");
-		CurrentResourceOwner = owner;
-	}
-
-	rel = heap_open(ResGroupRelationId, lockmode);
-
-	/* SELECT oid FROM pg_resgroup WHERE rsgname = :1 */
-	ScanKeyInit(&scankey,
-				Anum_pg_resgroup_rsgname,
-				BTEqualStrategyNumber, F_NAMEEQ,
-				CStringGetDatum(name));
-	scan = systable_beginscan(rel, ResGroupRsgnameIndexId, true,
-							  SnapshotNow, 1, &scankey);
-
-	tuple = systable_getnext(scan);
-	if (HeapTupleIsValid(tuple))
-		rsgid = HeapTupleGetOid(tuple);
-	else
-		rsgid = InvalidOid;
-
-	systable_endscan(scan);
-	heap_close(rel, lockmode);
-
-	if (owner)
-	{
-		CurrentResourceOwner = NULL;
-		ResourceOwnerDelete(owner);
-	}
-
-	return rsgid;
-}
-
-/*
- * GetResGroupNameForId -- Return the resource group name for an Oid
- */
-char *
-GetResGroupNameForId(Oid oid, LOCKMODE lockmode)
-{
-	Relation	rel;
-	ScanKeyData scankey;
-	SysScanDesc scan;
-	HeapTuple	tuple;
-	char		*name = NULL;
-
-	rel = heap_open(ResGroupRelationId, lockmode);
-
-	/* SELECT rsgname FROM pg_resgroup WHERE oid = :1 */
-	ScanKeyInit(&scankey,
-				ObjectIdAttributeNumber,
-				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(oid));
-	scan = systable_beginscan(rel, ResGroupOidIndexId, true,
-							  SnapshotNow, 1, &scankey);
-
-	tuple = systable_getnext(scan);
-	if (HeapTupleIsValid(tuple))
-	{
-		bool isnull;
-		Datum nameDatum = heap_getattr(tuple, Anum_pg_resgroup_rsgname,
-									   rel->rd_att, &isnull);
-		Assert (!isnull);
-		Name resGroupName = DatumGetName(nameDatum);
-		name = pstrdup(NameStr(*resGroupName));
-	}
-
-	systable_endscan(scan);
-	heap_close(rel, lockmode);
-
-	return name;
-}
-
-/*
  * Convert a C str to a integer value.
  *
  * @param str   the C str
@@ -1270,3 +1244,15 @@ str2Int(const char *str, const char *prop)
 	return floor(val);
 }
 
+/*
+ * Register callback functions for resource group related operations.
+ */
+static void
+registerResourceGroupCallback(ResourceGroupCallback callback, void *arg)
+{
+	ResourceGroup_callback = (ResourceGroupCallbackItem *)
+		MemoryContextAlloc(TopMemoryContext,
+						   sizeof(ResourceGroupCallbackItem));
+	ResourceGroup_callback->callback = callback;
+	ResourceGroup_callback->arg = arg;
+}
