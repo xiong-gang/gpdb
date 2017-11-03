@@ -85,16 +85,16 @@ static ResourceGroupCallbackItem *ResourceGroup_callback = NULL;
 
 static int str2Int(const char *str, const char *prop);
 static ResGroupLimitType getResgroupOptionType(const char* defname);
-static const char * getResgroupOptionName(ResGroupLimitType type);
-static ResGroupCap getResGroupCapValue(DefElem *defel);
+static ResGroupCap getResgroupOptionValue(DefElem *defel);
+static const char *getResgroupOptionName(ResGroupLimitType type);
 static void checkResGroupCapLimit(ResGroupLimitType type, ResGroupCap value);
 static void parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupCaps *caps);
 static void validateCapabilities(Relation rel, Oid groupid, ResGroupCaps *caps, bool newGroup);
 static void insertResgroupCapabilityEntry(Relation rel, Oid groupid, uint16 type, char *value);
-static void updateResgroupCapabilities(Relation rel,
-									   Oid groupId,
-									   ResGroupLimitType limitType,
-									   ResGroupCap value);
+static void updateResgroupCapabilityEntry(Relation rel,
+										  Oid groupId,
+										  ResGroupLimitType limitType,
+										  ResGroupCap value);
 static void insertResgroupCapabilities(Oid groupid, ResGroupCaps *caps);
 static void deleteResgroupCapabilities(Oid groupid);
 static void createResGroupCallback(bool isCommit, void *arg);
@@ -417,7 +417,7 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("option \"%s\" not recognized", defel->defname)));
 
-	value = getResGroupCapValue(defel);
+	value = getResgroupOptionValue(defel);
 	checkResGroupCapLimit(limitType, value);
 
 	/*
@@ -461,8 +461,8 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 		oldValue < value)
 		validateCapabilities(pg_resgroupcapability_rel, groupid, &caps, false);
 
-	updateResgroupCapabilities(pg_resgroupcapability_rel,
-							   groupid, limitType, value);
+	updateResgroupCapabilityEntry(pg_resgroupcapability_rel,
+								  groupid, limitType, value);
 
 	heap_close(pg_resgroupcapability_rel, NoLock);
 
@@ -688,6 +688,20 @@ getResgroupOptionType(const char* defname)
 }
 
 /*
+ * Get capability value from DefElem, convert from int64 to int
+ */
+static ResGroupCap
+getResgroupOptionValue(DefElem *defel)
+{
+	int64 value = defGetInt64(defel);
+	if (value > INT_MAX)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("capability %s is too big", defel->defname)));
+	return (ResGroupCap)value;
+}
+
+/*
  * Get the option name from type.
  *
  * @param type  the resgroup limit type
@@ -778,20 +792,6 @@ checkResGroupCapLimit(ResGroupLimitType type, int value)
 }
 
 /*
- * Get capability value from DefElem, convert from int64 to int
- */
-static ResGroupCap
-getResGroupCapValue(DefElem *defel)
-{
-	int64 value = defGetInt64(defel);
-	if (value > INT_MAX)
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("capability %s is too big", defel->defname)));
-	return (ResGroupCap)value;
-}
-
-/*
  * Parse a statement and store the settings in options.
  *
  * @param stmt     the statement
@@ -823,7 +823,7 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupCaps *caps)
 		else
 			mask |= 1 << type;
 
-		value = getResGroupCapValue(defel);
+		value = getResgroupOptionValue(defel);
 		checkResGroupCapLimit(type, value);
 
 		capArray[type] = value;
@@ -952,10 +952,10 @@ insertResgroupCapabilities(Oid groupid, ResGroupCaps *caps)
  * groupId and limitType are the scan keys.
  */
 static void
-updateResgroupCapabilities(Relation rel,
-						   Oid groupId,
-						   ResGroupLimitType limitType,
-						   ResGroupCap value)
+updateResgroupCapabilityEntry(Relation rel,
+							  Oid groupId,
+							  ResGroupLimitType limitType,
+							  ResGroupCap value)
 {
 	HeapTuple	oldTuple;
 	HeapTuple	newTuple;
