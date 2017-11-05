@@ -81,7 +81,7 @@ typedef struct ResourceGroupCallbackItem
 	void *arg;
 } ResourceGroupCallbackItem;
 
-static ResourceGroupCallbackItem *ResourceGroup_callback = NULL;
+static ResourceGroupCallbackItem ResourceGroup_callback = {NULL, NULL};
 
 static int str2Int(const char *str, const char *prop);
 static ResGroupLimitType getResgroupOptionType(const char* defname);
@@ -111,13 +111,12 @@ static void registerResourceGroupCallback(ResourceGroupCallback callback, void *
 void
 AtEOXact_ResGroup(bool isCommit)
 {
-	if (ResourceGroup_callback == NULL)
+	if (ResourceGroup_callback.callback == NULL)
 		return;
 
-	ResourceGroup_callback->callback(isCommit, ResourceGroup_callback->arg);
-
-	pfree(ResourceGroup_callback);
-	ResourceGroup_callback = NULL;
+	/* make sure callback function will not error out */
+	ResourceGroup_callback.callback(isCommit, ResourceGroup_callback.arg);
+	ResourceGroup_callback.callback = NULL;
 }
 
 /*
@@ -1260,9 +1259,7 @@ str2Int(const char *str, const char *prop)
 static void
 registerResourceGroupCallback(ResourceGroupCallback callback, void *arg)
 {
-	ResourceGroup_callback = (ResourceGroupCallbackItem *)
-		MemoryContextAlloc(TopMemoryContext,
-						   sizeof(ResourceGroupCallbackItem));
-	ResourceGroup_callback->callback = callback;
-	ResourceGroup_callback->arg = arg;
+	Assert(ResourceGroup_callback.callback == NULL);
+	ResourceGroup_callback.callback = callback;
+	ResourceGroup_callback.arg = arg;
 }
