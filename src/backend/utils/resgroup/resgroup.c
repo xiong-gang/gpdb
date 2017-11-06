@@ -397,7 +397,7 @@ AllocResGroupEntry(Oid groupId, const ResGroupCaps *caps)
 
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 
-	group = ResGroupCreate(groupId, caps);
+	group = createGroup(groupId, caps);
 	Assert(group != NULL);
 
 	LWLockRelease(ResGroupLock);
@@ -478,7 +478,7 @@ InitResGroups(void)
 		int cpuRateLimit;
 		Oid groupId = HeapTupleGetOid(tuple);
 
-		GetResGroupCapabilities(groupId, &caps);
+		GetResGroupCapabilities(relResGroupCapability, groupId, &caps);
 		cpuRateLimit = caps.cpuRateLimit;
 
 		group = createGroup(groupId, &caps);
@@ -497,6 +497,11 @@ InitResGroups(void)
 
 exit:
 	LWLockRelease(ResGroupLock);
+
+	/*
+	 * release lock here to guarantee we have no lock held when acquiring
+	 * resource group slot
+	 */
 	heap_close(relResGroup, AccessShareLock);
 	heap_close(relResGroupCapability, AccessShareLock);
 	CurrentResourceOwner = NULL;

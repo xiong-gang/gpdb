@@ -246,7 +246,6 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 
 		AllocResGroupEntry(groupid, &caps);
 
-
 		/* Argument of callback function should be allocated in heap region */
 		callbackArg = (Oid *)MemoryContextAlloc(TopMemoryContext, sizeof(Oid));
 		*callbackArg = groupid;
@@ -425,7 +424,7 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 										  AccessExclusiveLock);
 
 	/* Load current resource group capabilities */
-	GetResGroupCapabilities(groupid, &caps);
+	GetResGroupCapabilities(pg_resgroupcapability_rel, groupid, &caps);
 
 	capArray = (ResGroupCap *) &caps;
 	oldValue = capArray[limitType];
@@ -474,20 +473,20 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
  * Get all the capabilities of one resource group in pg_resgroupcapability.
  */
 void
-GetResGroupCapabilities(Oid groupId, ResGroupCaps *resgroupCaps)
+GetResGroupCapabilities(Relation rel, Oid groupId, ResGroupCaps *resgroupCaps)
 {
 	SysScanDesc	sscan;
 	ScanKeyData	key;
 	HeapTuple	tuple;
 	bool isNull;
-	Relation	relResGroupCapability;
+
 	/*
 	 * By converting caps from (ResGroupCaps *) to an array of (ResGroupCap *)
 	 * we can access the individual capability via index, so we don't need
 	 * to use a switch case when setting them.
 	 */
-	ResGroupCap *caps = (ResGroupCap *) resgroupCaps;
-	ResourceOwner owner = NULL;
+	ResGroupCap *capArray = (ResGroupCap *) resgroupCaps;
+
 	/*
 	 * We maintain a bit mask to track which resgroup limit capability types
 	 * have been retrieved, when mask is 0 then no limit capability is found
@@ -495,22 +494,14 @@ GetResGroupCapabilities(Oid groupId, ResGroupCaps *resgroupCaps)
 	 */
 	int			mask = 0;
 
-	MemSet(caps, 0, sizeof(ResGroupCaps));
-
-	if (CurrentResourceOwner == NULL)
-	{
-		owner = ResourceOwnerCreate(NULL, "getResgroupCapabilityEntry");
-		CurrentResourceOwner = owner;
-	}
-
-	relResGroupCapability = heap_open(ResGroupCapabilityRelationId, AccessShareLock);
+	MemSet(capArray, 0, sizeof(ResGroupCaps));
 
 	ScanKeyInit(&key,
 				Anum_pg_resgroupcapability_resgroupid,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(groupId));
 
-	sscan = systable_beginscan(relResGroupCapability,
+	sscan = systable_beginscan(rel,
 							   ResGroupCapabilityResgroupidIndexId,
 							   true,
 							   SnapshotNow, 1, &key);
@@ -523,7 +514,7 @@ GetResGroupCapabilities(Oid groupId, ResGroupCaps *resgroupCaps)
 		char				*proposed;
 
 		typeDatum = heap_getattr(tuple, Anum_pg_resgroupcapability_reslimittype,
-								 relResGroupCapability->rd_att, &isNull);
+								 rel->rd_att, &isNull);
 		type = (ResGroupLimitType) DatumGetInt16(typeDatum);
 
 		Assert(type > RESGROUP_LIMIT_TYPE_UNKNOWN);
@@ -533,24 +524,12 @@ GetResGroupCapabilities(Oid groupId, ResGroupCaps *resgroupCaps)
 		mask |= 1 << type;
 
 		proposedDatum = heap_getattr(tuple, Anum_pg_resgroupcapability_proposed,
-									 relResGroupCapability->rd_att, &isNull);
+									 rel->rd_att, &isNull);
 		proposed = TextDatumGetCString(proposedDatum);
-		caps[type] = str2Int(proposed, getResgroupOptionName(type));
+		capArray[type] = str2Int(proposed, getResgroupOptionName(type));
 	}
 
 	systable_endscan(sscan);
-
-	/*
-	 * release lock here to guarantee we have no lock held when acquiring
-	 * resource group slot
-	 */
-	heap_close(relResGroupCapability, AccessShareLock);
-
-	if (owner)
-	{
-		CurrentResourceOwner = NULL;
-		ResourceOwnerDelete(owner);
-	}
 
 	if (!mask)
 	{
