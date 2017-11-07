@@ -87,7 +87,7 @@ static int str2Int(const char *str, const char *prop);
 static ResGroupLimitType getResgroupOptionType(const char* defname);
 static ResGroupCap getResgroupOptionValue(DefElem *defel);
 static const char *getResgroupOptionName(ResGroupLimitType type);
-static void checkResGroupCapLimit(ResGroupLimitType type, ResGroupCap value);
+static void checkResgroupCapLimit(ResGroupLimitType type, ResGroupCap value);
 static void parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupCaps *caps);
 static void validateCapabilities(Relation rel, Oid groupid, ResGroupCaps *caps, bool newGroup);
 static void insertResgroupCapabilityEntry(Relation rel, Oid groupid, uint16 type, char *value);
@@ -98,9 +98,9 @@ static void updateResgroupCapabilityEntry(Relation rel,
 static void insertResgroupCapabilities(Relation rel, Oid groupId, ResGroupCaps *caps);
 static void deleteResgroupCapabilities(Oid groupid);
 static void checkAuthIdForDrop(Oid groupId);
-static void createResGroupCallback(bool isCommit, void *arg);
-static void dropResGroupCallback(bool isCommit, void *arg);
-static void alterResGroupCallback(bool isCommit, void *arg);
+static void createResgroupCallback(bool isCommit, void *arg);
+static void dropResgroupCallback(bool isCommit, void *arg);
+static void alterResgroupCallback(bool isCommit, void *arg);
 static void registerResourceGroupCallback(ResourceGroupCallback callback, void *arg);
 
 /*
@@ -249,7 +249,7 @@ CreateResourceGroup(CreateResourceGroupStmt *stmt)
 		/* Argument of callback function should be allocated in heap region */
 		callbackArg = (Oid *)MemoryContextAlloc(TopMemoryContext, sizeof(Oid));
 		*callbackArg = groupid;
-		registerResourceGroupCallback(createResGroupCallback, (void *)callbackArg);
+		registerResourceGroupCallback(createResgroupCallback, (void *)callbackArg);
 
 		/* Create os dependent part for this resource group */
 		ResGroupOps_CreateGroup(groupid);
@@ -356,7 +356,7 @@ DropResourceGroup(DropResourceGroupStmt *stmt)
 		/* Argument of callback function should be allocated in heap region */
 		callbackArg = (Oid *)MemoryContextAlloc(TopMemoryContext, sizeof(Oid));
 		*callbackArg = groupid;
-		registerResourceGroupCallback(dropResGroupCallback, (void *)callbackArg);
+		registerResourceGroupCallback(dropResgroupCallback, (void *)callbackArg);
 	}
 }
 
@@ -392,7 +392,7 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 				 errmsg("option \"%s\" not recognized", defel->defname)));
 
 	value = getResgroupOptionValue(defel);
-	checkResGroupCapLimit(limitType, value);
+	checkResgroupCapLimit(limitType, value);
 
 	/*
 	 * Check the pg_resgroup relation to be certain the resource group already
@@ -465,7 +465,7 @@ AlterResourceGroup(AlterResourceGroupStmt *stmt)
 		callbackCtx->groupid = groupid;
 		callbackCtx->limittype = limitType;
 		callbackCtx->caps = caps;
-		registerResourceGroupCallback(alterResGroupCallback, (void *)callbackCtx);
+		registerResourceGroupCallback(alterResgroupCallback, (void *)callbackCtx);
 	}
 }
 
@@ -725,10 +725,10 @@ static ResGroupCap
 getResgroupOptionValue(DefElem *defel)
 {
 	int64 value = defGetInt64(defel);
-	if (value > INT_MAX)
+	if (value < INT_MIN || value > INT_MAX)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("capability %s is too big", defel->defname)));
+				 errmsg("capability %s is out of range", defel->defname)));
 	return (ResGroupCap)value;
 }
 
@@ -763,7 +763,7 @@ getResgroupOptionName(ResGroupLimitType type)
  * Check if capability value exceeds max and min value
  */
 static void
-checkResGroupCapLimit(ResGroupLimitType type, int value)
+checkResgroupCapLimit(ResGroupLimitType type, int value)
 {
 		switch (type)
 		{
@@ -855,7 +855,7 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupCaps *caps)
 			mask |= 1 << type;
 
 		value = getResgroupOptionValue(defel);
-		checkResGroupCapLimit(type, value);
+		checkResgroupCapLimit(type, value);
 
 		capArray[type] = value;
 	}
@@ -883,7 +883,7 @@ parseStmtOptions(CreateResourceGroupStmt *stmt, ResGroupCaps *caps)
  * creates resource groups
  */
 static void
-createResGroupCallback(bool isCommit, void *arg)
+createResgroupCallback(bool isCommit, void *arg)
 {
 	Oid groupId;
 
@@ -903,7 +903,7 @@ createResGroupCallback(bool isCommit, void *arg)
  * the queued transactions and cleanup shared menory entry.
  */
 static void
-dropResGroupCallback(bool isCommit, void *arg)
+dropResgroupCallback(bool isCommit, void *arg)
 {
 	Oid groupId;
 
@@ -920,7 +920,7 @@ dropResGroupCallback(bool isCommit, void *arg)
  * transaction of this resource group may need to be woke up.
  */
 static void
-alterResGroupCallback(bool isCommit, void *arg)
+alterResgroupCallback(bool isCommit, void *arg)
 {
 	ResourceGroupAlterCallbackContext *ctx =
 		(ResourceGroupAlterCallbackContext *) arg;

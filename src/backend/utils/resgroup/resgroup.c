@@ -896,8 +896,8 @@ ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks, bool *waiverUsed)
 		self->doMemCheck = false;
 
 		LOG_RESGROUP_DEBUG(LOG, "resource group is concurrently dropped while "
-							"reserving memory: dropped group=%d, my group=%d",
-							groupGroupId, selfGroupId);
+						   "reserving memory: dropped group=%d, my group=%d",
+						   groupGroupId, selfGroupId);
 
 		return true;
 	}
@@ -968,8 +968,8 @@ ResGroupReleaseMemory(int32 memoryChunks)
 		self->doMemCheck = false;
 
 		LOG_RESGROUP_DEBUG(LOG, "resource group is concurrently dropped while "
-							"releasing memory: dropped group=%d, my group=%d",
-							groupGroupId, selfGroupId);
+						   "releasing memory: dropped group=%d, my group=%d",
+						   groupGroupId, selfGroupId);
 
 		return;
 	}
@@ -1921,9 +1921,11 @@ addTotalQueueDuration(ResGroupData *group)
 	TimestampTz start = pgstat_fetch_resgroup_queue_timestamp();
 	TimestampTz now = GetCurrentTimestamp();
 	Datum durationDatum = DirectFunctionCall2(timestamptz_age,
-						TimestampTzGetDatum(now), TimestampTzGetDatum(start));
+											  TimestampTzGetDatum(now),
+											  TimestampTzGetDatum(start));
 	Datum sumDatum = DirectFunctionCall2(interval_pl,
-						IntervalPGetDatum(&group->totalQueuedTime), durationDatum);
+										 IntervalPGetDatum(&group->totalQueuedTime),
+										 durationDatum);
 	memcpy(&group->totalQueuedTime, DatumGetIntervalP(sumDatum), sizeof(Interval));
 }
 
