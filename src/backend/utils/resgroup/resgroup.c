@@ -420,14 +420,11 @@ InitResGroups(void)
 	Relation			relResGroup;
 	Relation			relResGroupCapability;
 
-	/*
-	 * On master, the postmaster does the initialization
-	 * On segments, the first QE does the initialization
-	 */
-	if (Gp_role == GP_ROLE_DISPATCH && GpIdentity.segindex != MASTER_CONTENT_ID)
-		return;
-
 	on_shmem_exit(AtProcExit_ResGroup, 0);
+
+	/*
+	 * On master and segments, the first backend does the initialization.
+	 */
 	if (pResGroupControl->loaded)
 		return;
 	/*
