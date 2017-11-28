@@ -2663,6 +2663,20 @@ startOutgoingUDPConnections(ChunkTransportState *transportStates,
 
 }
 
+typedef struct SockAddrTag
+{
+	char addr[40];
+	int port;
+}SockAddrTag;
+
+typedef struct SockAddrHashEntry
+{
+	struct SockAddrTag tag;
+	struct sockaddr_storage *addr;
+	socklen_t len;
+}SockAddrHashEntry;
+
+static HTAB *SockAddrHash = NULL;
 
 /*
  * getSockAddr
@@ -2676,6 +2690,30 @@ getSockAddr(struct sockaddr_storage *peer, socklen_t *peer_len, const char *list
 	char	   *service;
 	struct addrinfo *addrs = NULL;
 	struct addrinfo hint;
+	struct SockAddrTag tag;
+	struct SockAddrHashEntry *sockEntry;
+
+	if (SockAddrHash == NULL)
+	{
+		HASHCTL		ctl;
+
+		MemSet(&ctl, 0, sizeof(ctl));
+		ctl.keysize = sizeof(SockAddrTag);
+		ctl.entrysize = sizeof(SockAddrHashEntry);
+		SockAddrHash = hash_create("sock addr cache", 256, &ctl, HASH_ELEM);
+	}
+
+	tag.port = listenerPort;
+	memcpy(&tag.addr[0], listenerAddr, sizeof(tag.addr));
+	
+	sockEntry = (SockAddrHashEntry *) hash_search(SockAddrHash, &tag, HASH_FIND, NULL);
+	if (sockEntry != NULL)
+	{
+		*peer_len = sockEntry->len;
+		memset(peer, 0, sizeof(struct sockaddr_storage));
+		memcpy(peer, sockEntry->addr, sockEntry->len);
+		return;
+	}
 
 	/*
 	 * Get socketaddr to connect to.
@@ -2719,6 +2757,12 @@ getSockAddr(struct sockaddr_storage *peer, socklen_t *peer_len, const char *list
 	memset(peer, 0, sizeof(struct sockaddr_storage));
 	memcpy(peer, addrs->ai_addr, addrs->ai_addrlen);
 	*peer_len = addrs->ai_addrlen;
+
+	
+	sockEntry = (SockAddrHashEntry *)hash_search(SockAddrHash, &tag, HASH_ENTER, NULL);
+	sockEntry->len = addrs->ai_addrlen;
+	sockEntry->addr = MemoryContextAllocZero(TopMemoryContext, addrs->ai_addrlen);
+	memcpy(sockEntry->addr, addrs->ai_addr, addrs->ai_addrlen);
 
 	pg_freeaddrinfo_all(addrs->ai_family, addrs);
 }
