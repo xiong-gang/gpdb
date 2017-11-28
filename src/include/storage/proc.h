@@ -58,6 +58,14 @@ struct XidCache
 #define		PROC_VACUUM_STATE_MASK (0x0E)
 
 /*
+ * We allow a small number of "weak" relation locks (AccesShareLock,
+ * RowShareLock, RowExclusiveLock) to be recorded in the PGPROC structure
+ * rather than the main lock table.  This eases contention on the lock
+ * manager LWLocks.  See storage/lmgr/README for additional details.
+ */
+#define		FP_LOCK_SLOTS_PER_BACKEND 16
+
+/*
  * Each backend has a PGPROC struct in shared memory.  There is also a list of
  * currently-unused PGPROC structs that will be reallocated to new backends.
  *
@@ -173,6 +181,12 @@ struct PGPROC
 	void		*resSlot;	/* the resource group slot granted.
    							 * NULL indicates the resource group is
 							 * locked for drop. */
+	/* Per-backend LWLock.  Protects fields below. */
+	LWLockId	backendLock;	/* protects the fields below */
+
+	/* Lock manager data, recording fast-path locks taken by this backend. */
+	uint64		fpLockBits;		/* lock modes held for each fast-path slot */
+	Oid			fpRelId[FP_LOCK_SLOTS_PER_BACKEND]; /* slots for rel oids */
 };
 
 /* NOTE: "typedef struct PGPROC PGPROC" appears in storage/lock.h. */
@@ -190,6 +204,10 @@ typedef struct PROC_HDR
 {
 	/* The PGPROC structures */
 	PGPROC *procs;
+	/* Array of PGPROC structures (not including dummies for prepared txns) */
+	PGPROC	   *allProcs;
+	/* Length of allProcs array */
+	uint32		allProcCount;
 	/* Head of list of free PGPROC structures */
 	PGPROC	   *freeProcs;
 	/* Head of list of autovacuum's free PGPROC structures */
@@ -204,6 +222,8 @@ typedef struct PROC_HDR
 	int			numFreeProcs;
 
 } PROC_HDR;
+
+extern PROC_HDR *ProcGlobal;
 
 /*
  * We set aside some extra PGPROC structures for auxiliary processes,

@@ -89,7 +89,7 @@ PGPROC	   *lockHolderProcPtr = NULL;
 NON_EXEC_STATIC slock_t *ProcStructLock = NULL;
 
 /* Pointers to shared-memory structures */
-NON_EXEC_STATIC PROC_HDR *ProcGlobal = NULL;
+PROC_HDR *ProcGlobal = NULL;
 NON_EXEC_STATIC PGPROC *AuxiliaryProcs = NULL;
 
 /* If we are waiting for a lock, this points to the associated LOCALLOCK */
@@ -181,6 +181,7 @@ InitProcGlobal(int mppLocalProcessCounter)
 	int			i;
 	bool		found;
 
+	uint32          TotalProcs = MaxBackends + NUM_AUXILIARY_PROCS + 100;
 	/* Create the ProcGlobal shared structure */
 	ProcGlobal = (PROC_HDR *)
 		ShmemInitStruct("Proc Header", sizeof(PROC_HDR), &found);
@@ -208,7 +209,9 @@ InitProcGlobal(int mppLocalProcessCounter)
 	/*
 	 * Pre-create the PGPROC structures and create a semaphore for each.
 	 */
-	procs = (PGPROC *) ShmemAlloc((MaxConnections) * sizeof(PGPROC));
+	procs = (PGPROC *) ShmemAlloc(TotalProcs * sizeof(PGPROC));
+	ProcGlobal->allProcs = procs;
+	ProcGlobal->allProcCount = TotalProcs;
 	if (!procs)
 		ereport(FATAL,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -217,7 +220,8 @@ InitProcGlobal(int mppLocalProcessCounter)
 	for (i = 0; i < MaxConnections; i++)
 	{
 		PGSemaphoreCreate(&(procs[i].sem));
-		InitSharedLatch(&(procs[i].procLatch));
+		procs[i].backendLock = LWLockAssign();
+		InitSharedLatch(&procs[i].procLatch);
 
 		procs[i].links.next = (SHM_QUEUE *) ProcGlobal->freeProcs;
 		ProcGlobal->freeProcs = &procs[i];

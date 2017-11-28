@@ -50,6 +50,8 @@ typedef struct
 
 } PG_Lock_Status;
 
+/* Number of columns in pg_locks output */
+#define NUM_LOCK_STATUS_COLUMNS		15
 
 /*
  * VXIDGetDatum - Construct a text representation of a VXID
@@ -262,9 +264,6 @@ pg_lock_status(PG_FUNCTION_ARGS)
 
 	while (mystatus->currIdx < lockData->nelements)
 	{
-		PROCLOCK   *proclock;
-		LOCK	   *lock;
-		PGPROC	   *proc;
 		bool		granted;
 		LOCKMODE	mode = 0;
 		const char *locktypename;
@@ -273,10 +272,11 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		bool		nulls[17];
 		HeapTuple	tuple;
 		Datum		result;
+		LockInstanceData   *instance;
+		LockInstanceData   *lock;
 
-		proclock = &(lockData->proclocks[mystatus->currIdx]);
-		lock = &(lockData->locks[mystatus->currIdx]);
-		proc = &(lockData->procs[mystatus->currIdx]);
+		instance = &(lockData->locks[mystatus->currIdx]);
+		lock = instance;
 
 		/*
 		 * Look to see if there are any held lock modes in this PROCLOCK. If
@@ -284,14 +284,14 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		 * again.
 		 */
 		granted = false;
-		if (proclock->holdMask)
+		if (instance->holdMask)
 		{
 			for (mode = 0; mode < MAX_LOCKMODES; mode++)
 			{
-				if (proclock->holdMask & LOCKBIT_ON(mode))
+				if (instance->holdMask & LOCKBIT_ON(mode))
 				{
 					granted = true;
-					proclock->holdMask &= LOCKBIT_OFF(mode);
+					instance->holdMask &= LOCKBIT_OFF(mode);
 					break;
 				}
 			}
@@ -303,10 +303,10 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		 */
 		if (!granted)
 		{
-			if (proc->waitLock == proclock->tag.myLock)
+			if (instance->waitLockMode != NoLock)
 			{
 				/* Yes, so report it with proper mode */
-				mode = proc->waitLockMode;
+				mode = instance->waitLockMode;
 
 				/*
 				 * We are now done with this PROCLOCK, so advance pointer to
@@ -331,125 +331,26 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		MemSet(values, 0, sizeof(values));
 		MemSet(nulls, false, sizeof(nulls));
 
-		if (lock->tag.locktag_type <= LOCKTAG_LAST_TYPE)
-			locktypename = LockTagTypeNames[lock->tag.locktag_type];
+		if (instance->locktag.locktag_type <= LOCKTAG_LAST_TYPE)
+			locktypename = LockTagTypeNames[instance->locktag.locktag_type];
 		else
 		{
 			snprintf(tnbuf, sizeof(tnbuf), "unknown %d",
-					 (int) lock->tag.locktag_type);
+					 (int) instance->locktag.locktag_type);
 			locktypename = tnbuf;
 		}
 		values[0] = CStringGetTextDatum(locktypename);
 
-		switch (lock->tag.locktag_type)
-		{
-			case LOCKTAG_RELATION:
-			case LOCKTAG_RELATION_EXTEND:
-			case LOCKTAG_RELATION_RESYNCHRONIZE:
-				values[1] = ObjectIdGetDatum(lock->tag.locktag_field1);
-				values[2] = ObjectIdGetDatum(lock->tag.locktag_field2);
-				nulls[3] = true;
-				nulls[4] = true;
-				nulls[5] = true;
-				nulls[6] = true;
-				nulls[7] = true;
-				nulls[8] = true;
-				nulls[9] = true;
-				break;
-			case LOCKTAG_PAGE:
-				values[1] = ObjectIdGetDatum(lock->tag.locktag_field1);
-				values[2] = ObjectIdGetDatum(lock->tag.locktag_field2);
-				values[3] = UInt32GetDatum(lock->tag.locktag_field3);
-				nulls[4] = true;
-				nulls[5] = true;
-				nulls[6] = true;
-				nulls[7] = true;
-				nulls[8] = true;
-				nulls[9] = true;
-				break;
-			case LOCKTAG_TUPLE:
-				values[1] = ObjectIdGetDatum(lock->tag.locktag_field1);
-				values[2] = ObjectIdGetDatum(lock->tag.locktag_field2);
-				values[3] = UInt32GetDatum(lock->tag.locktag_field3);
-				values[4] = UInt16GetDatum(lock->tag.locktag_field4);
-				nulls[5] = true;
-				nulls[6] = true;
-				nulls[7] = true;
-				nulls[8] = true;
-				nulls[9] = true;
-				break;
-			case LOCKTAG_TRANSACTION:
-				values[6] = TransactionIdGetDatum(lock->tag.locktag_field1);
-				nulls[1] = true;
-				nulls[2] = true;
-				nulls[3] = true;
-				nulls[4] = true;
-				nulls[5] = true;
-				nulls[7] = true;
-				nulls[8] = true;
-				nulls[9] = true;
-				break;
-			case LOCKTAG_VIRTUALTRANSACTION:
-				values[5] = VXIDGetDatum(lock->tag.locktag_field1,
-										 lock->tag.locktag_field2);
-				nulls[1] = true;
-				nulls[2] = true;
-				nulls[3] = true;
-				nulls[4] = true;
-				nulls[6] = true;
-				nulls[7] = true;
-				nulls[8] = true;
-				nulls[9] = true;
-				break;
-			case LOCKTAG_RELATION_APPENDONLY_SEGMENT_FILE:
-				values[1] = ObjectIdGetDatum(lock->tag.locktag_field1);
-				values[2] = ObjectIdGetDatum(lock->tag.locktag_field2);
-				values[7] = ObjectIdGetDatum(lock->tag.locktag_field3);
-				nulls[3] = true;
-				nulls[4] = true;
-				nulls[5] = true;
-				nulls[6] = true;
-				nulls[8] = true;
-				nulls[9] = true;
-				break;
-			case LOCKTAG_RESOURCE_QUEUE:
-				values[1] = ObjectIdGetDatum(proc->databaseId);
-				values[8] = ObjectIdGetDatum(lock->tag.locktag_field1);
-				nulls[2] = true;
-				nulls[3] = true;
-				nulls[4] = true;
-				nulls[5] = true;
-				nulls[6] = true;
-				nulls[7] = true;
-				nulls[9] = true;
-				break;
-			case LOCKTAG_OBJECT:
-			case LOCKTAG_USERLOCK:
-			case LOCKTAG_ADVISORY:
-			default:			/* treat unknown locktags like OBJECT */
-				values[1] = ObjectIdGetDatum(lock->tag.locktag_field1);
-				values[7] = ObjectIdGetDatum(lock->tag.locktag_field2);
-				values[8] = ObjectIdGetDatum(lock->tag.locktag_field3);
-				values[9] = Int16GetDatum(lock->tag.locktag_field4);
-				nulls[2] = true;
-				nulls[3] = true;
-				nulls[4] = true;
-				nulls[5] = true;
-				nulls[6] = true;
-				break;
-		}
 
-		values[10] = VXIDGetDatum(proc->backendId, proc->lxid);
-		if (proc->pid != 0)
-			values[11] = Int32GetDatum(proc->pid);
+		values[10] = VXIDGetDatum(instance->backend, instance->lxid);
+		if (instance->pid != 0)
+			values[11] = Int32GetDatum(instance->pid);
 		else
 			nulls[11] = true;
-		values[12] = CStringGetTextDatum(GetLockmodeName(LOCK_LOCKMETHOD(*lock), mode));
+		values[12] = CStringGetTextDatum(GetLockmodeName(instance->locktag.locktag_lockmethodid, mode));
 		values[13] = BoolGetDatum(granted);
 		
-		values[14] = Int32GetDatum(proc->mppSessionId);
 
-		values[15] = BoolGetDatum(proc->mppIsWriter);
 
 		values[16] = Int32GetDatum(Gp_segment);
 

@@ -7939,6 +7939,7 @@ MaxLivePostmasterChildren(void)
 extern slock_t *ShmemLock;
 extern LWLock *LWLockArray;
 extern PROC_HDR *ProcGlobal;
+extern slock_t *ProcStructLock;
 extern PGPROC *AuxiliaryProcs;
 extern PMSignalData *PMSignalState;
 extern int	pgStatSock;
