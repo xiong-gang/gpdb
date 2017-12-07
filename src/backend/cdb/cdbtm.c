@@ -2360,7 +2360,6 @@ CreateDistributedSnapshot(DistributedSnapshotWithLocalMapping *distribSnapshotWi
 {
 	int			globalCount;
 	int			i;
-	TMGXACT    *gxact_candidate;
 	DtxState	state;
 	int			count;
 	DistributedTransactionId xmin;
@@ -2401,13 +2400,27 @@ CreateDistributedSnapshot(DistributedSnapshotWithLocalMapping *distribSnapshotWi
 	 */
 	globalCount = *shmNumGxacts;
 
+	DistributedTransactionId xmins[globalCount];
+	DistributedTransactionId gxids[globalCount];
+	DtxState	states[globalCount];
+
+	for (i = 0; i < globalCount; i++)
+	{
+		xmins[i] = shmGxactArray[i]->xminDistributedSnapshot;
+		gxids[i] = shmGxactArray[i]->gxid;
+		states[i] = shmGxactArray[i]->state;
+	}
+
+	distribSnapshotId = (*shmNextSnapshotId)++;
+
+	releaseTmLock();
+
 	for (i = 0; i < globalCount; i++)
 	{
 		DistributedTransactionId dxid;
 
-		gxact_candidate = shmGxactArray[i];
+		state = states[i];
 
-		state = gxact_candidate->state;
 		switch (state)
 		{
 			case DTX_STATE_ACTIVE_NOT_DISTRIBUTED:
@@ -2453,7 +2466,7 @@ CreateDistributedSnapshot(DistributedSnapshotWithLocalMapping *distribSnapshotWi
 		}
 
 		/* Update globalXminDistributedSnapshots to be the smallest valid dxid */
-		dxid = gxact_candidate->xminDistributedSnapshot;
+		dxid = xmins[i];
 		if ((dxid != InvalidDistributedTransactionId) &&
 			dxid < globalXminDistributedSnapshots)
 		{
@@ -2464,7 +2477,7 @@ CreateDistributedSnapshot(DistributedSnapshotWithLocalMapping *distribSnapshotWi
 		 * Include the current distributed transaction in the min/max
 		 * calculation.
 		 */
-		inProgressXid = gxact_candidate->gxid;
+		inProgressXid = gxids[i];
 		if (inProgressXid < xmin)
 		{
 			xmin = inProgressXid;
@@ -2474,7 +2487,7 @@ CreateDistributedSnapshot(DistributedSnapshotWithLocalMapping *distribSnapshotWi
 			xmax = inProgressXid;
 		}
 
-		if (gxact_candidate == currentGxact)
+		if (inProgressXid == currentGxact->gxid)
 			continue;
 
 		if (count >= ds->maxCount)
@@ -2488,9 +2501,6 @@ CreateDistributedSnapshot(DistributedSnapshotWithLocalMapping *distribSnapshotWi
 			 "CreateDistributedSnapshot added inProgressDistributedXid = %u to snapshot",
 			 ds->inProgressXidArray[count]);
 	}
-
-	distribSnapshotId = (*shmNextSnapshotId)++;
-	releaseTmLock();
 
 	/*
 	 * Above globalXminDistributedSnapshots was calculated based on lowest
