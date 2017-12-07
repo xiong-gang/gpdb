@@ -229,6 +229,7 @@ typedef struct TMGXACT
 
 	bool						directTransaction;
 	uint16						directTransactionContentId;
+	int index;
 }	TMGXACT;
 
 typedef struct TMGXACTSTATUS
