@@ -321,6 +321,7 @@ extern void freeDtxCheckPointInfoAndUnlock(char *info, int info_size, XLogRecPtr
 extern void verify_shared_snapshot_ready(void);
 
 void		getTmLock(void);
+void		getTmLockEx(void);
 void		releaseTmLock(void);
 
 int			mppTxnOptions(bool needTwoPhase);
