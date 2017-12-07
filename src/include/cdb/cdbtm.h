@@ -15,6 +15,7 @@
 #include "cdb/cdbdtxcontextinfo.h"
 #include "cdb/cdbpublic.h"
 #include "nodes/plannodes.h"
+#include "storage/s_lock.h"
 
 /**
  * DTX states, used to track the state of the distributed transaction
@@ -251,6 +252,7 @@ typedef struct TMGALLXACTSTATUS
 typedef struct TmControlBlock
 {
 	LWLockId					ControlLock;
+	slock_t						ControlSpinLock;
 	bool						recoverred;
 	DistributedTransactionTimeStamp	distribTimeStamp;
 	DistributedTransactionId	seqno;
