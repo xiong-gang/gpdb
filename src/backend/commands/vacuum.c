@@ -374,8 +374,8 @@ vacuum(VacuumStmt *vacstmt, Oid relid, bool do_toast,
 	volatile bool all_rels,
 				in_outer_xact,
 				use_own_xacts;
-	List	   *vacuum_relations;
-	List	   *analyze_relations;
+	List	   *vacuum_relations = NULL;
+	List	   *analyze_relations = NULL;
 
 	if (vacstmt->vacuum && vacstmt->rootonly)
 		ereport(ERROR,
@@ -962,7 +962,7 @@ vacuumStatement_Relation(VacuumStmt *vacstmt, Oid relid,
 	Relation			onerel;
 	LockRelId			onerelid;
 	MemoryContext		oldctx;
-	VacuumStatsContext stats_context;
+	VacuumStatsContext stats_context = { NIL };
 
 	vacstmt = copyObject(vacstmt);
 	vacstmt->analyze = false;

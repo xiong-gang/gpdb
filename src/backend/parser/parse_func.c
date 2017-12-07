@@ -104,7 +104,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 	Node	   *retval;
 	bool		retset;
 	int			nvargs;
-	Oid			vatype;
+	Oid			vatype = InvalidOid;
 	FuncDetailCode fdresult;
 	char		aggkind = 0;
 

@@ -563,7 +563,7 @@ void
 ResGroupDropFinish(Oid groupId, bool isCommit)
 {
 	ResGroupData	*group;
-	volatile int	savedInterruptHoldoffCount;
+	volatile int	savedInterruptHoldoffCount = 0;
 
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 
@@ -611,7 +611,7 @@ ResGroupDropFinish(Oid groupId, bool isCommit)
 void
 ResGroupCreateOnAbort(Oid groupId)
 {
-	volatile int savedInterruptHoldoffCount;
+	volatile int savedInterruptHoldoffCount = 0;
 
 	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
 	PG_TRY();
@@ -648,7 +648,7 @@ ResGroupAlterOnCommit(Oid groupId,
 {
 	ResGroupData	*group;
 	bool			shouldWakeUp;
-	volatile int	savedInterruptHoldoffCount;
+	volatile int	savedInterruptHoldoffCount = 0;
 
 	Assert(caps != NULL);
 

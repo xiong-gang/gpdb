@@ -1106,7 +1106,7 @@ cdb_make_pathkey_for_expr(PlannerInfo *root,
 	PathKey    *pk = NULL;
 	List	   *mergeopfamilies;
 	EquivalenceClass *eclass;
-	int			strategy;
+	int			strategy = 0;
 	ListCell   *lc;
 
 	/* Get the expr's data type. */
