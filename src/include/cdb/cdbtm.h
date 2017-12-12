@@ -226,10 +226,10 @@ typedef struct TMGXACT
 	bool						badPrepareGangs;
 
 	int							debugIndex;
+	int							index;
 
 	bool						directTransaction;
 	uint16						directTransactionContentId;
-	int index;
 }	TMGXACT;
 
 typedef struct TMGXACTSTATUS
