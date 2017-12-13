@@ -275,8 +275,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
 
     
     def test_drop_data_1_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -297,8 +295,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_2_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -320,8 +316,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
 
 
     def test_drop_data_2_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -340,8 +334,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_1_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -360,8 +352,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_multi_odd_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -380,8 +370,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_multi_even_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -400,8 +388,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_multi_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -420,8 +406,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_multi_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -439,8 +423,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_multi_odd_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -460,8 +442,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
 
 
     def test_drop_data_multi_even_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -481,8 +461,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
 
 
     def test_drop_data_percent_10(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -501,8 +479,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_percent_50(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -521,8 +497,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_percent_80(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -542,8 +516,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
 
 
     def test_drop_data_ack_1_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -562,8 +534,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_ack_2_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -583,8 +553,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
 
 
     def test_drop_data_ack_2_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -603,8 +571,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_ack_1_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -623,8 +589,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_ack_multi_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -643,8 +607,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_ack_multi_even_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -663,8 +625,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_ack_multi_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -683,8 +643,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_ack_multi_even_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -703,8 +661,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_ack_percent_10(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -724,8 +680,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_ack_percent_50(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -745,8 +699,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_eos_1(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -765,8 +717,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_eos_3(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -785,8 +735,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_eos_percent_50(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -805,8 +753,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
         self.assertTrue(test_ret)
 
     def test_drop_data_all_percent_10(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -845,8 +791,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
 
     
     def test_drop_data_all_percent_30(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -866,8 +810,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
 
 
     def test_drop_data_all_percent_50(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):
@@ -887,8 +829,6 @@ class UDPICPacketControlTestCases(UDPICTestCases):
 
 
     def test_drop_data_all_percent_70(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         if (self.is_version_skip):
             self.skipTest('Test does not apply to the deployed GPDB version.')
         if (self.is_fc_method_skip):

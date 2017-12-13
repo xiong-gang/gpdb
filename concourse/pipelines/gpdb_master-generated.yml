@@ -1679,8 +1679,12 @@ jobs:
         - |
           set -ex
           ccp_src/aws/setup_ssh_to_cluster.sh
-          ssh -t centos@mdw << 'SSH_CMD'
-            sudo yum --cacheonly list installed kernel-devel-$(uname -r)
+          ssh -t centos@mdw sudo bash -ex << 'SSH_CMD'
+            yum -y install kernel-devel-$(uname -r)
+            echo "gpadmin ALL=(ALL)   NOPASSWD: ALL" >> /etc/sudoers
+          SSH_CMD
+          ssh -t centos@sdw1 sudo bash -ex << 'SSH_CMD'
+            echo "gpadmin ALL=(ALL)   NOPASSWD: ALL" >> /etc/sudoers
           SSH_CMD
     on_failure:
       <<: *set_failed

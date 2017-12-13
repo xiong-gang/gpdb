@@ -226,9 +226,6 @@ class UDPICFCTestCases(SQLTestCase):
       #  self.assertTrue(out)
     
     def test_ic_fc_kill_snd_process(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
-
         cmd_str = "psql -a -f " + local_path(self.faultTolerance_sql + str(self._testMethodName) + '.sql') + " &> output_killsnd &"
         out = runShellCommand(cmd_str)
         
@@ -250,8 +247,6 @@ class UDPICFCTestCases(SQLTestCase):
         self.assertTrue(out)
 
     def test_ic_fc_kill_recv_process(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         
         cmd_str = "psql -a -f " + local_path(self.faultTolerance_sql + str(self._testMethodName) + '.sql') + " &> output_killrecv &"
         out = runShellCommand(cmd_str)

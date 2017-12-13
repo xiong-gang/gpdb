@@ -198,8 +198,6 @@ class UDPICFCTestCases(SQLTestCase):
   
     # This method is used to check the change of gp_interconnect_queue_depth take affect
     def test_check_queue_depth(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         try:
             out = self.checkGUC(self.gp_interconnect_queue_depth)
             self.assertTrue(len(out) > 4)
@@ -220,8 +218,6 @@ class UDPICFCTestCases(SQLTestCase):
  
     # This method is used to check the change of gp_interconnect_snd_queue_depth take affect
     def test_check_snd_queue_depth(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         try:
             out = self.checkGUC(self.gp_interconnect_snd_queue_depth)
             self.assertTrue(len(out) > 4)
@@ -243,8 +239,6 @@ class UDPICFCTestCases(SQLTestCase):
    
     # This method is used to check the change of gp_interconnect_fc_method take affect
     def test_check_fc_method(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         try:
             out = self.checkGUC(self.gp_interconnect_snd_queue_depth)
             self.assertTrue(len(out) > 4)
@@ -266,8 +260,6 @@ class UDPICFCTestCases(SQLTestCase):
     
     # This method is used to check the change of gp_interconnect_transmit_timeout take affect
     def test_check_transmit_timeout(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         try:
             out = self.checkGUC(self.gp_interconnect_transmit_timeout)
             self.assertTrue(len(out) > 4)
@@ -291,8 +283,6 @@ class UDPICFCTestCases(SQLTestCase):
     
     # This method is used to check the change of gp_interconnect_min_retries_before_timeout take affect
     def test_check_min_retries(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         try:
             out = self.checkGUC(self.gp_interconnect_transmit_timeout)
             self.assertTrue(len(out) > 4)
@@ -316,8 +306,6 @@ class UDPICFCTestCases(SQLTestCase):
     
     # This method is used to check the change of gp_interconnect_timer_period take affect
     def test_check_timer_period(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         try:
             out = self.checkGUC(self.gp_interconnect_timer_period)
             self.assertTrue(len(out) > 4)

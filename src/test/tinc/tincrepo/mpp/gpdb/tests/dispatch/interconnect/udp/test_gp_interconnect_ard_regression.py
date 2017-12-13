@@ -141,8 +141,6 @@ class UDPICARDBFVCases(SQLTestCase):
 
 
     def test_gp_interconnect_fc_ard_142(self):
-        if (self.cluster_platform.lower().find('red hat enterprise linux server') < 0):
-            self.skipTest('Test only applies to RHEL platform.')
         try:
             out = self.checkGUC(self.gp_interconnect_min_retries_before_timeout)
             self.assertTrue(len(out) > 4)
