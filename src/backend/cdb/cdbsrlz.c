@@ -46,13 +46,17 @@ serializeNode(Node *node, int *size, int *uncompressed_size_out)
 	{
 		pszNode = nodeToBinaryStringFast(node, &uncompressed_size);
 		Assert(pszNode != NULL);
+*size = uncompressed_size;
+sNode = pszNode;
 
 		if (NULL != uncompressed_size_out)
 		{
 			*uncompressed_size_out = uncompressed_size;
 		}
+#if 0
 		sNode = compress_string(pszNode, uncompressed_size, size);
 		pfree(pszNode);
+#endif
 	}
 	END_MEMORY_ACCOUNT();
 
@@ -75,6 +79,8 @@ deserializeNode(const char *strNode, int size)
 
 	START_MEMORY_ACCOUNT(MemoryAccounting_CreateAccount(0, MEMORY_OWNER_TYPE_Deserializer));
 	{
+node = readNodeFromBinaryString(strNode, size);
+#if 0
 		sNode = uncompress_string(strNode, size, &uncompressed_len);
 
 		Assert(sNode != NULL);
@@ -82,6 +88,7 @@ deserializeNode(const char *strNode, int size)
 		node = readNodeFromBinaryString(sNode, uncompressed_len);
 
 		pfree(sNode);
+#endif
 	}
 	END_MEMORY_ACCOUNT();
 
