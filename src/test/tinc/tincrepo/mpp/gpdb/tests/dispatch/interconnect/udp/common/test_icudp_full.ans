@@ -19,11 +19,11 @@ SELECT count(*) from small_table;
 (1 row)
 
 -- Makesure these codes are triggered to improve the code coverage during test.
-SET gp_udpic_dropacks_percent = 20;
+SET gp_udpic_dropacks_percent = 10;
 SET
-SET gp_udpic_dropxmit_percent = 20;
+SET gp_udpic_dropxmit_percent = 10;
 SET
-SET gp_udpic_fault_inject_percent = 40;
+SET gp_udpic_fault_inject_percent = 20;
 SET
 SET gp_interconnect_full_crc = true;
 SET

@@ -14,9 +14,9 @@ CREATE TABLE small_table(dkey INT, jkey INT, rval REAL, tval TEXT default 'abcde
 SELECT count(*) from small_table;
 
 -- Makesure these codes are triggered to improve the code coverage during test.
-SET gp_udpic_dropacks_percent = 20;
-SET gp_udpic_dropxmit_percent = 20;
-SET gp_udpic_fault_inject_percent = 40;
+SET gp_udpic_dropacks_percent = 10;
+SET gp_udpic_dropxmit_percent = 10;
+SET gp_udpic_fault_inject_percent = 20;
 SET gp_interconnect_full_crc = true;
 SET gp_udpic_fault_inject_bitmap = 50790655;
 -- SET gp_log_interconnect TO 'DEBUG';
