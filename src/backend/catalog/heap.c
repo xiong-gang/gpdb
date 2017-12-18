@@ -1468,7 +1468,7 @@ heap_create_with_catalog(const char *relname,
 	Oid			new_type_oid;
 	Oid			new_array_oid = InvalidOid;
 	bool		appendOnlyRel;
-	StdRdOptions *stdRdOptions;
+	StdRdOptions *stdRdOptions = NULL;
 	int			safefswritesize = gp_safefswritesize;
 	Oid			existing_rowtype_oid = InvalidOid;
 	char	   *relarrayname = NULL;
