@@ -120,14 +120,22 @@ static bool processResults(CdbDispatchResult *dispatchResult);
 static void
 			signalQEs(CdbDispatchCmdAsync *pParms);
 
-static void
-			checkSegmentAlive(CdbDispatchCmdAsync *pParms);
+static int
+			checkSegmentAlive(CdbDispatchCmdAsync *pParms,
+							  int nfds,
+							  struct pollfd fds[],
+							  CdbDispatchResult *results[]);
 
-static void
-			handlePollError(CdbDispatchCmdAsync *pParms);
+static int
+			handlePollError(int nfds,
+							struct pollfd fds[],
+							CdbDispatchResult *results[]);
 
-static void
-			handlePollSuccess(CdbDispatchCmdAsync *pParms, struct pollfd *fds);
+static int
+			handlePollSuccess(CdbDispatchCmdAsync *pParms,
+							  int nfds,
+							  struct pollfd fds[],
+							  CdbDispatchResult *results[]);
 
 /*
  * Check dispatch result.
@@ -193,31 +201,44 @@ static void
 cdbdisp_waitDispatchFinish_async(struct CdbDispatcherState *ds)
 {
 	const static int DISPATCH_POLL_TIMEOUT = 500;
-	struct pollfd *fds;
-	int			nfds,
-				i;
+	int			i;
 	CdbDispatchCmdAsync *pParms = (CdbDispatchCmdAsync *) ds->dispatchParams;
 	int			dispatchCount = pParms->dispatchCount;
+	int			nfds = 0;
+	struct pollfd fds[dispatchCount];
+	CdbDispatchResult *results[dispatchCount];
 
-	fds = (struct pollfd *) palloc(dispatchCount * sizeof(struct pollfd));
+	/* Fill in poll fds */
+	for (i = 0; i < dispatchCount; i++)
+	{
+		CdbDispatchResult *qeResult = pParms->dispatchResultPtrArray[i];
+		SegmentDatabaseDescriptor *segdbDesc = qeResult->segdbDesc;
+		PGconn	   *conn = segdbDesc->conn;
+		int			sock = PQsocket(segdbDesc->conn);
 
-	while (true)
+		/* skip already completed connections */
+		if (conn->outCount == 0)
+			continue;
+
+		Assert(sock >= 0);
+		results[nfds] = qeResult;
+		fds[nfds].fd = sock;
+		fds[nfds].events = POLLOUT;
+		nfds++;
+	}
+
+	while (nfds > 0)
 	{
 		int			pollRet;
 
-		nfds = 0;
-		memset(fds, 0, dispatchCount * sizeof(struct pollfd));
-
-		for (i = 0; i < dispatchCount; i++)
+		for (i = 0; i < nfds; i++)
 		{
-			CdbDispatchResult *qeResult = pParms->dispatchResultPtrArray[i];
+			CdbDispatchResult *qeResult = results[i];
 			SegmentDatabaseDescriptor *segdbDesc = qeResult->segdbDesc;
 			PGconn	   *conn = segdbDesc->conn;
 			int			ret;
 
-			/* skip already completed connections */
-			if (conn->outCount == 0)
-				continue;
+			Assert(conn->outCount > 0);
 
 			/*
 			 * call send for this connection regardless of its POLLOUT status,
@@ -226,16 +247,16 @@ cdbdisp_waitDispatchFinish_async(struct CdbDispatcherState *ds)
 			ret = pqFlushNonBlocking(conn);
 
 			if (ret == 0)
-				continue;
-			else if (ret > 0)
 			{
-				int			sock = PQsocket(segdbDesc->conn);
-
-				Assert(sock >= 0);
-				fds[nfds].fd = sock;
-				fds[nfds].events = POLLOUT;
-				nfds++;
+				/* Remove from poll fds */
+				if (--nfds == i)
+					continue;
+				fds[i] = fds[nfds];
+				results[i] = results[nfds];
+				i--;
 			}
+			else if (ret > 0)
+				continue;
 			else if (ret < 0)
 			{
 				pqHandleSendFailure(conn);
@@ -265,8 +286,6 @@ cdbdisp_waitDispatchFinish_async(struct CdbDispatcherState *ds)
 		if (pollRet < 0)
 			elog(ERROR, "Poll failed during dispatch");
 	}
-
-	pfree(fds);
 }
 
 /*
@@ -401,24 +420,49 @@ checkDispatchResult(CdbDispatcherState *ds,
 	SegmentDatabaseDescriptor *segdbDesc;
 	CdbDispatchResult *dispatchResult;
 	int			i;
-	int			db_count = 0;
+	int			db_count = pParms->dispatchCount;
 	int			timeout = 0;
 	bool		sentSignal = false;
-	struct pollfd *fds;
+	int			nfds = 0;
+	struct pollfd fds[db_count];
+	CdbDispatchResult *(results[db_count]);
 
-	db_count = pParms->dispatchCount;
-	fds = (struct pollfd *) palloc(db_count * sizeof(struct pollfd));
+	/* Fill in poll fds */
+	for (i = 0; i < db_count; i++)
+	{
+		PGconn		*conn;
+		int			sock;
+
+		dispatchResult = pParms->dispatchResultPtrArray[i];
+		segdbDesc = dispatchResult->segdbDesc;
+		conn = segdbDesc->conn;
+
+		/*
+		 * Already finished with this QE?
+		 */
+		if (!dispatchResult->stillRunning)
+			continue;
+
+		Assert(!cdbconn_isBadConnection(segdbDesc));
+
+		/*
+		 * Add socket to fd_set if still connected.
+		 */
+		sock = PQsocket(conn);
+		Assert(sock >= 0);
+		results[nfds] = dispatchResult;
+		fds[nfds].fd = sock;
+		fds[nfds].events = conn->outCount > 0 ? POLLOUT : POLLIN;
+		nfds++;
+	}
 
 	/*
 	 * OK, we are finished submitting the command to the segdbs. Now, we have
 	 * to wait for them to finish.
 	 */
-	for (;;)
+	while (nfds > 0)
 	{
-		int			sock;
 		int			n;
-		int			nfds = 0;
-		PGconn		*conn;
 
 		/*
 		 * bail-out if we are dying. Once QD dies, QE will recognize it
@@ -435,6 +479,7 @@ checkDispatchResult(CdbDispatcherState *ds,
 		if ((InterruptPending || meleeResults->errcode) && meleeResults->cancelOnError)
 			pParms->waitMode = DISPATCH_WAIT_CANCEL;
 
+#if 0
 		/*
 		 * Which QEs are still running and could send results to us?
 		 */
@@ -483,6 +528,7 @@ checkDispatchResult(CdbDispatcherState *ds,
 		 */
 		if (nfds <= 0)
 			break;
+#endif
 
 		/*
 		 * Wait for results from QEs
@@ -514,8 +560,8 @@ checkDispatchResult(CdbDispatcherState *ds,
 
 			elog(LOG, "handlePollError poll() failed; errno=%d", sock_errno);
 
-			handlePollError(pParms);
-			checkSegmentAlive(pParms);
+			nfds = handlePollError(nfds, fds, results);
+			nfds = checkSegmentAlive(pParms, nfds, fds, results);
 
 			if (pParms->waitMode != DISPATCH_WAIT_NONE)
 			{
@@ -537,7 +583,7 @@ checkDispatchResult(CdbDispatcherState *ds,
 
 			if (timeoutCounter++ > (wait ? 30 : 300))
 			{
-				checkSegmentAlive(pParms);
+				nfds = checkSegmentAlive(pParms, nfds, fds, results);
 				timeoutCounter = 0;
 			}
 
@@ -546,10 +592,8 @@ checkDispatchResult(CdbDispatcherState *ds,
 		}
 		/* We have data waiting on one or more of the connections. */
 		else
-			handlePollSuccess(pParms, fds);
+			nfds = handlePollSuccess(pParms, nfds, fds, results);
 	}
-
-	pfree(fds);
 }
 
 /*
@@ -606,19 +650,17 @@ dispatchCommand(CdbDispatchResult *dispatchResult,
  *
  * NOTE: The cleanup of the connections will be performed by handlePollTimeout().
  */
-static void
-handlePollError(CdbDispatchCmdAsync *pParms)
+static int
+handlePollError(int nfds, struct pollfd fds[], CdbDispatchResult *results[])
 {
 	int			i;
 
-	for (i = 0; i < pParms->dispatchCount; i++)
+	for (i = 0; i < nfds; i++)
 	{
-		CdbDispatchResult *dispatchResult = pParms->dispatchResultPtrArray[i];
+		CdbDispatchResult *dispatchResult = results[i];
 		SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
 
-		/* Skip if already finished or didn't dispatch. */
-		if (!dispatchResult->stillRunning)
-			continue;
+		Assert(dispatchResult->stillRunning);
 
 		/* We're done with this QE, sadly. */
 		if (PQstatus(segdbDesc->conn) == CONNECTION_BAD)
@@ -639,30 +681,38 @@ handlePollError(CdbDispatchCmdAsync *pParms)
 			PQfinish(segdbDesc->conn);
 			segdbDesc->conn = NULL;
 			dispatchResult->stillRunning = false;
+
+			/* Remove from poll fds */
+			if (--nfds == i)
+				continue;
+			fds[i] = fds[nfds];
+			results[i] = results[nfds];
+			i--;
 		}
 	}
 
-	return;
+	return nfds;
 }
 
 /*
  * Receive and process results from QEs.
  */
-static void
+static int
 handlePollSuccess(CdbDispatchCmdAsync *pParms,
-				  struct pollfd *fds)
+				  int nfds,
+				  struct pollfd fds[],
+				  CdbDispatchResult *results[])
 {
-	int			currentFdNumber = 0;
 	int			i = 0;
 
 	/*
 	 * We have data waiting on one or more of the connections.
 	 */
-	for (i = 0; i < pParms->dispatchCount; i++)
+	for (i = 0; i < nfds; i++)
 	{
 		bool		finished;
 		int			sock;
-		CdbDispatchResult *dispatchResult = pParms->dispatchResultPtrArray[i];
+		CdbDispatchResult *dispatchResult = results[i];
 		SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
 
 		/*
@@ -676,12 +726,26 @@ handlePollSuccess(CdbDispatchCmdAsync *pParms,
 
 		sock = PQsocket(segdbDesc->conn);
 		Assert(sock >= 0);
-		Assert(sock == fds[currentFdNumber].fd);
+		Assert(sock == fds[i].fd);
+
+		/*
+		 * Any data to send out?
+		 */
+		if (fds[i].revents & POLLOUT)
+		{
+			pqFlushNonBlocking(segdbDesc->conn);
+			if (segdbDesc->conn->outCount == 0)
+			{
+				/* All data is send out, now wait for response */
+				fds[i].events = POLLIN;
+				continue;
+			}
+		}
 
 		/*
 		 * Skip this connection if it has no input available.
 		 */
-		if (!(fds[currentFdNumber++].revents & POLLIN))
+		if (!(fds[i].revents & POLLIN))
 			continue;
 
 		ELOG_DISPATCHER_DEBUG("PQsocket says there are results from %d of %d (%s)",
@@ -718,11 +782,20 @@ handlePollSuccess(CdbDispatchCmdAsync *pParms,
 
 			if (PQisBusy(dispatchResult->segdbDesc->conn))
 				elog(LOG, "We thought we were done, because finished==true, but libpq says we are still busy");
+
+			/* Remove from poll fds */
+			if (--nfds == i)
+				continue;
+			fds[i] = fds[nfds];
+			results[i] = results[nfds];
+			i--;
 		}
 		else
 			ELOG_DISPATCHER_DEBUG("processResults says we have more to do with %d of %d (%s)",
 								  i + 1, pParms->dispatchCount, segdbDesc->whoami);
 	}
+
+	return nfds;
 }
 
 /*
@@ -769,8 +842,11 @@ signalQEs(CdbDispatchCmdAsync *pParms)
  *
  * Issue a FTS probe every 1 minute.
  */
-static void
-checkSegmentAlive(CdbDispatchCmdAsync *pParms)
+static int
+checkSegmentAlive(CdbDispatchCmdAsync *pParms,
+				  int nfds,
+				  struct pollfd fds[],
+				  CdbDispatchResult *results[])
 {
 	int			i;
 	bool		forceScan = true;
@@ -779,16 +855,12 @@ checkSegmentAlive(CdbDispatchCmdAsync *pParms)
 	 * check the connection still valid, set 1 min time interval this may
 	 * affect performance, should turn it off if required.
 	 */
-	for (i = 0; i < pParms->dispatchCount; i++)
+	for (i = 0; i < nfds; i++)
 	{
-		CdbDispatchResult *dispatchResult = pParms->dispatchResultPtrArray[i];
+		CdbDispatchResult *dispatchResult = results[i];
 		SegmentDatabaseDescriptor *segdbDesc = dispatchResult->segdbDesc;
 
-		/*
-		 * Skip if already finished or didn't dispatch.
-		 */
-		if (!dispatchResult->stillRunning)
-			continue;
+		Assert(dispatchResult->stillRunning);
 
 		/*
 		 * Skip the entry db.
@@ -814,10 +886,19 @@ checkSegmentAlive(CdbDispatchCmdAsync *pParms)
 			 */
 			PQfinish(segdbDesc->conn);
 			segdbDesc->conn = NULL;
+
+			/* Remove from poll fds */
+			if (--nfds == i)
+				continue;
+			fds[i] = fds[nfds];
+			results[i] = results[nfds];
+			i--;
 		}
 
 		forceScan = false;
 	}
+
+	return nfds;
 }
 
 /*
