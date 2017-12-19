@@ -237,27 +237,6 @@ class UDPICFCTestCases(SQLTestCase):
         # Verify whether the result is expected
         self.assertTrue(check_result_1 and (not check_result_2))
    
-    # This method is used to check the change of gp_interconnect_fc_method take affect
-    def test_check_fc_method(self):
-        try:
-            out = self.checkGUC(self.gp_interconnect_snd_queue_depth)
-            self.assertTrue(len(out) > 4)
-            out = self.checkGUC(self.gp_interconnect_fc_method)
-            self.assertTrue(len(out) > 4)
-        except:
-            self.skipTest("GUC " + self.gp_interconnect_snd_queue_depth + " or " + self.gp_interconnect_fc_method + " not defined")
-        
-        # test on default value - loss
-        # expected: DISORDER message found in loss mode
-        check_result_1 = self.run_sql_under_KM("_1")
-        
-        # test on capacity mode
-        # expected: No DISORDER message found in capacity mode
-        check_result_2 = self.run_sql_under_KM("_2")
-
-        # Verify whether the result is expected
-        self.assertTrue(check_result_1 and (not check_result_2))
-    
     # This method is used to check the change of gp_interconnect_transmit_timeout take affect
     def test_check_transmit_timeout(self):
         try:
