@@ -120,7 +120,7 @@ struct PGPROC
 
 	/* Info about LWLock the process is currently waiting for, if any. */
 	bool		lwWaiting;		/* true if waiting for an LW lock */
-	bool		lwExclusive;	/* true if waiting for exclusive access */
+	uint8       lwWaitMode;	/* true if waiting for exclusive access */
 	Dlelem		lwWaitLink;	/* next waiter for same LW lock */
 
 	/* Info about lock the process is currently waiting for, if any. */

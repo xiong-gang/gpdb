@@ -114,7 +114,8 @@ typedef enum LWLockId
 typedef enum LWLockMode
 {
 	LW_EXCLUSIVE,
-	LW_SHARED
+	LW_SHARED,
+    LW_WAIT_UNTIL_FREE
 } LWLockMode;
 
 
@@ -130,6 +131,7 @@ extern void LWLockReleaseAll(void);
 extern void LWLockWaitCancel(void);
 extern bool LWLockHeldByMe(LWLockId lockid);
 extern bool LWLockHeldExclusiveByMe(LWLockId lockid);
+extern bool LWLockWaitUntilFree(LWLockId lockid, LWLockMode mode);
 
 #ifdef USE_TEST_UTILS_X86
 extern uint32 LWLocksHeld(void);

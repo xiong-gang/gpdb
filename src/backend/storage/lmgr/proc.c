@@ -378,7 +378,7 @@ InitProcess(void)
 	if (IsAutoVacuumWorkerProcess())
 		MyProc->vacuumFlags |= PROC_IS_AUTOVACUUM;
 	MyProc->lwWaiting = false;
-	MyProc->lwExclusive = false;
+	MyProc->lwWaitMode = 0;
 	DLInitElem(&MyProc->lwWaitLink, (void*)MyProc);
 	MyProc->waitLock = NULL;
 	MyProc->waitProcLock = NULL;
@@ -566,7 +566,7 @@ InitAuxiliaryProcess(void)
 	MyProc->inCommit = false;
 	MyProc->vacuumFlags = 0;
 	MyProc->lwWaiting = false;
-	MyProc->lwExclusive = false;
+	MyProc->lwWaitMode = 0;
 	DLInitElem(&MyProc->lwWaitLink, (void*)MyProc);
 	MyProc->waitLock = NULL;
 	MyProc->waitProcLock = NULL;

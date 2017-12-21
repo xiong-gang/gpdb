@@ -2469,6 +2469,7 @@ XLogFlush(XLogRecPtr record)
 	WriteRqstPtr = record;
 
 	/* read LogwrtResult and update local state */
+	for(;;)
 	{
 		/* use volatile pointer to prevent code rearrangement */
 		volatile XLogCtlData *xlogctl = XLogCtl;
@@ -2478,13 +2479,28 @@ XLogFlush(XLogRecPtr record)
 			WriteRqstPtr = xlogctl->LogwrtRqst.Write;
 		LogwrtResult = xlogctl->LogwrtResult;
 		SpinLockRelease(&xlogctl->info_lck);
-	}
 
 	/* done already? */
-	if (!XLByteLE(record, LogwrtResult.Flush))
-	{
-		/* now wait for the write lock */
-		LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
+		if (XLByteLE(record, LogwrtResult.Flush))
+			break;
+
+		/*
+		 * Try to get the write lock. If we can't get it immediately, wait
+		 * until it's released, and recheck if we still need to do the flush
+		 * or if the backend that held the lock did it for us already. This
+		 * helps to maintain a good rate of group committing when the system
+		 * is bottlenecked by the speed of fsyncing.
+		 */
+		if (!LWLockWaitUntilFree(WALWriteLock, LW_EXCLUSIVE))
+		{
+			/*
+			 * The lock is now free, but we didn't acquire it yet. Before we
+			 * do, loop back to check if someone else flushed the record for
+			 * us already.
+			 */
+			continue;
+		}
+		/* Got the lock */
 		LogwrtResult = XLogCtl->Write.LogwrtResult;
 		if (!XLByteLE(record, LogwrtResult.Flush))
 		{
@@ -2513,6 +2529,7 @@ XLogFlush(XLogRecPtr record)
 			XLogWrite(WriteRqst, false, false);
 		}
 		LWLockRelease(WALWriteLock);
+		break;
 	}
 
 	END_CRIT_SECTION();
