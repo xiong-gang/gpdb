@@ -78,6 +78,7 @@
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/spin.h"
+#include "optimizer/cost.h"
 #include "utils/sharedsnapshot.h"
 #include "pg_trace.h"
 
@@ -178,7 +179,7 @@ static void
 LWLockDequeueSelf(LWLock *lock);
 
 static void
-LWLockWakeup(LWLock *lock);
+LWLockWakeup(LWLock *lock, int lockid);
 
 #ifdef LOCK_DEBUG
 bool		Trace_lwlocks = false;
@@ -900,15 +901,15 @@ LWLockWaitUntilFree(LWLockId lockid, LWLockMode mode)
         lwWaitingLockId = lockid;
 
        /* we're now guaranteed to be woken up if necessary */
-        mustwait = LWLockAttemptLock(lock, mode);
+	//mustwait = LWLockAttemptLock(lock, mode);
 
-		if (!mustwait)
-		{
-			LOG_LWDEBUG("LWLockAcquire", lockid, "acquired, undoing queue!");
-			LWLockDequeueSelf(lock);
-        	lwWaitingLockId = NullLock;
-			break;
-		}
+	//if (!mustwait)
+	//{
+	//	LOG_LWDEBUG("LWLockAcquire", lockid, "acquired, undoing queue!");
+	//	LWLockDequeueSelf(lock);
+	//	lwWaitingLockId = NullLock;
+	//	break;
+	//}
 
 		/*
 		 * Wait until awakened.
@@ -1037,7 +1038,7 @@ LWLockRelease(LWLockId lockid)
      */
 	if (check_waiters)
 	{
-		 LWLockWakeup(lock);
+		 LWLockWakeup(lock, lockid);
 	}
 
 	TRACE_POSTGRESQL_LWLOCK_RELEASE(lockid);
@@ -1236,6 +1237,9 @@ LWLockQueueSelf(LWLock *lock, LWLockMode mode)
        if (MyProc->lwWaiting)
                elog(PANIC, "queueing for lock while waiting on another one");
 
+       if (enable_mergejoin)
+	       elog(LOG, "%d add into queue", MyProc->pid);
+
        SpinLockAcquire(&lock->mutex);
 
        /* setting the flag is protected by the spinlock */
@@ -1335,59 +1339,65 @@ LWLockDequeueSelf(LWLock *lock)
  * Wakeup all the lockers that currently have a chance to acquire the lock.
  */
 static void
-LWLockWakeup(LWLock *lock)
+LWLockWakeup(LWLock *lock, int lockid)
 {
        bool            new_release_ok = true;
        bool            wokeup_somebody = false;
 	   Dlelem	*elt;
 	   Dlelem	*nextElt;
-	   PGPROC	*waiter = NULL;
+	   PGPROC	*waiter = NULL; 
+	   PGPROC	**waiters = palloc(sizeof(PGPROC*) * 40);
+	   int		i = 0;
 
-       Dllist wakeup;
-	   DLInitList(&wakeup);
 
-       /* Acquire mutex.  Time spent holding mutex should be short! */
-       SpinLockAcquire(&lock->mutex);
-	   	for (elt = DLGetHead(&lock->waiters); elt; elt = DLGetSucc(elt))
-		{
-			waiter = (PGPROC *) DLE_VAL(elt);	
-	
-               if (wokeup_somebody && waiter->lwWaitMode == LW_EXCLUSIVE)
-			{
+	   /* Acquire mutex.  Time spent holding mutex should be short! */
+	   SpinLockAcquire(&lock->mutex);
+	   elt = DLGetHead(&lock->waiters);
+	   while (elt != NULL)
+	   {
+		   waiter = (PGPROC *) DLE_VAL(elt);	
+		   elt = DLGetSucc(elt);
 
-                       continue;
-			}
-                DLRemove(&waiter->lwWaitLink);
-				DLAddTail(&wakeup, &waiter->lwWaitLink);
-                       /*
-                        * Prevent additional wakeups until retryer gets to run. Backends
-                        * that are just waiting for the lock to become free don't retry
-                        * automatically.
-                        */
-				if (waiter->lwWaitMode != LW_WAIT_UNTIL_FREE)
-				{
-					new_release_ok = false;
-					/*
-					 * Don't wakeup (further) exclusive locks.
-					 */
-					wokeup_somebody = true;
-				}
-               /*
-                * Once we've woken up an exclusive lock, there's no point in waking
-                * up anybody else.
-                */
-               if(waiter->lwWaitMode == LW_EXCLUSIVE)
-                       break;
-       }
+		   if (wokeup_somebody && waiter->lwWaitMode == LW_EXCLUSIVE)
+			   continue;
 
-       Assert(dllistIsEmpty(&wakeup) || pg_atomic_read_u32(&lock->state) & LW_FLAG_HAS_WAITERS);
+		   DLRemove(&waiter->lwWaitLink);
+		   //if (enable_mergejoin && lockid == WALWriteLock)
+		   if (enable_mergejoin)
+			   elog(LOG, "%d remove %d from queue for lock %d", MyProc->pid, waiter->pid, lockid);
+
+		   waiters[i++] = waiter;
+		   //DLAddTail(&wakeup, &waiter->lwWaitLink);
+
+		   /*
+		    * Prevent additional wakeups until retryer gets to run. Backends
+		    * that are just waiting for the lock to become free don't retry
+		    * automatically.
+		    */
+		   if (waiter->lwWaitMode != LW_WAIT_UNTIL_FREE)
+		   {
+			   new_release_ok = false;
+			   /*
+			    * Don't wakeup (further) exclusive locks.
+			    */
+			   wokeup_somebody = true;
+		   }
+		   /*
+		    * Once we've woken up an exclusive lock, there's no point in waking
+		    * up anybody else.
+		    */
+		   if(waiter->lwWaitMode == LW_EXCLUSIVE)
+			   break;
+	   }
+
+       Assert(i== 0 || pg_atomic_read_u32(&lock->state) & LW_FLAG_HAS_WAITERS);
 
        /* Unset both flags at once if required */
-       if (!new_release_ok && dllistIsEmpty(&wakeup)) 
+       if (!new_release_ok && i == 0) 
                pg_atomic_fetch_and_u32(&lock->state, ~(LW_FLAG_RELEASE_OK | LW_FLAG_HAS_WAITERS));
        else if (!new_release_ok)
                pg_atomic_fetch_and_u32(&lock->state, ~LW_FLAG_RELEASE_OK);
-       else if (dllistIsEmpty(&wakeup))
+       else if (i == 0)
                pg_atomic_fetch_and_u32(&lock->state, ~LW_FLAG_HAS_WAITERS);
        else if (new_release_ok)
                pg_atomic_fetch_or_u32(&lock->state, LW_FLAG_RELEASE_OK);
@@ -1396,12 +1406,11 @@ LWLockWakeup(LWLock *lock)
        SpinLockRelease(&lock->mutex);
 
        /* Awaken any waiters I removed from the queue. */
-	   	for (elt = DLGetHead(&wakeup); elt; elt = nextElt)
+       		int j = 0;
+	   	for (j = 0; j < i; j++)
 		{
-			   nextElt = DLGetSucc(elt);
-               DLRemove(&waiter->lwWaitLink);
+			waiter = waiters[j];
 
-			   waiter = (PGPROC *) DLE_VAL(elt);	
                /*
                 * Guarantee that lwWaiting being unset only becomes visible once the
                 * unlink from the link has completed. Otherwise the target backend
