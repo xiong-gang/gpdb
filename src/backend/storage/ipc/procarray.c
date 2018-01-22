@@ -1597,7 +1597,7 @@ GetSnapshotData(Snapshot snapshot)
 						(errmsg("GetSnapshotData(): READER currentcommandid %d curcid %d segmatesync %d",
 								GetCurrentCommandId(false), snapshot->curcid, segmateSync)));
 
-				if (TransactionXmin > snapshot->xmin)
+				if (TransactionIdPrecedes(snapshot->xmin, TransactionXmin))
 					TransactionXmin = snapshot->xmin;
 
 				return snapshot;
