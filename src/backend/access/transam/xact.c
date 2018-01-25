@@ -84,6 +84,7 @@ bool		XactSyncCommit = true;
 
 int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
+char		*tempGID;
 
 /*
  * MyXactAccessedTempRel is set when a temporary relation is accessed.
@@ -174,6 +175,7 @@ typedef struct TransactionStateData
 	struct TransactionStateData *parent;		/* back link to parent */
 
 	struct TransactionStateData *fastLink;        /* back link to jump to parent for efficient search */
+	bool		canDoFastPrepare;
 } TransactionStateData;
 
 typedef TransactionStateData *TransactionState;
@@ -207,7 +209,8 @@ static TransactionStateData TopTransactionStateData = {
 	false,						/* entry-time xact r/o state */
 	false,						/* executorSaysXactDoesWrites */
 	NULL,						/* link to parent state block */
-	NULL
+	NULL,
+	false
 };
 
 static TransactionState CurrentTransactionState = &TopTransactionStateData;
@@ -2544,6 +2547,7 @@ CommitTransaction(void)
 	s->nChildXids = 0;
 	s->maxChildXids = 0;
 	s->executorSaysXactDoesWrites = false;
+	s->canDoFastPrepare = false;
 
 	/*
 	 * done with commit processing, set current transaction state back to
@@ -3084,6 +3088,7 @@ CleanupTransaction(void)
 	s->nChildXids = 0;
 	s->maxChildXids = 0;
 	s->executorSaysXactDoesWrites = false;
+	s->canDoFastPrepare = false;
 
 	/*
 	 * done with abort processing, set current transaction state back to
@@ -3266,7 +3271,16 @@ CommitTransactionCommand(void)
 			 */
 		case TBLOCK_INPROGRESS:
 		case TBLOCK_SUBINPROGRESS:
-			CommandCounterIncrement();
+			if (s->canDoFastPrepare)
+			{
+				prepareGID = tempGID;
+				PrepareTransaction();
+				s->blockState = TBLOCK_DEFAULT;
+			}
+			else
+			{
+				CommandCounterIncrement();
+			}
 			break;
 
 			/*
@@ -5271,6 +5285,7 @@ PushTransaction(void)
 	GetUserIdAndSecContext(&s->prevUser, &s->prevSecContext);
 	s->prevXactReadOnly = XactReadOnly;
 	s->executorSaysXactDoesWrites = false;
+	s->canDoFastPrepare = false;
 
 	fastNodeCount++;
 	if (fastNodeCount == NUM_NODES_TO_SKIP_FOR_FAST_SEARCH)
@@ -5938,4 +5953,18 @@ xact_desc(StringInfo buf, XLogRecPtr beginLoc, XLogRecord *record)
 	}
 	else
 		appendStringInfo(buf, "UNKNOWN");
+}
+
+void
+markFastPrepareTransaction(void)
+{
+	TransactionState s = CurrentTransactionState;
+	s->canDoFastPrepare = true;
+}
+
+bool
+isFastPrepareTransaction(void)
+{
+	TransactionState s = CurrentTransactionState;
+	return s->canDoFastPrepare; 
 }

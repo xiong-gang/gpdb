@@ -1125,6 +1125,12 @@ prepareDtxTransaction(void)
 
 	Assert(currentGxact->state == DTX_STATE_ACTIVE_DISTRIBUTED);
 
+	if (isFastPrepareTransaction())
+	{
+		setCurrentGxactState(DTX_STATE_PREPARED);
+		return;
+	}
+
 	/*
 	 * Broadcast PREPARE TRANSACTION to segments.
 	 */
@@ -3373,7 +3379,8 @@ performDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 			break;
 
 		case DTX_PROTOCOL_COMMAND_COMMIT_PREPARED:
-			requireDistributedTransactionContext(DTX_CONTEXT_QE_PREPARED);
+			if (!isFastPrepareTransaction())
+				requireDistributedTransactionContext(DTX_CONTEXT_QE_PREPARED);
 			setDistributedTransactionContext(DTX_CONTEXT_QE_FINISH_PREPARED);
 			performDtxProtocolCommitPrepared(gid, /* raiseErrorIfNotFound */ true);
 			break;
@@ -3473,4 +3480,13 @@ performDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 			break;
 	}
 	elog(DTM_DEBUG5, "performDtxProtocolCommand successful return for distributed transaction %s", gid);
+}
+
+char *
+getCurrentGid(void)
+{
+	if (currentGxact == NULL)
+		return NULL;
+	else
+		return currentGxact->gid;
 }

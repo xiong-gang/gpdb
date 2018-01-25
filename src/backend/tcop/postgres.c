@@ -5102,6 +5102,8 @@ PostgresMain(int argc, char *argv[],
 					if (resgroupInfoLen > 0)
 						resgroupInfoBuf = pq_getmsgbytes(&input_message, resgroupInfoLen);
 
+					tempGID = MemoryContextStrdup(TopMemoryContext,
+												  pq_getmsgbytes(&input_message, TMGIDSIZE));
 					pq_getmsgend(&input_message);
 
 					elog((Debug_print_full_dtm ? LOG : DEBUG5), "MPP dispatched stmt from QD: %s.",query_string);

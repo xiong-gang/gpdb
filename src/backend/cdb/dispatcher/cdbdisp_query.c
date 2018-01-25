@@ -100,6 +100,8 @@ typedef struct DispatchCommandQueryParms
 	/* the map from sliceIndex to gang_id, in array form */
 	int			numSlices;
 	int		   *sliceIndexGangIdMap;
+
+	char		gid[TMGIDSIZE];
 } DispatchCommandQueryParms;
 
 static void cdbdisp_dispatchCommandInternal(const char *strCommand,
@@ -228,6 +230,10 @@ CdbDispatchPlan(struct QueryDesc *queryDesc,
 		 * afraid that wouldn't scale.
 		 */
 		is_SRI = IsA(stmt->planTree, Result) &&stmt->planTree->lefttree == NULL;
+		stmt->planTree->isSRI = is_SRI;
+
+		if (is_SRI && stmt->planTree->directDispatch.isDirectDispatch)
+			markFastPrepareTransaction();
 	}
 
 	if (queryDesc->operation == CMD_INSERT ||
@@ -1032,7 +1038,8 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 		sizeof(numSlices) +
 		sizeof(int) * numSlices +
 		sizeof(resgroupInfo.len) +
-		resgroupInfo.len;
+		resgroupInfo.len + 
+		TMGIDSIZE;
 
 	if (ds->dispatchStateContext == NULL)
 		ds->dispatchStateContext = AllocSetContextCreate(TopMemoryContext,
@@ -1194,6 +1201,12 @@ buildGpQueryString(struct CdbDispatcherState *ds,
 		memcpy(pos, resgroupInfo.data, resgroupInfo.len);
 		pos += resgroupInfo.len;
 	}
+
+	char *gid = getCurrentGid();
+
+	if (gid != NULL)
+		memcpy(pos, gid, TMGIDSIZE);
+	pos += TMGIDSIZE;
 
 	len = pos - shared_query - 1;
 

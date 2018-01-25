@@ -350,5 +350,6 @@ extern void UtilityModeFindOrCreateDtmRedoFile(void);
 extern void UtilityModeCloseDtmRedoFile(void);
 
 extern bool doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType);
+extern char* getCurrentGid(void);
 
 #endif   /* CDBTM_H */

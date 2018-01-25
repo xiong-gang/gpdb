@@ -2202,6 +2202,10 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	        (Gp_role != GP_ROLE_EXECUTE || Gp_is_writer) )
 		OpenIntoRel(queryDesc);
 
+	if (Gp_role == GP_ROLE_EXECUTE && Gp_is_writer &&
+		plan->isSRI && plan->directDispatch.isDirectDispatch &&
+		DistributedTransactionContext == DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER) 
+		markFastPrepareTransaction();
 
 	if (DEBUG1 >= log_min_messages)
 			{

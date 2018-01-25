@@ -2345,6 +2345,7 @@ void readPlanInfo(Plan *local_node)
     READ_NODE_FIELD(initPlan);
 
     READ_UINT64_FIELD(operatorMemKB);
+	READ_BOOL_FIELD(isSRI);
 }
 
 void readJoinInfo(Join *local_node)
