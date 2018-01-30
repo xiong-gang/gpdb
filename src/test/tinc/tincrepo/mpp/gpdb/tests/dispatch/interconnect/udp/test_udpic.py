@@ -955,7 +955,7 @@ class UDPICPacketControlCapacityTestCases(UDPICPacketControlTestCases):
         self.is_fc_method_skip = 1 
         out = self.checkGUC(self.gp_interconnect_fc_method)
         for i in range(0, len(out)):
-            if out[i].find('LOSS') >=0 or out[i].find('CAPACITY') >=0:
+            if out[i].find('loss') >=0 or out[i].find('CAPACITY') >=0:
                 self.is_fc_method_skip = 0 
 
     def infer_metadata(self):
