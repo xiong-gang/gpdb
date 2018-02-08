@@ -611,6 +611,7 @@ typedef struct ICStatistics
 	uint64	capacityCountingTime;
 	uint64	totalBuffers;
 	uint64	bufferCountingTime;
+	uint64	sendTime;
 	uint32  activeConnectionsNum;
 	int32	retransmits;
 	int32	startupCachedPktNum;
@@ -4630,6 +4631,21 @@ sendBuffers(ChunkTransportState *transportStates, ChunkTransportStateEntry *pEnt
 		sendOnce(transportStates, pEntry, buf, conn);
 		ic_statistics.sndPktNum++;
 
+		{
+			int64 lastSent = ic_statistics.sendTime;
+			ic_statistics.sendTime = getCurrentTime(); 
+			int64 diff = ic_statistics.sendTime - lastSent; 
+			if (lastSent != 0 && diff > Gp_interconnect_send_interval * 1000)
+			{
+				write_log("DEBUG: %ld ms since send the last packet. %d tuples in this packet.",
+						diff/1000,
+						conn->tupleCount);	
+
+				logPkt("SEND PKT DETAIL", buf->pkt);
+				gp_interconnect_log_stats = true;
+			}
+		}
+
 #ifdef AMS_VERBOSE_LOGGING
 		logPkt("SEND PKT DETAIL", buf->pkt);
 #endif
@@ -5429,6 +5445,7 @@ SendEosUDPIFC(MotionLayerState *mlStates,
 		}
 	}
 
+	ic_statistics.sendTime = 0;
 	if (gp_log_interconnect >= GPVARS_VERBOSITY_DEBUG)
 		elog(DEBUG1, "SendEosUDPIFC leaving, activeCount %d", activeCount);
 }

@@ -3687,6 +3687,16 @@ struct config_int ConfigureNamesInt_gp[] =
 	},
 
 	{
+		{"gp_interconnect_send_interval", PGC_USERSET, GP_ARRAY_TUNING,
+			gettext_noop("Sets the timer period (in ms) for UDP interconnect"),
+			NULL,
+			GUC_UNIT_MS | GUC_GPDB_ADDOPT
+		},
+		&Gp_interconnect_send_interval,
+		250, 1, 10000, NULL, NULL
+	},
+
+	{
 		{"gp_interconnect_timer_checking_period", PGC_USERSET, GP_ARRAY_TUNING,
 			gettext_noop("Sets the timer checking period (in ms) for UDP interconnect"),
 			NULL,

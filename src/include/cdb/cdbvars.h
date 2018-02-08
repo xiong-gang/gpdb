@@ -439,6 +439,7 @@ extern int	Gp_interconnect_queue_depth;
  */
 extern int	Gp_interconnect_snd_queue_depth;
 extern int	Gp_interconnect_timer_period;
+extern int	Gp_interconnect_send_interval;
 extern int	Gp_interconnect_timer_checking_period;
 extern int	Gp_interconnect_default_rtt;
 extern int	Gp_interconnect_min_rto;

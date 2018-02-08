@@ -199,6 +199,7 @@ int			Gp_interconnect_queue_depth = 4;	/* max number of messages
 												 * we drop. */
 int			Gp_interconnect_snd_queue_depth = 2;
 int			Gp_interconnect_timer_period = 5;
+int			Gp_interconnect_send_interval = 250;
 int			Gp_interconnect_timer_checking_period = 20;
 int			Gp_interconnect_default_rtt = 20;
 int			Gp_interconnect_min_rto = 20;
