@@ -89,7 +89,7 @@ class GpSegToPrimaryMirror():
 
         for itm in self.dblist:
             (dir, addr) = itm.split(':', 1)
-            diraddrmap[dir] = addr 
+            diraddrmap[dir] = addr
 
         transitionData = pickle.loads(base64.urlsafe_b64decode(self.pickledTransitionData))
             
