@@ -339,7 +339,8 @@ class GpSegStart:
             # (look for the protocol message type PRIMARY_MIRROR_TRANSITION_REQUEST_CODE )
             #
             port = seg.getSegmentPort()
-            cmd  = gp.SendFilerepTransitionMessage.buildTransitionMessageCommand(transitionData, datadir, port)
+            host = seg.getSegmentHostName()
+            cmd  = gp.SendFilerepTransitionMessage.buildTransitionMessageCommand(transitionData, datadir, port, remoteHost=host)
 
             self.pool.addCommand(cmd)
         self.pool.join()
@@ -446,9 +447,10 @@ class GpSegStart:
                 name      = "Check Status"
                 statusmsg = "getCollationAndDataDirSettings"
                 port      = seg.getSegmentPort()
+                host      = seg.getSegmentHostName()
 
                 self.logger.info("Checking %s, port %s" % (datadir, port))
-                cmd       = gp.SendFilerepTransitionStatusMessage(name, statusmsg, datadir, port)
+                cmd       = gp.SendFilerepTransitionStatusMessage(name, statusmsg, datadir, port, remoteHost=host)
 
                 dataDirToCmd[datadir] = cmd
                 self.pool.addCommand(cmd)

@@ -440,7 +440,7 @@ class SendFilerepTransitionMessage(Command):
         return cmd
 
     @staticmethod
-    def buildTransitionMessageCommand(transitionData, dir, port):
+    def buildTransitionMessageCommand(transitionData, dir, port, remoteHost=None):
         dbData = transitionData["dbsByPort"][int(port)]
         targetMode = dbData["targetMode"]
 
@@ -466,7 +466,7 @@ class SendFilerepTransitionMessage(Command):
         inputFile = os.path.join( dir, "gp_pmtransition_args" )
         writeLinesToFile(inputFile, argsArr)
 
-        return SendFilerepTransitionMessage("Changing seg at dir %s" % dir, inputFile, port=port, dataDir=dir)
+        return SendFilerepTransitionMessage("Changing seg at dir %s" % dir, inputFile, port=port, dataDir=dir, remoteHost=remoteHost)
 
 class SendFilerepTransitionStatusMessage(Command):
     def __init__(self, name, msg, dataDir=None, port=None,ctxt=LOCAL, remoteHost=None):
@@ -813,7 +813,7 @@ class GpSegChangeMirrorModeCmd(Command):
         for db in dbs:
             datadir = db.getSegmentDataDirectory()
             port = db.getSegmentPort()
-            self.dirlist.append(datadir + ':' + str(port))
+            self.dirlist.append(datadir + ':' + str(remoteHost) + ':' + str(port))
 
         dirstr=" -D ".join(self.dirlist)
         if verbose:
