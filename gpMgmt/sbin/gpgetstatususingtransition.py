@@ -48,7 +48,7 @@ class GpSegStatusProgram:
             return None
 
         cmd = gp.SendFilerepTransitionStatusMessage("Check Status", statusRequest, seg.getSegmentDataDirectory(),
-                                                seg.getSegmentPort(), remoteHost=seg.getSegmentHostName())
+                                                seg.getSegmentPort())
 
         cmd.run()
         return cmd.unpackSuccessLine()

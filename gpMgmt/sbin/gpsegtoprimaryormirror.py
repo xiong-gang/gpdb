@@ -85,18 +85,17 @@ class GpSegToPrimaryMirror():
     def run(self):
         results=[]
         failures=False
-        diraddrmap = {}
+        dirportmap = {}
 
         for itm in self.dblist:
-            (dir, addr) = itm.split(':', 1)
-            diraddrmap[dir] = addr
+            (dir, port) = itm.split(':')
+            dirportmap[dir] = port
 
         transitionData = pickle.loads(base64.urlsafe_b64decode(self.pickledTransitionData))
             
         logger.info("Changing segments...")
-        for dir, addr in diraddrmap.iteritems():
-            (host, port) = addr.split(':')
-            cmd = gp.SendFilerepTransitionMessage.buildTransitionMessageCommand(transitionData, dir, port, remoteHost=host)
+        for dir, port in dirportmap.iteritems():
+            cmd = gp.SendFilerepTransitionMessage.buildTransitionMessageCommand(transitionData, dir, port)
             self.pool.addCommand(cmd)
               
         self.pool.join()
@@ -110,7 +109,7 @@ class GpSegToPrimaryMirror():
                             (res.stdout.replace("\n", " "), res.stderr.replace("\n", " "))
                 status=SegToPrimaryMirrorStatus(cmd.dataDir,False, reason)
                 results.append(status)
-                del diraddrmap[cmd.dataDir]
+                del dirportmap[cmd.dataDir]
                 failures=True
 
         #
@@ -118,7 +117,7 @@ class GpSegToPrimaryMirror():
         #       transition because the fault prober is paused at this point.  If stuff fails just after conversion
         #       then we could block on a connect call, waiting for the prober to unstick the process
         #
-        for datadir,addr in diraddrmap.iteritems():
+        for datadir,port in dirportmap.iteritems():
             results.append(SegToPrimaryMirrorStatus(datadir,True,"Conversion Succeeded"))
                 
         #Log the results!
