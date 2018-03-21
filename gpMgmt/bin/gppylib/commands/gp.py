@@ -206,7 +206,7 @@ class PgCtlBackendOptions(CmdArgs):
         @param disable: start without master mirroring?
         @param seqserver: start with seqserver?
         """
-        self.extend(["-M", "master", "--gp_contentid=-1", "-x", str(standby_dbid)])
+        self.extend(["-i", "-M", "master", "--gp_contentid=-1", "-x", str(standby_dbid)])
         if disable: self.append("-y")
         if seqserver: self.append("-E")
         return self
@@ -216,7 +216,7 @@ class PgCtlBackendOptions(CmdArgs):
         @param mode: mirroring mode
         @param content: content id
         """
-        self.extend(["-M", str(mode), "--gp_contentid="+str(content)])
+        self.extend(["-i", "-M", str(mode), "--gp_contentid="+str(content)])
         return self
 
     #
