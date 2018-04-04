@@ -711,7 +711,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			 * finish unless an error is detected before all slices have been
 			 * dispatched.
 			 */
-			CdbDispatchPlan(queryDesc, needDtxTwoPhase, true, estate->dispatcherState);
+			CdbDispatchPlan(queryDesc, needDtxTwoPhase, true);
 		}
 
 		/*

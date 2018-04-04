@@ -988,7 +988,7 @@ PG_TRY();
 		 * command to the appropriate segdbs.  It does not wait for them
 		 * to finish unless an error is detected before all are dispatched.
 		 */
-		CdbDispatchPlan(queryDesc, needDtxTwoPhase, true, queryDesc->estate->dispatcherState);
+		CdbDispatchPlan(queryDesc, needDtxTwoPhase, true);
 
 		/*
 		 * Set up the interconnect for execution of the initplan root slice.
@@ -1176,7 +1176,7 @@ PG_TRY();
 		 * If the dispatcher or any QE had an error, report it and
 		 * exit to our error handler (below) via PG_THROW.
 		 */
-		cdbdisp_finishCommand(queryDesc->estate->dispatcherState);
+		cdbdisp_finishCommand(queryDesc->estate->dispatcherState, NULL, NULL, true);
 	}
 
 	/* teardown the sequence server */
@@ -1205,8 +1205,7 @@ PG_CATCH();
 			Assert(queryDesc != NULL &&
 				   queryDesc->estate != NULL);
 			/* Wait for all gangs to finish.  Cancel slowpokes. */
-			CdbCheckDispatchResult(queryDesc->estate->dispatcherState,
-								   DISPATCH_WAIT_CANCEL);
+			cdbdisp_cancelDispatch(queryDesc->estate->dispatcherState);
 
 			cdbexplain_recvExecStats(planstate,
 									 queryDesc->estate->dispatcherState->primaryResults,
@@ -1223,8 +1222,11 @@ PG_CATCH();
 	 * Wait for them to finish and clean up the dispatching structures.
 	 * Replace current error info with QE error info if more interesting.
 	 */
-	if (shouldDispatch && queryDesc && queryDesc->estate && queryDesc->estate->dispatcherState && queryDesc->estate->dispatcherState->primaryResults)
+	if (shouldDispatch && queryDesc && queryDesc->estate &&
+		queryDesc->estate->dispatcherState)
+	{
 		CdbDispatchHandleError(queryDesc->estate->dispatcherState);
+	}
 		
 	/* teardown the sequence server */
 	TeardownSequenceServer();
