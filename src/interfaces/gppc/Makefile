@@ -31,8 +31,8 @@ all: all-lib
 include $(top_srcdir)/src/Makefile.shlib
 
 install: install-lib
-	$(INSTALL_DATA) $(top_builddir)/src/include/gppc.h '$(DESTDIR)$(includedir)'
-	$(INSTALL_DATA) $(top_builddir)/src/include/gppc_config.h '$(DESTDIR)$(includedir)'
+	$(INSTALL_DATA) $(top_builddir)/src/include/gppc/gppc.h '$(DESTDIR)$(includedir)'
+	$(INSTALL_DATA) $(top_builddir)/src/include/gppc/gppc_config.h '$(DESTDIR)$(includedir)'
 
 installcheck: install
 	$(MAKE) -C test $@
