@@ -2840,6 +2840,15 @@ struct config_bool ConfigureNamesBool_gp[] =
 		true, NULL, NULL
 	},
 
+	{
+		{"verify_gpfdists_cert", PGC_USERSET, EXTERNAL_TABLES,
+			gettext_noop("Verifies the authenticity of the gpfdist's certificate"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | GUC_GPDB_ADDOPT
+		},
+		&verify_gpfdists_cert,
+		true, NULL, NULL
+	},
 
 	/* End-of-list marker */
 	{
