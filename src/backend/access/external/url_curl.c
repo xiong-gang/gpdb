@@ -127,12 +127,12 @@ typedef struct
  *  extssl_libcurldebug 1 	
  */
 
-static int extssl_protocol  = CURL_SSLVERSION_TLSv1;
+const static int extssl_protocol  = CURL_SSLVERSION_TLSv1;
 const char* extssl_cipher = "AES128-SHA";
-static int extssl_verifycert = 1;
-static int extssl_verifyhost = 2;
-static int extssl_no_verifycert = 0;
-static int extssl_no_verifyhost = 0;
+const static int extssl_verifycert = 1;
+const static int extssl_verifyhost = 2;
+const static int extssl_no_verifycert = 0;
+const static int extssl_no_verifyhost = 0;
 const char* extssl_cert = "gpfdists/client.crt";
 const char* extssl_key = "gpfdists/client.key";
 const char* extssl_ca = "gpfdists/root.crt";

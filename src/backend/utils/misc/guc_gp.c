@@ -74,6 +74,7 @@ static const char *assign_gp_workfile_compress_algorithm(const char *newval, boo
 static const char *assign_optimizer_minidump(const char *newval,
 						  bool doit, GucSource source);
 static bool assign_optimizer(bool newval, bool doit, GucSource source);
+static bool assign_verify_gpfdists_cert(bool newval, bool doit, GucSource source);
 static bool assign_dispatch_log_stats(bool newval, bool doit, GucSource source);
 static bool assign_gp_hashagg_default_nbatches(int newval, bool doit, GucSource source);
 
@@ -2847,7 +2848,7 @@ struct config_bool ConfigureNamesBool_gp[] =
 			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | GUC_GPDB_ADDOPT
 		},
 		&verify_gpfdists_cert,
-		true, NULL, NULL
+		true, assign_verify_gpfdists_cert, NULL
 	},
 
 	/* End-of-list marker */
@@ -4829,6 +4830,15 @@ assign_optimizer(bool newval, bool doit, GucSource source)
 		}
 	}
 
+	return true;
+}
+
+static bool
+assign_verify_gpfdists_cert(bool newval, bool doit, GucSource source)
+{
+	if (!newval && Gp_role == GP_ROLE_DISPATCH)
+		elog(WARNING, "curl connections from segments to gpfdists stop "
+				"verifying gpfdists server's certificate");
 	return true;
 }
 
