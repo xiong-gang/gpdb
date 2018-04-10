@@ -4837,8 +4837,8 @@ static bool
 assign_verify_gpfdists_cert(bool newval, bool doit, GucSource source)
 {
 	if (!newval && Gp_role == GP_ROLE_DISPATCH)
-		elog(WARNING, "curl connections from segments to gpfdists stop "
-				"verifying gpfdists server's certificate");
+		elog(WARNING, "verify_gpfdists_cert=off. Greenplum Database will stop validating "
+				"the gpfidsts SSL certificate for connections between segments and gpfdists");
 	return true;
 }
 
