@@ -600,7 +600,7 @@ SendEndOfStream(MotionLayerState *mlStates,
 	 */
 	pMNEntry = getMotionNodeEntry(mlStates, motNodeID, "SendEndOfStream");
 
-	transportStates->SendEos(mlStates, transportStates, motNodeID, s_eos_chunk_data);
+	transportStates->SendEos(transportStates, motNodeID, s_eos_chunk_data);
 
 	/*
 	 * We increment our own "stream-ends received" count when we send our own,

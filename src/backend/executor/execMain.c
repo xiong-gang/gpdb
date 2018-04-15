@@ -526,8 +526,6 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 					InitMotionLayerNode(estate->motionlayer_context, i);
 				}
 
-				estate->es_interconnect_is_setup = true;
-
 				Assert(!estate->interconnect_context);
 				SetupInterconnect(estate);
 
@@ -745,12 +743,11 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			if (queryDesc->planstate != NULL &&
 				queryDesc->planstate->plan->nMotionNodes > 0 && !estate->es_interconnect_is_setup)
 			{
-				estate->es_interconnect_is_setup = true;
-
 				Assert(!estate->interconnect_context);
 				SetupInterconnect(estate);
 				Assert(estate->interconnect_context);
 			}
+
 			if (estate->es_interconnect_is_setup)
 			{
 				ExecUpdateTransportState(queryDesc->planstate,

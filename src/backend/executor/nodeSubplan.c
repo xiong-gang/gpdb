@@ -954,7 +954,6 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext, QueryDesc *queryDesc
 
 	bool		needDtxTwoPhase;
 	bool		shouldDispatch = false;
-	volatile bool shouldTeardownInterconnect = false;
 	volatile bool explainRecvStats = false;
 
 	if (Gp_role == GP_ROLE_DISPATCH &&
@@ -993,7 +992,6 @@ PG_TRY();
 		/*
 		 * Set up the interconnect for execution of the initplan root slice.
 		 */
-		shouldTeardownInterconnect = true;
 		Assert(!(queryDesc->estate->interconnect_context));
 		SetupInterconnect(queryDesc->estate);
 		Assert((queryDesc->estate->interconnect_context));
@@ -1183,14 +1181,12 @@ PG_TRY();
 	TeardownSequenceServer();
 
 	/* Clean up the interconnect. */
-	if (shouldTeardownInterconnect)
+	if (queryDesc && queryDesc->estate && queryDesc->estate->es_interconnect_is_setup)
 	{
-		shouldTeardownInterconnect = false;
-
 		TeardownInterconnect(queryDesc->estate->interconnect_context,
-							 queryDesc->estate->motionlayer_context,
 							 false, false); /* following success on QD */
 		queryDesc->estate->interconnect_context = NULL;
+		queryDesc->estate->es_interconnect_is_setup = false;
 	}
 }
 PG_CATCH();
@@ -1235,12 +1231,12 @@ PG_CATCH();
 	 * Clean up the interconnect.
 	 * CDB TODO: Is this needed following failure on QD?
 	 */
-	if (shouldTeardownInterconnect)
+	if (queryDesc && queryDesc->estate && queryDesc->estate->es_interconnect_is_setup)
 	{
 		TeardownInterconnect(queryDesc->estate->interconnect_context,
-							 queryDesc->estate->motionlayer_context,
 							 true, false);
 		queryDesc->estate->interconnect_context = NULL;
+		queryDesc->estate->es_interconnect_is_setup = false;
 	}
 	PG_RE_THROW();
 }

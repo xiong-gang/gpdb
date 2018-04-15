@@ -122,7 +122,6 @@ extern void SetupInterconnect(struct EState *estate);
  *
  */
 extern void TeardownInterconnect(ChunkTransportState *transportStates,
-								 MotionLayerState *mlStates,
 								 bool forceEOS, bool hasError);
 
 extern void WaitInterconnectQuit(void);
@@ -313,8 +312,7 @@ extern ChunkTransportStateEntry *createChunkTransportState(ChunkTransportState *
 extern ChunkTransportStateEntry *removeChunkTransportState(ChunkTransportState *transportStates,
 														   int16 motNodeID);
 
-extern void forceEosToPeers(MotionLayerState       *mlStates,
-							ChunkTransportState    *transportStates,
+extern void forceEosToPeers(ChunkTransportState    *transportStates,
 							int                     motNodeID);
 
 extern TupleChunkListItem RecvTupleChunk(MotionConn *conn, ChunkTransportState *transportStates);
@@ -325,13 +323,11 @@ extern void markUDPConnInactiveIFC(MotionConn *conn);
 extern void CleanupMotionTCP(void);
 extern void CleanupMotionUDPIFC(void);
 extern void WaitInterconnectQuitUDPIFC(void);
-extern void SetupTCPInterconnect(struct EState *estate);
-extern void SetupUDPIFCInterconnect(struct EState *estate);
+extern ChunkTransportState *SetupTCPInterconnect(SliceTable *sliceTable, MotionLayerState *mlStates);
+extern ChunkTransportState *SetupUDPIFCInterconnect(SliceTable *sliceTable, MotionLayerState *mlStates);
 extern void TeardownTCPInterconnect(ChunkTransportState *transportStates,
-								 MotionLayerState *mlStates,
 								 bool forceEOS, bool hasError);
 extern void TeardownUDPIFCInterconnect(ChunkTransportState *transportStates,
-								 MotionLayerState *mlStates,
 								 bool forceEOS);
 
 extern uint32 getActiveMotionConns(void);

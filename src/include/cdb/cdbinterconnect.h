@@ -530,7 +530,7 @@ typedef struct ChunkTransportState
 	TupleChunkListItem (*RecvTupleChunkFrom)(struct ChunkTransportState *transportStates, int16 motNodeID, int16 srcRoute);
 	TupleChunkListItem (*RecvTupleChunkFromAny)(MotionLayerState *mlStates, struct ChunkTransportState *transportStates, int16 motNodeID, int16 *srcRoute);
 	void (*doSendStopMessage)(struct ChunkTransportState *transportStates, int16 motNodeID);
-	void (*SendEos)(MotionLayerState *mlStates, struct ChunkTransportState *transportStates, int motNodeID, TupleChunkListItem tcItem);
+	void (*SendEos)(struct ChunkTransportState *transportStates, int motNodeID, TupleChunkListItem tcItem);
 } ChunkTransportState;
 
 extern void dumpICBufferList(ICBufferList *list, const char *fname);
