@@ -528,6 +528,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 
 				Assert(!estate->interconnect_context);
 				SetupInterconnect(estate);
+				UpdateMotionExpectedReceivers(estate->motionlayer_context, estate->es_sliceTable);
 
 				SIMPLE_FAULT_INJECTOR(QEGotSnapshotAndInterconnect);
 				Assert(estate->interconnect_context);
@@ -746,6 +747,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 				Assert(!estate->interconnect_context);
 				SetupInterconnect(estate);
 				Assert(estate->interconnect_context);
+				UpdateMotionExpectedReceivers(estate->motionlayer_context, estate->es_sliceTable);
 			}
 
 			if (estate->es_interconnect_is_setup)

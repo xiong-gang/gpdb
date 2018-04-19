@@ -996,6 +996,8 @@ PG_TRY();
 		SetupInterconnect(queryDesc->estate);
 		Assert((queryDesc->estate->interconnect_context));
 
+		UpdateMotionExpectedReceivers(queryDesc->estate->motionlayer_context, queryDesc->estate->es_sliceTable);
+
 		ExecUpdateTransportState(planstate, queryDesc->estate->interconnect_context);
 
 		/*

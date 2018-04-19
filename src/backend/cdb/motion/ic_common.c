@@ -335,7 +335,7 @@ SendTupleChunkToAMS(MotionLayerState *mlStates,
 
 		if (targetRoute == BROADCAST_SEGIDX)
 		{
-			doBroadcast(mlStates, transportStates, pEntry, currItem, &recount);
+			doBroadcast(transportStates, pEntry, currItem, &recount);
 		}
 		else
 		{
@@ -344,7 +344,7 @@ SendTupleChunkToAMS(MotionLayerState *mlStates,
 			/* only send to interested connections */
 			if (conn->stillActive)
 			{
-				transportStates->SendChunk(mlStates, transportStates, pEntry, conn, currItem, motNodeID);
+				transportStates->SendChunk(transportStates, pEntry, conn, currItem, motNodeID);
 				if (!conn->stillActive)
 					recount = 1;
 			}
@@ -699,9 +699,9 @@ SetupInterconnect(EState *estate)
 	oldContext = MemoryContextSwitchTo(InterconnectContext);
 
 	if (Gp_interconnect_type == INTERCONNECT_TYPE_UDPIFC)
-		icContext = SetupUDPIFCInterconnect(estate->es_sliceTable, estate->motionlayer_context);
+		icContext = SetupUDPIFCInterconnect(estate->es_sliceTable);
 	else if (Gp_interconnect_type == INTERCONNECT_TYPE_TCP)
-		icContext = SetupTCPInterconnect(estate->es_sliceTable, estate->motionlayer_context);
+		icContext = SetupTCPInterconnect(estate->es_sliceTable);
 	else
 		Assert("unsupported expected interconnect type");
 

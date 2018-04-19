@@ -106,6 +106,9 @@ test__ExecSetParamPlan__Check_Dispatch_Results(void **state)
 	expect_any(cdbdisp_cancelDispatch,ds);
 	will_be_called(cdbdisp_cancelDispatch);
 
+	expect_any(CdbDispatchHandleError, ds);
+	will_be_called(CdbDispatchHandleError);
+
 	expect_any(cdbexplain_recvExecStats,planstate);
 	expect_any(cdbexplain_recvExecStats,dispatchResults);
 	expect_any(cdbexplain_recvExecStats,sliceIndex);

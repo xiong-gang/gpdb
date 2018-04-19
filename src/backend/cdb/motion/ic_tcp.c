@@ -146,8 +146,7 @@ static void flushInterconnectListenerBacklog(void);
 
 static void waitOnOutbound(ChunkTransportStateEntry *pEntry);
 
-static TupleChunkListItem RecvTupleChunkFromAnyTCP(MotionLayerState *mlStates,
-						 ChunkTransportState *transportStates,
+static TupleChunkListItem RecvTupleChunkFromAnyTCP(ChunkTransportState *transportStates,
 						 int16 motNodeID,
 						 int16 *srcRoute);
 
@@ -158,10 +157,10 @@ static TupleChunkListItem RecvTupleChunkFromTCP(ChunkTransportState *transportSt
 static void SendEosTCP(ChunkTransportState *transportStates,
 		   int motNodeID, TupleChunkListItem tcItem);
 
-static bool SendChunkTCP(MotionLayerState *mlStates, ChunkTransportState *transportStates,
+static bool SendChunkTCP(ChunkTransportState *transportStates,
 			 ChunkTransportStateEntry *pEntry, MotionConn *conn, TupleChunkListItem tcItem, int16 motionId);
 
-static bool flushBuffer(MotionLayerState *mlStates, ChunkTransportState *transportStates,
+static bool flushBuffer(ChunkTransportState *transportStates,
 			ChunkTransportStateEntry *pEntry, MotionConn *conn, int16 motionId);
 
 static void doSendStopMessageTCP(ChunkTransportState *transportStates, int16 motNodeID);
@@ -1384,7 +1383,7 @@ acceptIncomingConnection(void)
 
 /* See ml_ipc.h */
 ChunkTransportState *
-SetupTCPInterconnect(SliceTable *sliceTable, MotionLayerState *mlStates)
+SetupTCPInterconnect(SliceTable *sliceTable)
 {
 	int			i,
 				index,
@@ -1443,8 +1442,7 @@ SetupTCPInterconnect(SliceTable *sliceTable, MotionLayerState *mlStates)
 	/* now we'll do some setup for each of our Receiving Motion Nodes. */
 	foreach(cell, mySlice->children)
 	{
-		int			totalNumProcs,
-					activeNumProcs;
+		int			totalNumProcs;
 		int			childId = lfirst_int(cell);
 
 #ifdef AMS_VERBOSE_LOGGING
@@ -1457,7 +1455,6 @@ SetupTCPInterconnect(SliceTable *sliceTable, MotionLayerState *mlStates)
 		 * If we're using directed-dispatch we have dummy primary-process
 		 * entries, so we count the entries.
 		 */
-		activeNumProcs = 0;
 		totalNumProcs = list_length(aSlice->primaryProcesses);
 		for (i = 0; i < totalNumProcs; i++)
 		{
@@ -1465,15 +1462,10 @@ SetupTCPInterconnect(SliceTable *sliceTable, MotionLayerState *mlStates)
 
 			cdbProc = list_nth(aSlice->primaryProcesses, i);
 			if (cdbProc)
-				activeNumProcs++;
+				expectedTotalIncoming++;
 		}
 
 		(void) createChunkTransportState(interconnect_context, aSlice, mySlice, totalNumProcs);
-
-		/* let cdbmotion now how many receivers to expect. */
-		setExpectedReceivers(mlStates, childId, activeNumProcs);
-
-		expectedTotalIncoming += activeNumProcs;
 	}
 
 	if (expectedTotalIncoming > listenerBacklog)
@@ -2614,13 +2606,12 @@ RecvTupleChunkFromTCP(ChunkTransportState *transportStates,
 }
 
 static TupleChunkListItem
-RecvTupleChunkFromAnyTCP(MotionLayerState *mlStates,
-						 ChunkTransportState *transportStates,
+RecvTupleChunkFromAnyTCP(ChunkTransportState *transportStates,
 						 int16 motNodeID,
 						 int16 *srcRoute)
 {
 	ChunkTransportStateEntry *pEntry = NULL;
-	MotionNodeEntry *pMNEntry;
+	MotionNodeEntry *pMNEntry = NULL;
 	MotionConn *conn;
 	TupleChunkListItem tcItem;
 	mpp_fd_set	rset;
@@ -2636,7 +2627,8 @@ RecvTupleChunkFromAnyTCP(MotionLayerState *mlStates,
 #endif
 
 	getChunkTransportState(transportStates, motNodeID, &pEntry);
-	pMNEntry = getMotionNodeEntry(mlStates, motNodeID, "RecvTupleChunkFromAny");
+	if (transportStates->estate && transportStates->estate->motionlayer_context)
+		pMNEntry = getMotionNodeEntry(transportStates->estate->motionlayer_context, motNodeID, "flushBuffer");
 
 	int			retry = 0;
 
@@ -2682,7 +2674,8 @@ RecvTupleChunkFromAnyTCP(MotionLayerState *mlStates,
 			break;
 
 		n = select(pEntry->highReadSock + 1, (fd_set *) &rset, NULL, NULL, &timeout);
-		pMNEntry->sel_rd_wait += (tval.tv_sec - timeout.tv_sec) * 1000000 + (tval.tv_usec - timeout.tv_usec);
+		if (pMNEntry)
+			pMNEntry->sel_rd_wait += (tval.tv_sec - timeout.tv_sec) * 1000000 + (tval.tv_usec - timeout.tv_usec);
 		if (n < 0)
 		{
 			if (errno == EINTR)
@@ -2775,7 +2768,7 @@ SendEosTCP(ChunkTransportState *transportStates,
 	 * we want to add our tcItem onto each of the outgoing buffers -- this is
 	 * guaranteed to leave things in a state where a flush is *required*.
 	 */
-	doBroadcast(NULL, transportStates, pEntry, tcItem, NULL);
+	doBroadcast(transportStates, pEntry, tcItem, NULL);
 
 	/* now flush all of the buffers. */
 	for (i = 0; i < pEntry->numConns; i++)
@@ -2783,7 +2776,7 @@ SendEosTCP(ChunkTransportState *transportStates,
 		conn = pEntry->conns + i;
 
 		if (conn->sockfd >= 0 && conn->state == mcsStarted)
-			flushBuffer(NULL, transportStates, pEntry, conn, motNodeID);
+			flushBuffer(transportStates, pEntry, conn, motNodeID);
 
 #ifdef AMS_VERBOSE_LOGGING
 		elog(DEBUG5, "SendEosTCP() Leaving");
@@ -2794,7 +2787,7 @@ SendEosTCP(ChunkTransportState *transportStates,
 }
 
 static bool
-flushBuffer(MotionLayerState *mlStates, ChunkTransportState *transportStates,
+flushBuffer(ChunkTransportState *transportStates,
 			ChunkTransportStateEntry *pEntry, MotionConn *conn, int16 motionId)
 {
 	char	   *sendptr;
@@ -2814,8 +2807,8 @@ flushBuffer(MotionLayerState *mlStates, ChunkTransportState *transportStates,
 	}
 #endif
 
-	if (mlStates != NULL)
-		pMNEntry = getMotionNodeEntry(mlStates, motionId, "flushBuffer");
+	if (transportStates->estate && transportStates->estate->motionlayer_context)
+		pMNEntry = getMotionNodeEntry(transportStates->estate->motionlayer_context, motionId, "flushBuffer");
 
 	/* first set header length */
 	*(uint32 *) conn->pBuff = conn->msgSize;
@@ -2867,7 +2860,7 @@ flushBuffer(MotionLayerState *mlStates, ChunkTransportState *transportStates,
 					MPP_FD_SET(conn->sockfd, &wset);
 					MPP_FD_SET(conn->sockfd, &rset);
 					n = select(conn->sockfd + 1, (fd_set *) &rset, (fd_set *) &wset, NULL, &timeout);
-					if (pMNEntry != NULL)
+					if (pMNEntry)
 						pMNEntry->sel_wr_wait += (tval.tv_sec - timeout.tv_sec) * 1000000 + (tval.tv_usec - timeout.tv_usec);
 					if (n < 0)
 					{
@@ -2953,7 +2946,7 @@ flushBuffer(MotionLayerState *mlStates, ChunkTransportState *transportStates,
  *	 motionId - Node Motion Id.
  */
 static bool
-SendChunkTCP(MotionLayerState *mlStates, ChunkTransportState *transportStates, ChunkTransportStateEntry *pEntry, MotionConn *conn, TupleChunkListItem tcItem, int16 motionId)
+SendChunkTCP(ChunkTransportState *transportStates, ChunkTransportStateEntry *pEntry, MotionConn *conn, TupleChunkListItem tcItem, int16 motionId)
 {
 	int			length = TYPEALIGN(TUPLE_CHUNK_ALIGN, tcItem->chunk_length);
 
@@ -2965,7 +2958,7 @@ SendChunkTCP(MotionLayerState *mlStates, ChunkTransportState *transportStates, C
 
 	if (conn->msgSize + length > Gp_max_packet_size)
 	{
-		if (!flushBuffer(mlStates, transportStates, pEntry, conn, motionId))
+		if (!flushBuffer(transportStates, pEntry, conn, motionId))
 			return false;
 	}
 
