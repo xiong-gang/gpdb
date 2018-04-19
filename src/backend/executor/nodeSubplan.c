@@ -1196,10 +1196,9 @@ PG_CATCH();
 	{
 		cdbexplain_localExecStats(planstate, econtext->ecxt_estate->showstatctx);
 		if (!explainRecvStats &&
-			shouldDispatch)
+			shouldDispatch &&
+			queryDesc->estate->dispatcherState)
 		{
-			Assert(queryDesc != NULL &&
-				   queryDesc->estate != NULL);
 			/* Wait for all gangs to finish.  Cancel slowpokes. */
 			cdbdisp_cancelDispatch(queryDesc->estate->dispatcherState);
 
