@@ -231,9 +231,6 @@ typedef struct TMGXACT
 	bool						badPrepareGangs;
 
 	int							debugIndex;
-
-	bool						directTransaction;
-	uint16						directTransactionContentId;
 }	TMGXACT;
 
 typedef struct TMGXACTSTATUS
@@ -314,8 +311,7 @@ extern void descDistributedCommitRecord(StringInfo buf, TMGXACT_LOG *gxact_log);
 extern void descDistributedForgetCommitRecord(StringInfo buf, TMGXACT_LOG *gxact_log);
 
 /* @param stmt used because some plans are annotated with dispatch details which the DTM needs. */
-extern void dtmPreCommand(const char *debugCaller, const char *debugDetail, PlannedStmt *stmt,
-							bool needsTwoPhaseCommit, bool dispatchToPrimaries, bool dispatchToMirrors );
+extern void dtmPreCommand(const char *debugCaller, const char *debugDetail, bool needsTwoPhaseCommit);
 extern bool isCurrentDtxTwoPhase(void);
 extern DtxState getCurrentDtxState(void);
 

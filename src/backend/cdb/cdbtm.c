@@ -129,7 +129,6 @@ static void dumpRMOnlyDtx(HTAB *htab, StringInfoData *buff);
 
 static bool doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand, int flags,
 							 char *gid, DistributedTransactionId gxid,
-							 bool *badGangs, bool raiseError, CdbDispatchDirectDesc *direct,
 							 char *serializedDtxContextInfo, int serializedDtxContextInfoLen);
 static void doPrepareTransaction(void);
 static void doInsertForgetCommitted(void);
@@ -372,153 +371,16 @@ notifyCommittedDtxTransaction(void)
 	doNotifyingCommitPrepared();
 }
 
-static inline void
-copyDirectDispatchFromTransaction(CdbDispatchDirectDesc *dOut)
-{
-	if (currentGxact->directTransaction)
-	{
-		dOut->directed_dispatch = true;
-		dOut->count = 1;
-		dOut->content[0] = currentGxact->directTransactionContentId;
-	}
-	else
-	{
-		dOut->directed_dispatch = false;
-	}
-}
-
-static bool
-GetRootNodeIsDirectDispatch(PlannedStmt *stmt)
-{
-	if (stmt == NULL)
-		return false;
-
-	if (stmt->planTree == NULL)
-		return false;
-
-	return stmt->planTree->directDispatch.isDirectDispatch;
-}
-
-/**
- * note that the ability to look at the root node of a plan in order to determine
- *    direct dispatch overall depends on the way we assign direct dispatch.  Parent slices are
- *    never more directed than child slices.  This could be fixed with an iteration over all slices and
- *    combine from every slice.
- *
- * return true IFF the directDispatch data stored in n should be applied to the transaction
- */
-static bool
-GetPlannedStmtDirectDispatch_AndUsingNodeIsSufficient(PlannedStmt *stmt)
-{
-	if (!GetRootNodeIsDirectDispatch(stmt))
-		return false;
-
-	/*
-	 * now look at number initplans .. we do something simple.  ANY initPlans
-	 * means we don't do directDispatch at the dtm level.  It's technically
-	 * possible that the initPlan and the node share the same direct dispatch
-	 * set but we don't bother right now.
-	 */
-	if (stmt->nInitPlans > 0)
-		return false;
-
-	return true;
-}
-
 /*
  * @param needsTwoPhaseCommit if true then marks the current Distributed Transaction as needing to use the
  *       2 phase commit protocol.
  */
 void
-dtmPreCommand(const char *debugCaller, const char *debugDetail, PlannedStmt *stmt,
-			  bool needsTwoPhaseCommit, bool wantSnapshot, bool inCursor)
+dtmPreCommand(const char *debugCaller, const char *debugDetail,
+			  bool needsTwoPhaseCommit)
 {
-	bool		needsPromotionFromDirectDispatch = false;
-	const bool	rootNodeIsDirectDispatch = GetRootNodeIsDirectDispatch(stmt);
-	const bool	nodeSaysDirectDispatch = GetPlannedStmtDirectDispatch_AndUsingNodeIsSufficient(stmt);
-
 	Assert(debugCaller != NULL);
 	Assert(debugDetail != NULL);
-
-	/**
-	 * update the information about what segments are participating in the transaction
-	 */
-	if (currentGxact == NULL)
-	{
-		/* no open transaction so don't do anything */
-	}
-	else if (currentGxact->state == DTX_STATE_ACTIVE_NOT_DISTRIBUTED)
-	{
-		/* Can we direct this transaction to a single content-id ? */
-		if (nodeSaysDirectDispatch)
-		{
-			currentGxact->directTransaction = true;
-			currentGxact->directTransactionContentId = linitial_int(stmt->planTree->directDispatch.contentIds);
-
-			elog(DTM_DEBUG5,
-				 "dtmPreCommand going distributed (to content %d) for gid = %s (%s, detail = '%s')",
-				 currentGxact->directTransactionContentId, currentGxact->gid, debugCaller, debugDetail);
-		}
-		else
-		{
-			currentGxact->directTransaction = false;
-
-			if (rootNodeIsDirectDispatch)
-			{
-				/*
-				 * implicit write on the root, but some initPlan was to all
-				 * contents...so send explicit start
-				 */
-				needsPromotionFromDirectDispatch = true;
-			}
-
-			elog(DTM_DEBUG5,
-				 "dtmPreCommand going distributed (all gangs) for gid = %s (%s, detail = '%s')",
-				 currentGxact->gid, debugCaller, debugDetail);
-		}
-	}
-	else if (currentGxact->state == DTX_STATE_ACTIVE_DISTRIBUTED)
-	{
-		bool		wasDirected = currentGxact->directTransaction;
-		int			wasPromotedFromDirectDispatchContentId = wasDirected ? currentGxact->directTransactionContentId : -1;
-
-		/* Can we still direct this transaction to a single content-id ? */
-		if (currentGxact->directTransaction)
-		{
-			currentGxact->directTransaction = false;
-			/* turn off, but may be restored below */
-
-			if (nodeSaysDirectDispatch)
-			{
-				int			contentId = linitial_int(stmt->planTree->directDispatch.contentIds);
-
-				if (contentId == currentGxact->directTransactionContentId)
-				{
-					/*
-					 * it was the same content!  Stay in a single direct
-					 * transaction
-					 */
-					currentGxact->directTransaction = true;
-				}
-			}
-		}
-
-		if (currentGxact->directTransaction)
-		{
-			/** was not actually promoted */
-			wasPromotedFromDirectDispatchContentId = -1;
-		}
-
-		if (wasPromotedFromDirectDispatchContentId != -1)
-			needsPromotionFromDirectDispatch = true;
-
-		elog(DTM_DEBUG5,
-			 "dtmPreCommand gid = %s is already distributed (%s, detail = '%s'), (was %s : now %s)",
-			 currentGxact->gid, debugCaller, debugDetail,
-			 wasDirected ? "directed" : "all gangs",
-			 currentGxact->directTransaction ? "directed" : "all gangs"
-			);
-	}
 
 	/**
 	 * If two-phase commit then begin transaction.
@@ -543,38 +405,6 @@ dtmPreCommand(const char *debugCaller, const char *debugDetail, PlannedStmt *stm
 				 DtxStateToString(currentGxact->state), debugCaller, debugDetail);
 		}
 	}
-
-	/**
-	 * If promotion from direct-dispatch to whole-cluster dispatch was done then tell about it.
-	 *
-	 * FUTURE: note that this is only needed if the query we are going to run would not itself
-	 *   do this (that is, if the query we are going to run is a read-only one)
-	 */
-	if (currentGxact &&
-		currentGxact->state == DTX_STATE_ACTIVE_DISTRIBUTED &&
-		needsPromotionFromDirectDispatch)
-	{
-		CdbDispatchDirectDesc direct = default_dispatch_direct_desc;
-		char	   *serializedDtxContextInfo;
-		int			serializedDtxContextInfoLen;
-		bool		badGangs,
-					succeeded;
-
-		serializedDtxContextInfo = qdSerializeDtxContextInfo(&serializedDtxContextInfoLen, wantSnapshot, inCursor,
-															 mppTxnOptions(true), "promoteTransactionIn_dtmPreCommand");
-
-		succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_STAY_AT_OR_BECOME_IMPLIED_WRITER, /* flags */ 0,
-												 currentGxact->gid, currentGxact->gxid,
-												 &badGangs, /* raiseError */ false, &direct,
-												 serializedDtxContextInfo, serializedDtxContextInfoLen);
-
-		/* send a DTM command to others to tell them about the transaction */
-		if (!succeeded)
-		{
-			ereport(ERROR, (errmsg("Global transaction upgrade from single segment to entire cluster failed for gid = \"%s\" due to error",
-								   currentGxact->gid)));
-		}
-	}
 }
 
 
@@ -586,11 +416,9 @@ dtmPreCommand(const char *debugCaller, const char *debugDetail, PlannedStmt *stm
 bool
 doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType)
 {
-	CdbDispatchDirectDesc direct = default_dispatch_direct_desc;
 	char	   *serializedDtxContextInfo = NULL;
 	int			serializedDtxContextInfoLen = 0;
-	bool		badGangs,
-				succeeded = false;
+	bool			succeeded = false;
 
 	if (cmdType == DTX_PROTOCOL_COMMAND_SUBTRANSACTION_BEGIN_INTERNAL &&
 		currentGxact->state == DTX_STATE_ACTIVE_NOT_DISTRIBUTED)
@@ -606,7 +434,6 @@ doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType)
 	succeeded = doDispatchDtxProtocolCommand(
 											 cmdType, /* flags */ 0,
 											 currentGxact->gid, currentGxact->gxid,
-											 &badGangs, /* raiseError */ true, &direct,
 											 serializedDtxContextInfo, serializedDtxContextInfoLen);
 
 	/* send a DTM command to others to tell them about the transaction */
@@ -651,7 +478,6 @@ static void
 doPrepareTransaction(void)
 {
 	bool		succeeded;
-	CdbDispatchDirectDesc direct = default_dispatch_direct_desc;
 
 	CHECK_FOR_INTERRUPTS();
 
@@ -664,16 +490,14 @@ doPrepareTransaction(void)
 	 */
 	HOLD_INTERRUPTS();
 
-	copyDirectDispatchFromTransaction(&direct);
-
 	Assert(currentGxact->state == DTX_STATE_ACTIVE_DISTRIBUTED);
 	setCurrentGxactState(DTX_STATE_PREPARING);
 
 	elog(DTM_DEBUG5, "doPrepareTransaction moved to state = %s", DtxStateToString(currentGxact->state));
 
 	succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_PREPARE, /* flags */ 0,
-											 currentGxact->gid, currentGxact->gxid,
-											 &currentGxact->badPrepareGangs, /* raiseError */ true, &direct, NULL, 0);
+											currentGxact->gid, currentGxact->gxid,
+											NULL, 0);
 
 	/*
 	 * Now we've cleaned up our dispatched statement, cancels are allowed
@@ -683,8 +507,6 @@ doPrepareTransaction(void)
 
 	if (!succeeded)
 	{
-		elog(DTM_DEBUG5, "doPrepareTransaction error finds badPrimaryGangs = %s",
-			 (currentGxact->badPrepareGangs ? "true" : "false"));
 		elog(ERROR, "The distributed transaction 'Prepare' broadcast failed to one or more segments for gid = %s.",
 			 currentGxact->gid);
 	}
@@ -765,15 +587,9 @@ static void
 doNotifyingCommitPrepared(void)
 {
 	bool		succeeded;
-	bool		badGangs;
 	int			retry = 0;
-	volatile int savedInterruptHoldoffCount;
-
-	CdbDispatchDirectDesc direct = default_dispatch_direct_desc;
 
 	elog(DTM_DEBUG5, "doNotifyingCommitPrepared entering in state = %s", DtxStateToString(currentGxact->state));
-
-	copyDirectDispatchFromTransaction(&direct);
 
 	Assert(currentGxact->state == DTX_STATE_INSERTED_COMMITTED);
 	setCurrentGxactState(DTX_STATE_NOTIFYING_COMMIT_PREPARED);
@@ -783,25 +599,9 @@ doNotifyingCommitPrepared(void)
 			 (int) strlen(currentGxact->gid));
 
 	SIMPLE_FAULT_INJECTOR(DtmBroadcastCommitPrepared);
-	savedInterruptHoldoffCount = InterruptHoldoffCount;
-
-	PG_TRY();
-	{
-		succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_COMMIT_PREPARED, /* flags */ 0,
-												 currentGxact->gid, currentGxact->gxid,
-												 &badGangs, /* raiseError */ false,
-												 &direct, NULL, 0);
-	}
-	PG_CATCH();
-	{
-		/*
-		 * restore the previous value, which is reset to 0 in errfinish.
-		 */
-		InterruptHoldoffCount = savedInterruptHoldoffCount;
-		succeeded = false;
-	}
-	PG_END_TRY();
-
+	succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_COMMIT_PREPARED, /* flags */ 0,
+											 currentGxact->gid, currentGxact->gxid,
+											 NULL, 0);
 	if (!succeeded)
 	{
 		Assert(currentGxact->state == DTX_STATE_NOTIFYING_COMMIT_PREPARED);
@@ -830,25 +630,9 @@ doNotifyingCommitPrepared(void)
 		 * have SharedSnapshotAdd colissions.
 		 */
 		CheckForResetSession();
-		savedInterruptHoldoffCount = InterruptHoldoffCount;
-
-		PG_TRY();
-		{
-			succeeded = doDispatchDtxProtocolCommand(
-													 DTX_PROTOCOL_COMMAND_RETRY_COMMIT_PREPARED, /* flags */ 0,
-													 currentGxact->gid, currentGxact->gxid,
-													 &badGangs, /* raiseError */ false,
-													 &direct, NULL, 0);
-		}
-		PG_CATCH();
-		{
-			/*
-			 * restore the previous value, which is reset to 0 in errfinish.
-			 */
-			InterruptHoldoffCount = savedInterruptHoldoffCount;
-			succeeded = false;
-		}
-		PG_END_TRY();
+		succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_RETRY_COMMIT_PREPARED, /* flags */ 0,
+												currentGxact->gid, currentGxact->gxid,
+												NULL, 0);
 	}
 
 	if (!succeeded)
@@ -868,10 +652,6 @@ retryAbortPrepared(void)
 {
 	int			retry = 0;
 	bool		succeeded = false;
-	bool		badGangs = false;
-	volatile int savedInterruptHoldoffCount;
-
-	CdbDispatchDirectDesc direct = default_dispatch_direct_desc;
 
 	while (!succeeded && dtx_phase2_retry_count > retry++)
 	{
@@ -890,29 +670,13 @@ retryAbortPrepared(void)
 		 */
 		CheckForResetSession();
 
-		savedInterruptHoldoffCount = InterruptHoldoffCount;
-
-		PG_TRY();
-		{
-			succeeded = doDispatchDtxProtocolCommand(
-													 DTX_PROTOCOL_COMMAND_RETRY_ABORT_PREPARED, /* flags */ 0,
-													 currentGxact->gid, currentGxact->gxid,
-													 &badGangs, /* raiseError */ false,
-													 &direct, NULL, 0);
-			if (!succeeded)
-				elog(WARNING, "the distributed transaction 'Abort' broadcast "
-					 "failed to one or more segments for gid = %s.  "
-					 "Retrying ... try %d", currentGxact->gid, retry);
-		}
-		PG_CATCH();
-		{
-			/*
-			 * restore the previous value, which is reset to 0 in errfinish.
-			 */
-			InterruptHoldoffCount = savedInterruptHoldoffCount;
-			succeeded = false;
-		}
-		PG_END_TRY();
+		succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_RETRY_ABORT_PREPARED, /* flags */ 0,
+												currentGxact->gid, currentGxact->gxid,
+												NULL, 0);
+		if (!succeeded)
+			elog(WARNING, "the distributed transaction 'Abort' broadcast "
+				 "failed to one or more segments for gid = %s.  "
+				 "Retrying ... try %d", currentGxact->gid, retry);
 	}
 
 	if (!succeeded)
@@ -927,10 +691,6 @@ static void
 doNotifyingAbort(void)
 {
 	bool		succeeded;
-	bool		badGangs;
-	volatile int savedInterruptHoldoffCount;
-
-	CdbDispatchDirectDesc direct = default_dispatch_direct_desc;
 
 	elog(DTM_DEBUG5, "doNotifyingAborted entering in state = %s", DtxStateToString(currentGxact->state));
 
@@ -938,16 +698,13 @@ doNotifyingAbort(void)
 		   currentGxact->state == DTX_STATE_NOTIFYING_ABORT_SOME_PREPARED ||
 		   currentGxact->state == DTX_STATE_NOTIFYING_ABORT_PREPARED);
 
-	copyDirectDispatchFromTransaction(&direct);
-
 	if (currentGxact->state == DTX_STATE_NOTIFYING_ABORT_NO_PREPARED)
 	{
 		if (GangsExist())
 		{
 			succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_ABORT_NO_PREPARED, /* flags */ 0,
 													 currentGxact->gid, currentGxact->gxid,
-													 &badGangs, /* raiseError */ false,
-													 &direct, NULL, 0);
+													 NULL, 0);
 			if (!succeeded)
 			{
 				elog(WARNING, "The distributed transaction 'Abort' broadcast failed to one or more segments for gid = %s.",
@@ -1000,24 +757,9 @@ doNotifyingAbort(void)
 			abortString = "Abort Prepared";
 		}
 
-		savedInterruptHoldoffCount = InterruptHoldoffCount;
-
-		PG_TRY();
-		{
-			succeeded = doDispatchDtxProtocolCommand(dtxProtocolCommand, /* flags */ 0,
-													 currentGxact->gid, currentGxact->gxid,
-													 &badGangs, /* raiseError */ false,
-													 &direct, NULL, 0);
-		}
-		PG_CATCH();
-		{
-			/*
-			 * restore the previous value, which is reset to 0 in errfinish.
-			 */
-			InterruptHoldoffCount = savedInterruptHoldoffCount;
-			succeeded = false;
-		}
-		PG_END_TRY();
+		succeeded = doDispatchDtxProtocolCommand(dtxProtocolCommand, /* flags */ 0,
+												 currentGxact->gid, currentGxact->gxid,
+												 NULL, 0);
 
 		if (!succeeded)
 		{
@@ -1044,15 +786,11 @@ static bool
 doNotifyCommittedInDoubt(char *gid)
 {
 	bool		succeeded;
-	bool		badGangs;
-
-	CdbDispatchDirectDesc direct = default_dispatch_direct_desc;
 
 	/* UNDONE: Pass real gxid instead of InvalidDistributedTransactionId. */
 	succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_RECOVERY_COMMIT_PREPARED, /* flags */ 0,
 											 gid, InvalidDistributedTransactionId,
-											 &badGangs, /* raiseError */ false,
-											 &direct, NULL, 0);
+											 NULL, 0);
 	if (!succeeded)
 	{
 		elog(FATAL, "Crash recovery broadcast of the distributed transaction 'Commit Prepared' broadcast failed to one or more segments for gid = %s.", gid);
@@ -1069,15 +807,11 @@ static void
 doAbortInDoubt(char *gid)
 {
 	bool		succeeded;
-	bool		badGangs;
-
-	CdbDispatchDirectDesc direct = default_dispatch_direct_desc;
 
 	/* UNDONE: Pass real gxid instead of InvalidDistributedTransactionId. */
 	succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_RECOVERY_ABORT_PREPARED, /* flags */ 0,
 											 gid, InvalidDistributedTransactionId,
-											 &badGangs, /* raiseError */ false,
-											 &direct, NULL, 0);
+											 NULL, 0);
 	if (!succeeded)
 	{
 		elog(FATAL, "Crash recovery retry of the distributed transaction 'Abort Prepared' broadcast failed to one or more segments for gid = %s.  System will retry again later", gid);
@@ -1166,18 +900,7 @@ rollbackDtxTransaction(void)
 			break;
 
 		case DTX_STATE_PREPARING:
-			if (currentGxact->badPrepareGangs)
-			{
-				setCurrentGxactState(DTX_STATE_RETRY_ABORT_PREPARED);
-
-				/*
-				 * DisconnectAndDestroyAllGangs and ResetSession happens
-				 * inside retryAbortPrepared.
-				 */
-				retryAbortPrepared();
-				clearAndResetGxact();
-				return;
-			}
+			/* CdbDispatchDtxProtocolCommand will handle 'bad writer gang' */
 			setCurrentGxactState(DTX_STATE_NOTIFYING_ABORT_SOME_PREPARED);
 			break;
 
@@ -1974,101 +1697,83 @@ descDistributedForgetCommitRecord(StringInfo buf, TMGXACT_LOG *gxact_log)
 static bool
 doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand, int flags,
 							 char *gid, DistributedTransactionId gxid,
-							 bool *badGangs, bool raiseError,
-							 CdbDispatchDirectDesc *direct,
 							 char *serializedDtxContextInfo,
 							 int serializedDtxContextInfoLen)
 {
-	int			i,
-				resultCount,
-				numOfFailed = 0;
-
+	int		i;
 	char	   *dtxProtocolCommandStr = 0;
-
-	struct pg_result **results = NULL;
+	CdbPgResults results = {NULL, 0};
+	bool		succeeded = true;
+	volatile int savedInterruptHoldoffCount;
 
 	dtxProtocolCommandStr = DtxProtocolCommandToString(dtxProtocolCommand);
 
-	if (Test_print_direct_dispatch_info)
-	{
-		if (direct->directed_dispatch)
-			elog(INFO, "Distributed transaction command '%s' to SINGLE content", dtxProtocolCommandStr);
-		else
-			elog(INFO, "Distributed transaction command '%s' to ALL contents", dtxProtocolCommandStr);
-	}
 	elog(DTM_DEBUG5,
-		 "dispatchDtxProtocolCommand: %d ('%s'), direct content #: %d",
-		 dtxProtocolCommand, dtxProtocolCommandStr,
-		 direct->directed_dispatch ? direct->content[0] : -1);
+		 "dispatchDtxProtocolCommand: %d ('%s')",
+		 dtxProtocolCommand, dtxProtocolCommandStr);
 
-	ErrorData *qeError;
-	results = CdbDispatchDtxProtocolCommand(dtxProtocolCommand, flags,
-											dtxProtocolCommandStr,
-											gid, gxid,
-											&qeError, &resultCount, badGangs, direct,
-											serializedDtxContextInfo, serializedDtxContextInfoLen);
-
-	if (qeError)
+	PG_TRY();
 	{
-		if (!raiseError)
+		CdbDispatchDtxProtocolCommand(dtxProtocolCommand, flags,
+									 dtxProtocolCommandStr,
+									 gid, gxid,
+									 serializedDtxContextInfo, serializedDtxContextInfoLen,
+									 &results);
+		if (results.numResults == 0)
 		{
-			ereport(LOG,
+			ereport(ERROR,
 					(errmsg("DTM error (gathered results from cmd '%s')", dtxProtocolCommandStr),
-					 errdetail("QE reported error: %s", qeError->message)));
+					 errdetail("No result returned")));
 		}
-		else
-			ReThrowError(qeError);
-		return false;
-	}
 
-	if (results == NULL)
-	{
-		numOfFailed++;			/* If we got no results, we need to treat it
-								 * as an error! */
-	}
-
-	for (i = 0; i < resultCount; i++)
-	{
-		char	   *cmdStatus;
-		ExecStatusType resultStatus;
-
-		/*
-		 * note: PQresultStatus() is smart enough to deal with results[i] ==
-		 * NULL
-		 */
-		resultStatus = PQresultStatus(results[i]);
-		if (resultStatus != PGRES_COMMAND_OK &&
-			resultStatus != PGRES_TUPLES_OK)
+		for (i = 0; i < results.numResults; i++)
 		{
-			numOfFailed++;
-		}
-		else
-		{
+			char	   *cmdStatus;
+			ExecStatusType resultStatus;
+
 			/*
-			 * success ? If an error happened during a transaction which
-			 * hasn't already been caught when we try a prepare we'll get a
-			 * rollback from our prepare ON ONE SEGMENT: so we go look at the
-			 * status, otherwise we could issue a COMMIT when we don't want
-			 * to!
+			 * note: PQresultStatus() is smart enough to deal with results[i] ==
+			 * NULL
 			 */
-			cmdStatus = PQcmdStatus(results[i]);
-
-			elog(DEBUG3, "DTM: status message cmd '%s' [%d] result '%s'", dtxProtocolCommandStr, i, cmdStatus);
-			if (strncmp(cmdStatus, dtxProtocolCommandStr, strlen(cmdStatus)) != 0)
+			resultStatus = PQresultStatus(results.pg_results[i]);
+			if (resultStatus != PGRES_COMMAND_OK &&
+				resultStatus != PGRES_TUPLES_OK)
 			{
-				/* failed */
-				numOfFailed++;
+				succeeded = false;
 			}
+			else
+			{
+				/*
+				 * success ? If an error happened during a transaction which
+				 * hasn't already been caught when we try a prepare we'll get a
+				 * rollback from our prepare ON ONE SEGMENT: so we go look at the
+				 * status, otherwise we could issue a COMMIT when we don't want
+				 * to!
+				 */
+				cmdStatus = PQcmdStatus(results.pg_results[i]);
+
+				elog(DEBUG3, "DTM: status message cmd '%s' [%d] result '%s'", dtxProtocolCommandStr, i, cmdStatus);
+				if (strncmp(cmdStatus, dtxProtocolCommandStr, strlen(cmdStatus)) != 0)
+					succeeded = false;
+			}
+
+			PQclear(results.pg_results[i]);
 		}
+
+		if (results.pg_results)
+			free(results.pg_results);
 	}
+	PG_CATCH();
+	{
+		/*
+		 * restore the previous value, which is reset to 0 in errfinish.
+		 */
+		InterruptHoldoffCount = savedInterruptHoldoffCount;
+		succeeded = false;
+	}
+	PG_END_TRY();
 
-	for (i = 0; i < resultCount; i++)
-		PQclear(results[i]);
-
-	if (results)
-		free(results);
-
-	return (numOfFailed == 0);
+	return succeeded;
 }
 
 
@@ -2147,11 +1852,6 @@ initGxact(TMGXACT *gxact)
 	gxact->explicitBeginRemembered = false;
 
 	gxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
-
-	gxact->badPrepareGangs = false;
-
-	gxact->directTransaction = false;
-	gxact->directTransactionContentId = 0;
 }
 
 bool
@@ -3055,8 +2755,7 @@ sendDtxExplicitBegin(void)
 
 	rememberDtxExplicitBegin();
 
-	dtmPreCommand("sendDtxExplicitBegin", "(none)", NULL,
-				   /* is two-phase */ true, /* withSnapshot */ true, /* inCursor */ false);
+	dtmPreCommand("sendDtxExplicitBegin", "(none)", true);
 
 	/*
 	 * Be explicit about both the isolation level and the access mode since in

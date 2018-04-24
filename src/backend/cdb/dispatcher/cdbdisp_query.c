@@ -307,10 +307,7 @@ CdbDispatchSetCommand(const char *strCommand, bool cancelOnError)
 		 "CdbDispatchSetCommand for command = '%s'",
 		 strCommand);
 
-	dtmPreCommand("CdbDispatchSetCommand", strCommand, NULL,
-				  false /* no two-phase commit needed for SET */,
-				  false, /* no snapshot needed for SET */
-				  false /* inCursor */ );
+	dtmPreCommand("CdbDispatchSetCommand", strCommand, false);
 
 	cdbdisp_dispatchToGang(ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
 
@@ -476,9 +473,7 @@ cdbdisp_dispatchCommandInternal(const char *strCommand,
 	bool		needTwoPhase = flags & DF_NEED_TWO_PHASE;
 	bool		withSnapshot = flags & DF_WITH_SNAPSHOT;
 
-	dtmPreCommand("cdbdisp_dispatchCommandOrSerializedQuerytree", strCommand,
-				  NULL, needTwoPhase, withSnapshot,
-				  false /* inCursor */ );
+	dtmPreCommand("cdbdisp_dispatchCommandOrSerializedQuerytree", strCommand, needTwoPhase);
 
 	if (DEBUG5 >= log_min_messages)
 		elog(DEBUG3, "cdbdisp_dispatchCommandOrSerializedQuerytree: %s (needTwoPhase = %s)",

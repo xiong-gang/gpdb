@@ -637,14 +637,7 @@ cdbdisp_dumpDispatchResults(struct CdbDispatchResults *meleeResults,
 {
 	CdbDispatchResult *dispatchResult;
 
-	/*
-	 * Quick exit if no error (not counting ERRCODE_GP_OPERATION_CANCELED).
-	 */
-	if (!meleeResults || !meleeResults->errcode)
-	{
-		*qeError = NULL;
-		return;
-	}
+	Assert (meleeResults && meleeResults->errcode);
 
 	/*
 	 * Find the CdbDispatchResult of the first QE that got an error.

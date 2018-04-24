@@ -66,35 +66,28 @@ static char *buildGpDtxProtocolCommand(DispatchCommandDtxProtocolParms *pDtxProt
  * Any error message - whether or not it is associated with an
  * PGresult object - is returned in *qeError.
  */
-struct pg_result **
+void
 CdbDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 							  int flags,
 							  char *dtxProtocolCommandLoggingStr,
 							  char *gid,
 							  DistributedTransactionId gxid,
-							  ErrorData **qeError,
-							  int *numresults,
-							  bool *badGangs,
-							  CdbDispatchDirectDesc *direct,
 							  char *serializedDtxContextInfo,
-							  int serializedDtxContextInfoLen)
+							  int serializedDtxContextInfoLen,
+							  CdbPgResults *results)
 {
 	CdbDispatcherState *ds;
 	MemoryContext oldContext;
-	CdbPgResults cdb_pgresults = {NULL, 0};
 
 	DispatchCommandDtxProtocolParms dtxProtocolParms;
 	Gang	   *primaryGang;
 	char	   *queryText = NULL;
-	int			queryTextLen = 0;
+	int		queryTextLen = 0;
+	ErrorData *qeError = NULL;
 
 	elog((Debug_print_full_dtm ? LOG : DEBUG5),
-		 "CdbDispatchDtxProtocolCommand: %s for gid = %s, direct content #: %d",
-		 dtxProtocolCommandLoggingStr, gid,
-		 direct->directed_dispatch ? direct->content[0] : -1);
-
-	*badGangs = false;
-	*qeError = NULL;
+		 "CdbDispatchDtxProtocolCommand: %s for gid = %s",
+		 dtxProtocolCommandLoggingStr, gid);
 
 	MemSet(&dtxProtocolParms, 0, sizeof(dtxProtocolParms));
 	dtxProtocolParms.dtxProtocolCommand = dtxProtocolCommand;
@@ -134,21 +127,21 @@ CdbDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	ds->primaryResults->writer_gang = primaryGang;
 	MemoryContextSwitchTo(oldContext);
 
-	cdbdisp_dispatchToGang(ds, primaryGang, -1, direct);
+	cdbdisp_dispatchToGang(ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
 
 	cdbdisp_waitDispatchFinish(ds);
 
-	cdbdisp_finishCommand(ds, qeError, &cdb_pgresults, false);
-	if (!GangOK(primaryGang))
-	{
-		*badGangs = true;
-		elog((Debug_print_full_dtm ? LOG : DEBUG5),
-			 "CdbDispatchDtxProtocolCommand: Bad gang from dispatch of %s for gid = %s",
-			 dtxProtocolCommandLoggingStr, gid);
-	}
+	cdbdisp_finishCommand(ds, &qeError, results, false);
 
-	*numresults = cdb_pgresults.numResults;
-	return cdb_pgresults.pg_results;
+	if (qeError && qeError->message)
+		ereport(ERROR,
+				(errmsg("DTM error (gathered results from cmd '%s' for gid = %s)", dtxProtocolCommandLoggingStr, gid),
+				 errdetail("QE reported error: %s", qeError->message)));
+
+	if (!GangOK(primaryGang))
+		ereport(ERROR,
+				(errmsg("DTM error (gathered results from cmd '%s' for gid = %s)", dtxProtocolCommandLoggingStr, gid),
+				 errdetail("Bad writer gang")));
 }
 
 char *

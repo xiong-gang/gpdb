@@ -32,17 +32,16 @@ struct CdbPgResults;
  * PGresult objects - are appended to a StringInfo buffer provided
  * by the caller.
  */
-struct pg_result **
+void
 CdbDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 							  int flags,
-							  char	*dtxProtocolCommandLoggingStr,
-							  char	*gid,
-							  DistributedTransactionId	gxid,
-							  ErrorData **qeError,
-							  int *resultCount,
-							  bool* badGangs,
-							  CdbDispatchDirectDesc *direct,
-							  char *argument, int argumentLength );
+							  char *dtxProtocolCommandLoggingStr,
+							  char *gid,
+							  DistributedTransactionId gxid,
+							  char *serializedDtxContextInfo,
+							  int serializedDtxContextInfoLen,
+							  struct CdbPgResults *results);
+
 
 
 /*
