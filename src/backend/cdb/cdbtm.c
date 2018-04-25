@@ -371,16 +371,153 @@ notifyCommittedDtxTransaction(void)
 	doNotifyingCommitPrepared();
 }
 
+static inline void
+copyDirectDispatchFromTransaction(CdbDispatchDirectDesc *dOut)
+{
+        if (currentGxact->directTransaction)
+        {
+                dOut->directed_dispatch = true;
+                dOut->count = 1;
+                dOut->content[0] = currentGxact->directTransactionContentId;
+        }
+        else
+        {
+                dOut->directed_dispatch = false;
+        }
+}
+
+static bool
+GetRootNodeIsDirectDispatch(PlannedStmt *stmt)
+{
+        if (stmt == NULL)
+                return false;
+
+        if (stmt->planTree == NULL)
+                return false;
+
+        return stmt->planTree->directDispatch.isDirectDispatch;
+}
+
+/**
+ * note that the ability to look at the root node of a plan in order to determine
+ *    direct dispatch overall depends on the way we assign direct dispatch.  Parent slices are
+ *    never more directed than child slices.  This could be fixed with an iteration over all slices and
+ *    combine from every slice.
+ *
+ * return true IFF the directDispatch data stored in n should be applied to the transaction
+ */
+static bool
+GetPlannedStmtDirectDispatch_AndUsingNodeIsSufficient(PlannedStmt *stmt)
+{
+	if (!GetRootNodeIsDirectDispatch(stmt))
+		return false;
+
+	/*
+	 * now look at number initplans .. we do something simple.  ANY initPlans
+	 * means we don't do directDispatch at the dtm level.  It's technically
+	 * possible that the initPlan and the node share the same direct dispatch
+	 * set but we don't bother right now.
+	 */
+	if (stmt->nInitPlans > 0)
+		return false;
+
+	return true;
+}
+
 /*
  * @param needsTwoPhaseCommit if true then marks the current Distributed Transaction as needing to use the
  *       2 phase commit protocol.
  */
 void
-dtmPreCommand(const char *debugCaller, const char *debugDetail,
-			  bool needsTwoPhaseCommit)
+dtmPreCommand(const char *debugCaller, const char *debugDetail, PlannedStmt *stmt,
+			  bool needsTwoPhaseCommit, bool wantSnapshot, bool inCursor)
 {
+	bool		needsPromotionFromDirectDispatch = false;
+	const bool	rootNodeIsDirectDispatch = GetRootNodeIsDirectDispatch(stmt);
+	const bool	nodeSaysDirectDispatch = GetPlannedStmtDirectDispatch_AndUsingNodeIsSufficient(stmt);
+
 	Assert(debugCaller != NULL);
 	Assert(debugDetail != NULL);
+
+	/**
+	 * update the information about what segments are participating in the transaction
+	 */
+	if (currentGxact == NULL)
+	{
+		/* no open transaction so don't do anything */
+	}
+	else if (currentGxact->state == DTX_STATE_ACTIVE_NOT_DISTRIBUTED)
+	{
+		/* Can we direct this transaction to a single content-id ? */
+		if (nodeSaysDirectDispatch)
+		{
+			currentGxact->directTransaction = true;
+			currentGxact->directTransactionContentId = linitial_int(stmt->planTree->directDispatch.contentIds);
+
+			elog(DTM_DEBUG5,
+				 "dtmPreCommand going distributed (to content %d) for gid = %s (%s, detail = '%s')",
+				 currentGxact->directTransactionContentId, currentGxact->gid, debugCaller, debugDetail);
+		}
+		else
+		{
+			currentGxact->directTransaction = false;
+
+			if (rootNodeIsDirectDispatch)
+			{
+				/*
+				 * implicit write on the root, but some initPlan was to all
+				 * contents...so send explicit start
+				 */
+				needsPromotionFromDirectDispatch = true;
+			}
+
+			elog(DTM_DEBUG5,
+				 "dtmPreCommand going distributed (all gangs) for gid = %s (%s, detail = '%s')",
+				 currentGxact->gid, debugCaller, debugDetail);
+		}
+	}
+	else if (currentGxact->state == DTX_STATE_ACTIVE_DISTRIBUTED)
+	{
+		bool		wasDirected = currentGxact->directTransaction;
+		int			wasPromotedFromDirectDispatchContentId = wasDirected ? currentGxact->directTransactionContentId : -1;
+
+		/* Can we still direct this transaction to a single content-id ? */
+		if (currentGxact->directTransaction)
+		{
+			currentGxact->directTransaction = false;
+			/* turn off, but may be restored below */
+
+			if (nodeSaysDirectDispatch)
+			{
+				int			contentId = linitial_int(stmt->planTree->directDispatch.contentIds);
+
+				if (contentId == currentGxact->directTransactionContentId)
+				{
+					/*
+					 * it was the same content!  Stay in a single direct
+					 * transaction
+					 */
+					currentGxact->directTransaction = true;
+				}
+			}
+		}
+
+		if (currentGxact->directTransaction)
+		{
+			/** was not actually promoted */
+			wasPromotedFromDirectDispatchContentId = -1;
+		}
+
+		if (wasPromotedFromDirectDispatchContentId != -1)
+			needsPromotionFromDirectDispatch = true;
+
+		elog(DTM_DEBUG5,
+			 "dtmPreCommand gid = %s is already distributed (%s, detail = '%s'), (was %s : now %s)",
+			 currentGxact->gid, debugCaller, debugDetail,
+			 wasDirected ? "directed" : "all gangs",
+			 currentGxact->directTransaction ? "directed" : "all gangs"
+			);
+	}
 
 	/**
 	 * If two-phase commit then begin transaction.
@@ -403,6 +540,38 @@ dtmPreCommand(const char *debugCaller, const char *debugDetail,
 		{
 			elog(ERROR, "DTM transaction is not active (state = %s, %s, detail = '%s')",
 				 DtxStateToString(currentGxact->state), debugCaller, debugDetail);
+		}
+	}
+
+	/**
+	 * If promotion from direct-dispatch to whole-cluster dispatch was done then tell about it.
+	 *
+	 * FUTURE: note that this is only needed if the query we are going to run would not itself
+	 *   do this (that is, if the query we are going to run is a read-only one)
+	 */
+	if (currentGxact &&
+		currentGxact->state == DTX_STATE_ACTIVE_DISTRIBUTED &&
+		needsPromotionFromDirectDispatch)
+	{
+		CdbDispatchDirectDesc direct = default_dispatch_direct_desc;
+		char	   *serializedDtxContextInfo;
+		int			serializedDtxContextInfoLen;
+		bool		badGangs,
+					succeeded;
+
+		serializedDtxContextInfo = qdSerializeDtxContextInfo(&serializedDtxContextInfoLen, wantSnapshot, inCursor,
+															 mppTxnOptions(true), "promoteTransactionIn_dtmPreCommand");
+
+		succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_STAY_AT_OR_BECOME_IMPLIED_WRITER, /* flags */ 0,
+												 currentGxact->gid, currentGxact->gxid,
+												 &badGangs, /* raiseError */ false, &direct,
+												 serializedDtxContextInfo, serializedDtxContextInfoLen);
+
+		/* send a DTM command to others to tell them about the transaction */
+		if (!succeeded)
+		{
+			ereport(ERROR, (errmsg("Global transaction upgrade from single segment to entire cluster failed for gid = \"%s\" due to error",
+								   currentGxact->gid)));
 		}
 	}
 }
