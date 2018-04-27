@@ -309,13 +309,13 @@ CdbDispatchSetCommand(const char *strCommand, bool cancelOnError)
 
 	dtmPreCommand("CdbDispatchSetCommand", strCommand, false);
 
-	cdbdisp_dispatchToGang(ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
+	cdbdisp_dispatchToGang(ds, primaryGang, -1, NULL);
 
 	foreach(le, idleReaderGangs)
 	{
 		Gang	   *rg = lfirst(le);
 
-		cdbdisp_dispatchToGang(ds, rg, -1, DEFAULT_DISP_DIRECT);
+		cdbdisp_dispatchToGang(ds, rg, -1, NULL);
 	}
 
 	/*
@@ -337,7 +337,7 @@ CdbDispatchSetCommand(const char *strCommand, bool cancelOnError)
 		}
 		else
 		{
-			cdbdisp_dispatchToGang(ds, rg, -1, DEFAULT_DISP_DIRECT);
+			cdbdisp_dispatchToGang(ds, rg, -1, NULL);
 		}
 	}
 
@@ -474,6 +474,8 @@ cdbdisp_dispatchCommandInternal(const char *strCommand,
 	bool		withSnapshot = flags & DF_WITH_SNAPSHOT;
 
 	dtmPreCommand("cdbdisp_dispatchCommandOrSerializedQuerytree", strCommand, needTwoPhase);
+	if (needTwoPhase)
+		markCurrentDtxTwoPhase();
 
 	if (DEBUG5 >= log_min_messages)
 		elog(DEBUG3, "cdbdisp_dispatchCommandOrSerializedQuerytree: %s (needTwoPhase = %s)",
@@ -526,7 +528,7 @@ cdbdisp_dispatchCommandInternal(const char *strCommand,
 	MemoryContextSwitchTo(oldContext);
 	cdbdisp_destroyQueryParms(pQueryParms);
 
-	cdbdisp_dispatchToGang(ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
+	cdbdisp_dispatchToGang(ds, primaryGang, -1, NULL);
 
 	cdbdisp_waitDispatchFinish(ds);
 
@@ -1209,35 +1211,6 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 		primaryGang = slice->primaryGang;
 		Assert(primaryGang != NULL);
 
-		if (slice->directDispatch.isDirectDispatch)
-		{
-			direct.directed_dispatch = true;
-			Assert(list_length(slice->directDispatch.contentIds) == 1);
-			direct.count = 1;
-
-			/*
-			 * We only support single content right now. If this changes then
-			 * we need to change from a list to another structure to avoid n^2
-			 * cases
-			 */
-			direct.content[0] = linitial_int(slice->directDispatch.contentIds);
-
-			if (Test_print_direct_dispatch_info)
-			{
-				elog(INFO, "Dispatch command to SINGLE content");
-			}
-		}
-		else
-		{
-			direct.directed_dispatch = false;
-			direct.count = 0;
-
-			if (Test_print_direct_dispatch_info)
-			{
-				elog(INFO, "Dispatch command to ALL contents");
-			}
-		}
-
 		/*
 		 * Bail out if already got an error or cancellation request.
 		 */
@@ -1252,7 +1225,33 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 		if (primaryGang->type == GANGTYPE_PRIMARY_WRITER)
 			ds->primaryResults->writer_gang = primaryGang;
 
-		cdbdisp_dispatchToGang(ds, primaryGang, si, &direct);
+		cdbdisp_dispatchToGang(ds, primaryGang, si, pDirect);
+		if (slice->directDispatch.isDirectDispatch)
+		{
+			Assert(list_length(slice->directDispatch.contentIds) == 1);
+			direct.count = 1;
+
+			/*
+			 * We only support single content right now. If this changes then
+			 * we need to change from a list to another structure to avoid n^2
+			 * cases
+			 */
+			direct.content[0] = linitial_int(slice->directDispatch.contentIds);
+
+			if (Test_print_direct_dispatch_info)
+			{
+				elog(INFO, "Dispatch command to SINGLE content");
+			}
+			cdbdisp_dispatchToGang(ds, primaryGang, si, &direct);
+		}
+		else
+		{
+			if (Test_print_direct_dispatch_info)
+			{
+				elog(INFO, "Dispatch command to ALL contents");
+			}
+			cdbdisp_dispatchToGang(ds, primaryGang, si, NULL);
+		}
 
 		SIMPLE_FAULT_INJECTOR(AfterOneSliceDispatched);
 	}

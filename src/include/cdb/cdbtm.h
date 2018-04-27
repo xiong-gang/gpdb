@@ -314,6 +314,7 @@ extern void descDistributedForgetCommitRecord(StringInfo buf, TMGXACT_LOG *gxact
 
 /* @param stmt used because some plans are annotated with dispatch details which the DTM needs. */
 extern void dtmPreCommand(const char *debugCaller, const char *debugDetail, bool needsTwoPhaseCommit);
+extern void markCurrentDtxTwoPhase(void);
 extern bool isCurrentDtxTwoPhase(void);
 extern DtxState getCurrentDtxState(void);
 

@@ -127,7 +127,7 @@ CdbDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	ds->primaryResults->writer_gang = primaryGang;
 	MemoryContextSwitchTo(oldContext);
 
-	cdbdisp_dispatchToGang(ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
+	cdbdisp_dispatchToGang(ds, primaryGang, -1, NULL);
 
 	cdbdisp_waitDispatchFinish(ds);
 

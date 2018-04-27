@@ -202,7 +202,7 @@ cdbdisp_initDispatchParmsForGang(struct CdbDispatcherState *ds,
 
 		Assert(segdbDesc != NULL);
 
-		if (disp_direct->directed_dispatch)
+		if (disp_direct != NULL)
 		{
 			/* currently we allow direct-to-one dispatch, only */
 			Assert(disp_direct->count == 1);

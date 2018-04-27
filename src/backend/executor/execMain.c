@@ -660,6 +660,8 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			 * work for this query.
 			 */
 			needDtxTwoPhase = ExecutorSaysTransactionDoesWrites();
+			if (needDtxTwoPhase)
+				markCurrentDtxTwoPhase();
 			dtmPreCommand("ExecutorStart", "(none)", needDtxTwoPhase);
 
 			queryDesc->ddesc->sliceTable = estate->es_sliceTable;

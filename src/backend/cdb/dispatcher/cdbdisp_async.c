@@ -295,7 +295,7 @@ cdbdisp_dispatchToGang_async(struct CdbDispatcherState *ds,
 
 		Assert(segdbDesc != NULL);
 
-		if (dispDirect->directed_dispatch)
+		if (dispDirect != NULL)
 		{
 			/* We can direct dispatch to one segment DB only */
 			Assert(dispDirect->count == 1);

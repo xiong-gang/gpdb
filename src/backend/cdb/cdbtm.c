@@ -371,59 +371,18 @@ notifyCommittedDtxTransaction(void)
 	doNotifyingCommitPrepared();
 }
 
-static inline void
-copyDirectDispatchFromTransaction(CdbDispatchDirectDesc *dOut)
+void
+markCurrentDtxTwoPhase(void)
 {
-        if (currentGxact->directTransaction)
-        {
-                dOut->directed_dispatch = true;
-                dOut->count = 1;
-                dOut->content[0] = currentGxact->directTransactionContentId;
-        }
-        else
-        {
-                dOut->directed_dispatch = false;
-        }
+	if (currentGxact == NULL ||
+		(currentGxact->state != DTX_STATE_ACTIVE_NOT_DISTRIBUTED &&
+		 currentGxact->state != DTX_STATE_ACTIVE_DISTRIBUTED))
+	{
+		elog(ERROR, "DTM transaction is not active (%s, detail = '%s')", debugCaller, debugDetail);
+	}
+
+	setCurrentGxactState(DTX_STATE_ACTIVE_DISTRIBUTED);
 }
-
-static bool
-GetRootNodeIsDirectDispatch(PlannedStmt *stmt)
-{
-        if (stmt == NULL)
-                return false;
-
-        if (stmt->planTree == NULL)
-                return false;
-
-        return stmt->planTree->directDispatch.isDirectDispatch;
-}
-
-/**
- * note that the ability to look at the root node of a plan in order to determine
- *    direct dispatch overall depends on the way we assign direct dispatch.  Parent slices are
- *    never more directed than child slices.  This could be fixed with an iteration over all slices and
- *    combine from every slice.
- *
- * return true IFF the directDispatch data stored in n should be applied to the transaction
- */
-static bool
-GetPlannedStmtDirectDispatch_AndUsingNodeIsSufficient(PlannedStmt *stmt)
-{
-	if (!GetRootNodeIsDirectDispatch(stmt))
-		return false;
-
-	/*
-	 * now look at number initplans .. we do something simple.  ANY initPlans
-	 * means we don't do directDispatch at the dtm level.  It's technically
-	 * possible that the initPlan and the node share the same direct dispatch
-	 * set but we don't bother right now.
-	 */
-	if (stmt->nInitPlans > 0)
-		return false;
-
-	return true;
-}
-
 /*
  * @param needsTwoPhaseCommit if true then marks the current Distributed Transaction as needing to use the
  *       2 phase commit protocol.
@@ -2923,7 +2882,7 @@ sendDtxExplicitBegin(void)
 	}
 
 	rememberDtxExplicitBegin();
-
+	markCurrentDtxTwoPhase();
 	dtmPreCommand("sendDtxExplicitBegin", "(none)", true);
 
 	/*

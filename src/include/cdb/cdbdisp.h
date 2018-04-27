@@ -38,13 +38,9 @@ typedef enum DispatchWaitMode
 
 typedef struct CdbDispatchDirectDesc
 {
-	bool directed_dispatch;
 	uint16 count;
 	uint16 content[1];
 } CdbDispatchDirectDesc;
-
-extern CdbDispatchDirectDesc default_dispatch_direct_desc;
-#define DEFAULT_DISP_DIRECT (&default_dispatch_direct_desc)
 
 typedef struct CdbDispatcherState
 {

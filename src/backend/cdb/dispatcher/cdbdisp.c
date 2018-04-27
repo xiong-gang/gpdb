@@ -53,11 +53,6 @@ static dispatcher_handle_t *find_dispatcher_handle(CdbDispatcherState *ds);
 static dispatcher_handle_t *allocate_dispatcher_handle(void);
 static void destroy_dispatcher_handle(dispatcher_handle_t *h);
 
-/*
- * default directed-dispatch parameters: don't direct anything.
- */
-CdbDispatchDirectDesc default_dispatch_direct_desc = {false, 0, {0}};
-
 static void cdbdisp_clearGangActiveFlag(CdbDispatcherState *ds);
 
 static DispatcherInternalFuncs *pDispatchFuncs = NULL;
@@ -122,6 +117,7 @@ cdbdisp_dispatchToGang(struct CdbDispatcherState *ds,
 		}
 	}
 
+	updateDtxDirectDispatch(disp_direct);
 	/*
 	 * WIP: will use a function pointer for implementation later, currently
 	 * just use an internal function to move dispatch thread related code into
