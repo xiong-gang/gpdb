@@ -124,9 +124,6 @@ Section: Class 09 - Triggered Action Exception
 Section: Class 0A - Feature Not Supported
 
 0A000    E    ERRCODE_FEATURE_NOT_SUPPORTED                                  feature_not_supported
-# GPDB_91_MERGE_FIXME: Do we really need these GPDB-specific codes?
-# Can't we just use ERRCODE_FEATURE_NOT_SUPPORTED?
-0AM00    E    ERRCODE_GP_FEATURE_NOT_SUPPORTED                               gp_feature_not_supported
 0AM01    E    ERRCODE_GP_FEATURE_NOT_YET                                     gp_feature_not_yet
 0AM02    E    ERRCODE_GP_FEATURE_NOT_CONFIGURED                              gp_feature_not_configured
 
