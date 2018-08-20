@@ -516,12 +516,13 @@ rel_has_appendonly_partition(Oid relid)
 	foreach(lc, leaf_oid_list)
 	{
 		Relation rel = heap_open(lfirst_oid(lc), NoLock);
-		heap_close(rel, NoLock);
 
 		if (RelationIsAoRows(rel) || RelationIsAoCols(rel))
 		{
+			heap_close(rel, NoLock);
 			return true;
 		}
+		heap_close(rel, NoLock);
 	}
 
 	return false;
