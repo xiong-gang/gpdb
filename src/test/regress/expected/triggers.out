@@ -255,7 +255,7 @@ select set_ttdummy(1);
 
 -- we want to correct some "date"
 update tttest set price_on = -1 where price_id = 1;
-ERROR:  ttdummy (tttest): you cannot change price_on and/or price_off columns (use set_ttdummy) (regress.c:559)  (seg2 172.17.0.2:25434 pid=51032) (regress.c:559)
+ERROR:  ttdummy (tttest): you cannot change price_on and/or price_off columns (use set_ttdummy)  (seg2 172.17.0.2:25434 pid=221098)
 -- but this doesn't work
 -- try in this way
 select set_ttdummy(0);
@@ -265,7 +265,7 @@ select set_ttdummy(0);
 (1 row)
 
 update tttest set price_on = -1 where price_id = 1;
-ERROR:  ttdummy (tttest): you cannot change price_on and/or price_off columns (use set_ttdummy) (regress.c:559)  (seg2 172.17.0.2:25434 pid=52692) (regress.c:559)
+ERROR:  ttdummy (tttest): you cannot change price_on and/or price_off columns (use set_ttdummy)  (seg2 172.17.0.2:25434 pid=221098)
 select * from tttest;
  price_id | price_val | price_on | price_off 
 ----------+-----------+----------+-----------
@@ -289,7 +289,7 @@ drop sequence ttdummy_seq;
 CREATE TABLE log_table (tstamp timestamp default timeofday()::timestamp);
 CREATE TABLE main_table (a int, b int);
 COPY main_table (a,b) FROM stdin;
-CREATE FUNCTION trigger_func() RETURNS trigger LANGUAGE plpgsql NO SQL AS '
+CREATE FUNCTION trigger_func() RETURNS trigger LANGUAGE plpgsql AS '
 BEGIN
 	RAISE NOTICE ''trigger_func(%) called: action = %, when = %, level = %'', TG_ARGV[0], TG_OP, TG_WHEN, TG_LEVEL;
 	RETURN NULL;
@@ -522,7 +522,7 @@ create function trigtest() returns trigger as $$
 begin
 	raise notice '% % % %', TG_RELNAME, TG_OP, TG_WHEN, TG_LEVEL;
 	return new;
-end;$$ language plpgsql immutable NO SQL;
+end;$$ language plpgsql;
 create trigger trigtest_b_row_tg before insert or update or delete on trigtest
 for each row execute procedure trigtest();
 create trigger trigtest_a_row_tg after insert or update or delete on trigtest
@@ -678,7 +678,7 @@ CREATE TABLE trigger_test (dkey int, f1 int, f2 text, f3 text);
 NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'dkey' as the Greenplum Database data distribution key for this table.
 HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
 -- this is the obvious (and wrong...) way to compare rows
-CREATE FUNCTION mytrigger() RETURNS trigger LANGUAGE plpgsql CONTAINS SQL as $$
+CREATE FUNCTION mytrigger() RETURNS trigger LANGUAGE plpgsql as $$
 begin
 	if row(old.*) = row(new.*) then
 		raise notice 'row % not changed', new.f1;
@@ -703,7 +703,7 @@ UPDATE trigger_test SET f3 = NULL;
 NOTICE:  row 1 changed
 NOTICE:  row 2 changed
 -- the right way when considering nulls is
-CREATE OR REPLACE FUNCTION mytrigger() RETURNS trigger LANGUAGE plpgsql CONTAINS SQL as $$
+CREATE OR REPLACE FUNCTION mytrigger() RETURNS trigger LANGUAGE plpgsql as $$
 begin
 	if row(old.*) is distinct from row(new.*) then
 		raise notice 'row % changed', new.f1;
