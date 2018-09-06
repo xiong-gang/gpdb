@@ -165,6 +165,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 #endif
 
 		size = add_size(size, SharedSnapshotShmemSize());
+		size = add_size(size, StandbyDistributedSnapshotShmemSize());
 		size = add_size(size, FtsShmemSize());
 		size = add_size(size, tmShmemSize());
 		size = add_size(size, CheckpointerShmemSize());
@@ -296,6 +297,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	 *		 know who we are.  
 	 */
 	CreateSharedSnapshotArray();
+	StandbyDistributedSnapshotInit();
 	TwoPhaseShmemInit();
 
 	/*

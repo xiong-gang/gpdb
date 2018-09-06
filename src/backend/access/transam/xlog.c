@@ -770,8 +770,6 @@ static void rm_redo_error_callback(void *arg);
 static int	get_sync_bit(int method);
 
 /* New functions added for WAL replication */
-static void XLogProcessCheckpointRecord(XLogRecord *rec);
-
 static void GetXLogCleanUpTo(XLogRecPtr recptr, uint32 *_logId, uint32 *_logSeg);
 static void checkXLogConsistency(XLogRecord *record, XLogRecPtr EndRecPtr);
 
@@ -5990,6 +5988,9 @@ XLogReadRecoveryCommandFile(int emode)
 						RECOVERY_COMMAND_FILE)));
 	}
 
+	/* Enable fetching from archive recovery area */
+	InArchiveRecovery = true;
+
 	FreeConfigVariables(head);
 }
 
@@ -6443,29 +6444,6 @@ ApplyStartupRedo(
 
 }
 
-/*
- * Process passed checkpoint record either during normal recovery or
- * in standby mode.
- *
- * If in standby mode, master mirroring information stored by the checkpoint
- * record is processed as well.
- */
-static void
-XLogProcessCheckpointRecord(XLogRecord *rec)
-{
-	CheckpointExtendedRecord ckptExtended;
-
-	UnpackCheckPointRecord(rec, &ckptExtended);
-
-	if (ckptExtended.dtxCheckpoint)
-	{
-		/* Handle the DTX information. */
-		UtilityModeFindOrCreateDtmRedoFile();
-		redoDtxCheckPoint(ckptExtended.dtxCheckpoint);
-		UtilityModeCloseDtmRedoFile();
-	}
-}
-
 DBState
 GetCurrentDBState(void)
 {
@@ -6701,6 +6679,7 @@ StartupXLOG(void)
 	bool		bgwriterLaunched = false;
 	bool		backupFromStandby = false;
 	DBState		dbstate_at_startup;
+	CheckpointExtendedRecord ckptExtended;
 
 	/*
 	 * Read control file and check XLOG status looks valid.
@@ -6846,13 +6825,6 @@ StartupXLOG(void)
 	replay_image_masked = (char *) palloc(BLCKSZ);
 	master_image_masked = (char *) palloc(BLCKSZ);
 
-	/*
-	 * Take ownership of the wakeup latch if we're going to sleep during
-	 * recovery.
-	 */
-	if (StandbyMode)
-		OwnLatch(&XLogCtl->recoveryWakeupLatch);
-
 	if (read_backup_label(&checkPointLoc, &backupEndRequired,
 						  &backupFromStandby))
 	{
@@ -6878,6 +6850,7 @@ StartupXLOG(void)
 		if (record != NULL)
 		{
 			memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
+			UnpackCheckPointRecord(record, &ckptExtended);
 			wasShutdown = (record->xl_info == XLOG_CHECKPOINT_SHUTDOWN);
 			ereport(DEBUG1,
 					(errmsg("checkpoint record is at %X/%X",
@@ -6959,13 +6932,12 @@ StartupXLOG(void)
 			}
 		}
 		memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
+		UnpackCheckPointRecord(record, &ckptExtended);
 		wasShutdown = (record->xl_info == XLOG_CHECKPOINT_SHUTDOWN);
 	}
 
 	LastRec = RecPtr = checkPointLoc;
 
-	CheckpointExtendedRecord ckptExtended;
-	UnpackCheckPointRecord(record, &ckptExtended);
 	if (ckptExtended.ptas)
 		SetupCheckpointPreparedTransactionList(ckptExtended.ptas);
 
@@ -6973,7 +6945,8 @@ StartupXLOG(void)
 	 * Find Xacts that are distributed committed from the checkpoint record and
 	 * store them such that they can utilized later during DTM recovery.
 	 */
-	XLogProcessCheckpointRecord(record);
+	UtilityModeFindOrCreateDtmRedoFile();
+	redoDtxCheckPoint(ckptExtended.dtxCheckpoint);
 
 	ereport(DEBUG1,
 			(errmsg("redo record is at %X/%X; shutdown %s",
@@ -7150,7 +7123,6 @@ StartupXLOG(void)
 		/* Check that the GUCs used to generate the WAL allow recovery */
 		CheckRequiredParameterValues();
 
-		UtilityModeFindOrCreateDtmRedoFile();
 		
 		/*
 		 * We're in recovery, so unlogged relations may be trashed and must be
@@ -7391,8 +7363,9 @@ StartupXLOG(void)
 					(xlogRecInfo == XLOG_CHECKPOINT_SHUTDOWN
 					 || xlogRecInfo == XLOG_CHECKPOINT_ONLINE))
 				{
-					XLogProcessCheckpointRecord(record);
 					memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
+					UnpackCheckPointRecord(record, &ckptExtended);
+					redoDtxCheckPoint(ckptExtended.dtxCheckpoint);
 				}
 
 				/*
@@ -7530,8 +7503,6 @@ StartupXLOG(void)
 	if (StandbyMode)
 	{
 		Assert(ControlFile->state == DB_IN_STANDBY_MODE);
-		StandbyMode = false;
-
 		elog(LOG, "updating pg_control to state DB_IN_STANDBY_PROMOTED");
 
 		/* Transition to promoted mode */
@@ -7539,20 +7510,6 @@ StartupXLOG(void)
 		ControlFile->time = (pg_time_t) time(NULL);
 		UpdateControlFile();
 	}
-
-	/*
-	 * Kill WAL receiver, if it's still running, before we continue to write
-	 * the startup checkpoint record. It will trump over the checkpoint and
-	 * subsequent records if it's still alive when we start writing WAL.
-	 */
-	ShutdownWalRcv();
-
-	/*
-	 * We don't need the latch anymore. It's not strictly necessary to disown
-	 * it, but let's do it for the sake of tidiness.
-	 */
-	if (StandbyMode)
-		DisownLatch(&XLogCtl->recoveryWakeupLatch);
 
 	/*
 	 * We are now done reading the xlog from stream. Turn off streaming
@@ -7665,14 +7622,13 @@ StartupXLOG(void)
 	 */
 	if (InArchiveRecovery)
 		exitArchiveRecovery(curFileTLI, endLogId, endLogSeg);
-
-	/*
-	 * Recovery command file must be deleted during promotion to prevent
-	 * StartupXLOG from incorrectly concluding that we are still a standby.
-	 * This could happen if the promoted standby goes through a restart.
-	 */
-	if (ControlFile->state == DB_IN_STANDBY_PROMOTED)
+	else if (ControlFile->state == DB_IN_STANDBY_PROMOTED)
 	{
+		/*
+		 * Recovery command file must be deleted during promotion to prevent
+		 * StartupXLOG from incorrectly concluding that we are still a standby.
+		 * This could happen if the promoted standby goes through a restart.
+		 */
 		elog(LOG, "pg_control state is DB_IN_STANDBY_PROMOTED hence renaming recovery file");
 		renameRecoveryFile();
 	}
@@ -12060,6 +12016,16 @@ CheckForStandbyTrigger(void)
 
 	if (triggered)
 		return true;
+
+	if (IsPromoteTriggered())
+	{
+		ereport(LOG,
+				(errmsg("received promote request")));
+		ShutdownWalRcv();
+		ResetPromoteTriggered();
+		triggered = true;
+		return true;
+	}
 
 	if (CheckPromoteSignal(true))
 	{

@@ -218,6 +218,14 @@ typedef struct xl_xact_abort_prepared
 typedef struct xl_xact_distributed_forget
 {
 	TMGXACT_LOG gxact_log;
+	DistributedTransactionTimeStamp	distribTransactionTimeStamp;
+
+	DistributedTransactionId xminAllDistributedSnapshots;
+
+	DistributedTransactionId xmin;	/* XID < xmin are visible to me */
+	DistributedTransactionId xmax;	/* XID >= xmax are invisible to me */
+	int32		count;		/*  # of distributed xids in inProgressXidArray */
+	DistributedTransactionId  inProgressXidArray[1];
 } xl_xact_distributed_forget;
 
 /* ----------------
@@ -284,7 +292,7 @@ extern void UnregisterXactCallbackOnce(XactCallback callback, void *arg);
 extern void RegisterSubXactCallback(SubXactCallback callback, void *arg);
 extern void UnregisterSubXactCallback(SubXactCallback callback, void *arg);
 
-extern void RecordDistributedForgetCommitted(struct TMGXACT_LOG *gxact_log);
+extern void RecordDistributedForgetCommitted(TMGXACT_LOG *gxact_log);
 
 extern int	xactGetCommittedChildren(TransactionId **ptr);
 

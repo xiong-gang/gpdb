@@ -10,6 +10,7 @@
 #include "storage/lwlock.h"
 #include "lib/stringinfo.h"
 #include "access/xlogdefs.h"
+#include "access/xact.h"
 #include "cdb/cdbdistributedsnapshot.h"
 #include "cdb/cdblocaldistribxact.h"
 #include "cdb/cdbdtxcontextinfo.h"
@@ -347,8 +348,14 @@ extern void UtilityModeFindOrCreateDtmRedoFile(void);
 extern void UtilityModeCloseDtmRedoFile(void);
 
 extern bool doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType);
+extern void UpdateStandbyDistributedSnapshot(DistributedSnapshot *ds, DistributedTransactionId *inProgress);
+extern bool CreateDistributedSnapshot(DistributedSnapshot *ds, bool includeSelf);
+extern bool GetDistributedSnapshotForStandby(DistributedSnapshot *ds);
 
 extern void markCurrentGxactWriterGangLost(void);
 
 extern bool currentGxactWriterGangLost(void);
+extern Size StandbyDistributedSnapshotShmemSize(void);
+extern void StandbyDistributedSnapshotInit(void);
+extern uint32 *shmNextSnapshotId;
 #endif   /* CDBTM_H */

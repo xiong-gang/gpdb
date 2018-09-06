@@ -2195,6 +2195,11 @@ retry1:
 				Assert(am_mirror);
 				break;
 			}
+			if (EnableHotStandby)
+			{
+				Assert(GpIdentity.segindex == -1);
+				break;
+			}
 
 			recptr = last_xlog_replay_location();
 			ereport(FATAL,
