@@ -375,8 +375,6 @@ extern bool CheckPromoteSignal(bool do_unlink);
 extern void WakeupRecovery(void);
 extern void SetWalWriterSleeping(bool sleeping);
 
-extern void XLogRequestWalReceiverReply(void);
-
 /*
  * Starting/stopping a base backup
  */

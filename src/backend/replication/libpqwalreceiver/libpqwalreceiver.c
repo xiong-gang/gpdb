@@ -47,8 +47,8 @@ static char *recvBuf = NULL;
 
 /* Prototypes for interface functions */
 static bool libpqrcv_connect(char *conninfo, XLogRecPtr startpoint);
-static bool libpqrcv_receive(unsigned char *type,
-				 char **buffer, int *len, int *wait_fd);
+static bool libpqrcv_receive(int timeout, unsigned char *type,
+				 char **buffer, int *len);
 static void libpqrcv_send(const char *buffer, int nbytes);
 static void libpqrcv_disconnect(void);
 
@@ -322,7 +322,8 @@ libpqrcv_disconnect(void)
 }
 
 /*
- * Receive a message available from XLOG stream.
+ * Receive a message available from XLOG stream, blocking for
+ * maximum of 'timeout' ms.
  *
  * Returns:
  *
@@ -330,21 +331,16 @@ libpqrcv_disconnect(void)
  *	 the type of the received data, buffer holding it, and length,
  *	 respectively.
  *
-<<<<<<< HEAD
  *	 False if no data was available within timeout, or wait was interrupted
  *	 by signal.
-=======
- *	 If no data was available immediately, returns 0, and *wait_fd is set to a
- *	 file descriptor which can be waited on before trying again.
->>>>>>> 314cbfc5da... Add new replication mode synchronous_commit = 'remote_apply'.
  *
  * The buffer returned is only valid until the next call of this function or
  * libpq_connect/disconnect.
  *
  * ereports on error.
  */
-static bool 
-libpqrcv_receive(unsigned char *type, char **buffer, int *len, int *wait_fd)
+static bool
+libpqrcv_receive(int timeout, unsigned char *type, char **buffer, int *len)
 {
 	int			rawlen;
 
@@ -356,7 +352,16 @@ libpqrcv_receive(unsigned char *type, char **buffer, int *len, int *wait_fd)
 	rawlen = PQgetCopyData(streamConn, &recvBuf, 1);
 	if (rawlen == 0)
 	{
-		/* Try consuming some data. */
+		/*
+		 * No data available yet. If the caller requested to block, wait for
+		 * more data to arrive.
+		 */
+		if (timeout > 0)
+		{
+			if (!libpq_select(timeout))
+				return false;
+		}
+
 		if (PQconsumeInput(streamConn) == 0)
 			ereport(ERROR,
 					(errmsg("could not receive data from WAL stream: %s",
@@ -365,11 +370,7 @@ libpqrcv_receive(unsigned char *type, char **buffer, int *len, int *wait_fd)
 		/* Now that we've consumed some input, try again */
 		rawlen = PQgetCopyData(streamConn, &recvBuf, 1);
 		if (rawlen == 0)
-		{
-			/* Tell caller to try again when our socket is ready. */
-			*wait_fd = PQsocket(streamConn);
 			return false;
-		}
 	}
 	if (rawlen == -1)			/* end-of-streaming or error */
 	{
