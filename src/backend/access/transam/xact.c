@@ -1317,12 +1317,6 @@ RecordTransactionCommit(void)
 				xlrec.xinfo |= XACT_COMPLETION_UPDATE_RELCACHE_FILE;
 			if (forceSyncCommit)
 				xlrec.xinfo |= XACT_COMPLETION_FORCE_SYNC_COMMIT;
-			/*
-			 * Check if the caller would like to ask standbys for immediate feedback
-			 * once this commit is applied.
-			 */
-			if (synchronous_commit >= SYNCHRONOUS_COMMIT_REMOTE_APPLY)
-				xlrec.xinfo |= XACT_COMPLETION_APPLY_FEEDBACK;
 
 			xlrec.dbId = MyDatabaseId;
 			xlrec.tsId = MyDatabaseTableSpace;
@@ -1549,7 +1543,7 @@ RecordTransactionCommit(void)
 	if (markXidCommitted || isDtxPrepared)
 	{
 		Assert(recptr.xrecoff != 0);
-		SyncRepWaitForLSN(recptr, true);
+		SyncRepWaitForLSN(recptr);
 	}
 
 	/* Compute latestXid while we have the child XIDs handy */
@@ -5881,13 +5875,6 @@ xact_redo_commit_internal(TransactionId xid, XLogRecPtr lsn,
 	if (XactCompletionForceSyncCommit(xinfo))
 		XLogFlush(lsn);
 
-	/*
-	 * If asked by the primary (because someone is waiting for a synchronous
-	 * commit = remote_apply), we will need to ask walreceiver to send a
-	 * reply immediately.
-	 */
-	if (XactCompletionApplyFeedback(parsed->xinfo))
-		XLogRequestWalReceiverReply();
 }
 
 /*

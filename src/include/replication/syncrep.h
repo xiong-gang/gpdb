@@ -23,9 +23,8 @@
 #define SYNC_REP_NO_WAIT		-1
 #define SYNC_REP_WAIT_WRITE		0
 #define SYNC_REP_WAIT_FLUSH		1
-#define SYNC_REP_WAIT_APPLY		2
 
-#define NUM_SYNC_REP_WAIT_MODE	3
+#define NUM_SYNC_REP_WAIT_MODE	2
 
 /* syncRepState */
 #define SYNC_REP_NOT_WAITING		0
@@ -36,7 +35,7 @@
 extern char *SyncRepStandbyNames;
 
 /* called by user backend */
-extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);
+extern void SyncRepWaitForLSN(XLogRecPtr XactCommitLSN);
 
 /* called at backend exit */
 extern void SyncRepCleanupAtProcExit(void);
