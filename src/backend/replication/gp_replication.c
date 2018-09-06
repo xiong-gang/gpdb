@@ -63,7 +63,7 @@ GetMirrorStatus(FtsResponse *response)
 		}
 		if (!response->IsMirrorUp)
 		{
-			Assert(walsnd->replica_disconnected_at);
+			//Assert(walsnd->replica_disconnected_at);
 			/*
 			 * PMAcceptingConnectionStartTime is process-local variable, set in
 			 * postmaster process and inherited by the FTS handler child

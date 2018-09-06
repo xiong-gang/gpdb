@@ -23,8 +23,9 @@
 #define SYNC_REP_NO_WAIT		-1
 #define SYNC_REP_WAIT_WRITE		0
 #define SYNC_REP_WAIT_FLUSH		1
+#define SYNC_REP_WAIT_APPLY		2
 
-#define NUM_SYNC_REP_WAIT_MODE	2
+#define NUM_SYNC_REP_WAIT_MODE	3
 
 /* syncRepState */
 #define SYNC_REP_NOT_WAITING		0
