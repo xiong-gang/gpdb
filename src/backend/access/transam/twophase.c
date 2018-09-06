@@ -1248,6 +1248,7 @@ StandbyTransactionIdIsPrepared(TransactionId xid)
 	 * files, so we cannot use ReadTwoPhaseFile() here. Fortunately, this
 	 * isn't needed until we try to use Hot Standby.
 	 */
+	return false;
 	elog(ERROR, "Hot Standby not supported");
 #if 0
 	char	   *buf;
@@ -1714,7 +1715,7 @@ PrescanPreparedTransactions(TransactionId **xids_p, int *nxids_p)
 void
 StandbyRecoverPreparedTransactions(bool overwriteOK)
 {
-	elog(ERROR, "Hot Standby not supported");
+	//elog(ERROR, "Hot Standby not supported");
 }
 
 /*

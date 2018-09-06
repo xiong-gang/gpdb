@@ -2197,12 +2197,14 @@ retry1:
 			}
 
 			recptr = last_xlog_replay_location();
+#if 0
 			ereport(FATAL,
 					(errcode(ERRCODE_MIRROR_READY),
 					 errSendAlert(true),
 					 errmsg(POSTMASTER_IN_RECOVERY_MSG),
 					 errdetail(POSTMASTER_IN_RECOVERY_DETAIL_MSG " %s",
 						   XLogLocationToString(&recptr))));
+#endif
 			break;
 		case CAC_OK:
 			break;

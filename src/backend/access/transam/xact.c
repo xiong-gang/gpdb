@@ -2185,6 +2185,7 @@ StartTransaction(void)
 	AtStart_Memory();
 	AtStart_ResourceOwner();
 
+#if 0
 	/*
 	 * Transactions may be started while recovery is in progress, if
 	 * hot standby is enabled.  This mode is not supported in
@@ -2192,6 +2193,7 @@ StartTransaction(void)
 	 */
 	AssertImply(DistributedTransactionContext != DTX_CONTEXT_LOCAL_ONLY,
 				!s->startedInRecovery);
+#endif
 	/*
 	 * MPP Modification
 	 *
@@ -5930,7 +5932,7 @@ xact_redo_commit_compact(xl_xact_commit_compact *xlrec,
  * because subtransaction commit is never WAL logged.
  */
 static void
-xact_redo_distributed_commit(xl_xact_commit *xlrec, TransactionId xid)
+xact_redo_distributed_commit(xl_xact_commit *xlrec, TransactionId xid, XLogRecPtr lsn)
 {
 	TMGXACT_LOG *gxact_log;
 	
@@ -5961,6 +5963,8 @@ xact_redo_distributed_commit(xl_xact_commit *xlrec, TransactionId xid)
 
 	if (TransactionIdIsValid(xid))
 	{
+		xact_redo_commit(xlrec, xid, lsn, distribXid, distribTimeStamp);
+#if 0 
 		/*
 		 * Mark the distributed transaction committed before we
 		 * update the CLOG in xact_redo_commit.
@@ -6018,6 +6022,7 @@ xact_redo_distributed_commit(xl_xact_commit *xlrec, TransactionId xid)
 			smgrdounlink(srel, true, xlrec->xnodes[i].relstorage);
 			smgrclose(srel);
 		}
+#endif
 	}
 
 	/*
@@ -6159,7 +6164,7 @@ xact_redo(XLogRecPtr beginLoc __attribute__((unused)), XLogRecPtr lsn __attribut
 	{
 		xl_xact_commit *xlrec = (xl_xact_commit *) XLogRecGetData(record);
 
-		xact_redo_distributed_commit(xlrec, record->xl_xid);
+		xact_redo_distributed_commit(xlrec, record->xl_xid, lsn);
 	}
 	else if (info == XLOG_XACT_DISTRIBUTED_FORGET)
 	{

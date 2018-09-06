@@ -1763,7 +1763,7 @@ CreateDistributedSnapshot(DistributedSnapshot *ds)
 	ProcArrayStruct *arrayP = procArray;
 
 	Assert(LWLockHeldByMe(ProcArrayLock));
-	if (*shmNumCommittedGxacts != 0)
+	if (*shmNumCommittedGxacts != 0 && !EnableHotStandby)
 		elog(ERROR, "Create distributed snapshot before DTM recovery finish");
 
 	xmin = LastDistributedTransactionId;

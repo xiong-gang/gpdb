@@ -2303,7 +2303,8 @@ recoverTM(void)
 	 * and then resolve any remaining in-doubt transactions that the RMs
 	 * have.
 	 */
-	recoverInDoubtTransactions();
+	if (!EnableHotStandby)
+		recoverInDoubtTransactions();
 
 	/* finished recovery successfully. */
 

@@ -6662,9 +6662,14 @@ CheckRequiredParameterValues(void)
 	if (InArchiveRecovery && EnableHotStandby)
 	{
 		if (ControlFile->wal_level < WAL_LEVEL_HOT_STANDBY)
+		{
+			ControlFile->wal_level = WAL_LEVEL_HOT_STANDBY;
+			/*
 			ereport(ERROR,
 					(errmsg("hot standby is not possible because wal_level was not set to \"hot_standby\" on the master server"),
 					 errhint("Either set wal_level to \"hot_standby\" on the master, or turn off hot_standby here.")));
+					 */
+		}
 
 		/* We ignore autovacuum_max_workers when we make this test. */
 		RecoveryRequiresIntParameter("max_connections",
@@ -6914,6 +6919,7 @@ StartupXLOG(void)
 		if (StandbyModeRequested)
 		{
 			/* Activate recovery in standby mode */
+			InArchiveRecovery = true;
 			StandbyMode = true;
 		}
 
