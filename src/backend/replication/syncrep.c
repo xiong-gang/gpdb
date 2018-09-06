@@ -460,6 +460,7 @@ SyncRepReleaseWaiters(void)
 	volatile WalSnd *syncWalSnd = NULL;
 	int			numwrite = 0;
 	int			numflush = 0;
+	int			numapply = 0;
 	int			priority = 0;
 	int			i;
 
@@ -527,6 +528,11 @@ SyncRepReleaseWaiters(void)
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = MyWalSnd->flush;
 		numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH);
+	}
+	if (XLByteLT(walsndctl->lsn[SYNC_REP_WAIT_APPLY], MyWalSnd->apply))
+	{
+		walsndctl->lsn[SYNC_REP_WAIT_APPLY] = MyWalSnd->apply;
+		numapply = SyncRepWakeQueue(false, SYNC_REP_WAIT_APPLY);
 	}
 
 	LWLockRelease(SyncRepLock);
@@ -775,6 +781,9 @@ assign_synchronous_commit(int newval, void *extra)
 			break;
 		case SYNCHRONOUS_COMMIT_REMOTE_FLUSH:
 			SyncRepWaitMode = SYNC_REP_WAIT_FLUSH;
+			break;
+		case SYNCHRONOUS_COMMIT_REMOTE_APPLY:
+			SyncRepWaitMode = SYNC_REP_WAIT_APPLY;
 			break;
 		default:
 			SyncRepWaitMode = SYNC_REP_NO_WAIT;
