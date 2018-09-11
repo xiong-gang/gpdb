@@ -758,6 +758,11 @@ standby_redo(XLogRecPtr beginLoc, XLogRecPtr lsn, XLogRecord *record)
 		running.oldestRunningXid = xlrec->oldestRunningXid;
 		running.xids = xlrec->xids;
 
+		running.dxcnt = xlrec->dxcnt;
+		running.oldestRunningDxid = xlrec->oldestRunningDxid;
+		running.distTimestamp = xlrec->distTimestamp;
+		running.dxids = (DistributedTransactionId *) &(xlrec->xids[xlrec->xcnt]);
+
 		ProcArrayApplyRecoveryInfo(&running);
 	}
 	else
@@ -915,7 +920,7 @@ static void
 LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 {
 	xl_running_xacts xlrec;
-	XLogRecData rdata[2];
+	XLogRecData rdata[3];
 	int			lastrdata = 0;
 	XLogRecPtr	recptr;
 
@@ -924,6 +929,9 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 	xlrec.nextXid = CurrRunningXacts->nextXid;
 	xlrec.oldestRunningXid = CurrRunningXacts->oldestRunningXid;
 	xlrec.latestCompletedXid = CurrRunningXacts->latestCompletedXid;
+	xlrec.dxcnt = CurrRunningXacts->dxcnt;
+	xlrec.oldestRunningDxid = CurrRunningXacts->oldestRunningDxid;
+	xlrec.distTimestamp = CurrRunningXacts->distTimestamp;
 
 	/* Header */
 	rdata[0].data = (char *) (&xlrec);
@@ -938,6 +946,15 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 		rdata[1].len = xlrec.xcnt * sizeof(TransactionId);
 		rdata[1].buffer = InvalidBuffer;
 		lastrdata = 1;
+	}
+
+	if (xlrec.dxcnt > 0)
+	{
+		rdata[lastrdata].next = &(rdata[2]);
+		rdata[2].data = (char *) CurrRunningXacts->dxids;
+		rdata[2].len = xlrec.dxcnt * sizeof(DistributedTransactionId);
+		rdata[2].buffer = InvalidBuffer;
+		lastrdata = 2;
 	}
 
 	rdata[lastrdata].next = NULL;

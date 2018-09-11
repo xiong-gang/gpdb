@@ -1248,8 +1248,10 @@ StandbyTransactionIdIsPrepared(TransactionId xid)
 	 * files, so we cannot use ReadTwoPhaseFile() here. Fortunately, this
 	 * isn't needed until we try to use Hot Standby.
 	 */
-	return false;
-	elog(ERROR, "Hot Standby not supported");
+	if (Gp_role == GP_ROLE_DISPATCH)
+		return false;
+	else
+		elog(ERROR, "Hot Standby not supported");
 #if 0
 	char	   *buf;
 	TwoPhaseFileHeader *hdr;

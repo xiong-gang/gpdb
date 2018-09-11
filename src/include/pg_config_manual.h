@@ -207,7 +207,6 @@
  */
 #ifdef USE_ASSERT_CHECKING
 #define CLOBBER_FREED_MEMORY
-#define RELCACHE_FORCE_RELEASE
 #endif
 
 /*

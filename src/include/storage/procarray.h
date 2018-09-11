@@ -42,6 +42,10 @@ extern void ExpireTreeKnownAssignedTransactionIds(TransactionId xid,
 extern void ExpireAllKnownAssignedTransactionIds(void);
 extern void ExpireOldKnownAssignedTransactionIds(TransactionId xid);
 
+extern void RecordKnownAssignedDistributedTransactionIds(DistributedTransactionId xid);
+extern void ExpireTreeKnownAssignedDistributedTransactionIds(DistributedTransactionId xid);
+extern void ExpireOldKnownAssignedDistributedTransactionIds(DistributedTransactionId xid);
+
 extern int	GetMaxSnapshotXidCount(void);
 extern int	GetMaxSnapshotSubxidCount(void);
 

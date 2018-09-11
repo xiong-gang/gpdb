@@ -5815,6 +5815,7 @@ xact_redo_commit_internal(TransactionId xid, XLogRecPtr lsn,
 		 * already. Leave it in.
 		 */
 		RecordKnownAssignedTransactionIds(max_xid);
+		RecordKnownAssignedDistributedTransactionIds(distribXid);
 
 		/*
 		 * Mark the transaction committed in pg_clog. We use async commit
@@ -5831,6 +5832,7 @@ xact_redo_commit_internal(TransactionId xid, XLogRecPtr lsn,
 		 * We must mark clog before we update the ProcArray.
 		 */
 		ExpireTreeKnownAssignedTransactionIds(xid, nsubxacts, sub_xids, max_xid);
+		ExpireTreeKnownAssignedDistributedTransactionIds(distribXid);
 
 		/*
 		 * Send any cache invalidations attached to the commit. We must

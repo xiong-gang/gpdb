@@ -82,6 +82,13 @@ typedef struct ProcArrayStruct
 	int			numKnownAssignedXids;	/* currrent # of valid entries */
 	int			tailKnownAssignedXids;	/* index of oldest valid element */
 	int			headKnownAssignedXids;	/* index of newest element, + 1 */
+
+	int			maxKnownAssignedDxids;	/* allocated size of array */
+	int			numKnownAssignedDxids;	/* currrent # of valid entries */
+	int			tailKnownAssignedDxids;	/* index of oldest valid element */
+	int			headKnownAssignedDxids;	/* index of newest element, + 1 */
+
+
 	slock_t		known_assigned_xids_lck;		/* protects head/tail pointers */
 
 	/*
@@ -112,6 +119,10 @@ static TMGXACT *allTmGxact;
 static TransactionId *KnownAssignedXids;
 static bool *KnownAssignedXidsValid;
 static TransactionId latestObservedXid = InvalidTransactionId;
+
+static DistributedTransactionId *KnownAssignedDxids;
+static bool *KnownAssignedDxidsValid;
+static DistributedTransactionId latestObservedDxid = InvalidDistributedTransactionId;
 
 /*
  * If we're in STANDBY_SNAPSHOT_PENDING state, standbySnapshotPendingXmin is
@@ -167,6 +178,7 @@ static void KnownAssignedXidsRemove(TransactionId xid);
 static void KnownAssignedXidsRemoveTree(TransactionId xid, int nsubxids,
 							TransactionId *subxids);
 static void KnownAssignedXidsRemovePreceding(TransactionId xid);
+
 static int	KnownAssignedXidsGet(TransactionId *xarray, TransactionId xmax);
 static int KnownAssignedXidsGetAndSetXmin(TransactionId *xarray,
 							   TransactionId *xmin,
@@ -175,6 +187,11 @@ static TransactionId KnownAssignedXidsGetOldestXmin(void);
 static void KnownAssignedXidsDisplay(int trace_level);
 static void KnownAssignedXidsReset(void);
 
+static void KnownAssignedDxidsCompress(bool force);
+static void KnownAssignedDxidsAdd(DistributedTransactionId from_xid, DistributedTransactionId to_xid);
+static bool KnownAssignedDxidsSearch(DistributedTransactionId xid, bool remove);
+static void KnownAssignedDxidsRemove(TransactionId xid);
+static void KnownAssignedDxidsRemovePreceding(DistributedTransactionId dxid);
 /*
  * Report shared-memory space needed by CreateSharedProcArray.
  */
@@ -212,6 +229,12 @@ ProcArrayShmemSize(void)
 								 TOTAL_MAX_CACHED_SUBXIDS));
 		size = add_size(size,
 						mul_size(sizeof(bool), TOTAL_MAX_CACHED_SUBXIDS));
+
+		size = add_size(size,
+						mul_size(sizeof(DistributedTransactionId),
+								 TOTAL_MAX_CACHED_SUBXIDS));
+		size = add_size(size,
+						mul_size(sizeof(bool), TOTAL_MAX_CACHED_SUBXIDS));
 	}
 
 	return size;
@@ -244,6 +267,12 @@ CreateSharedProcArray(void)
 		procArray->numKnownAssignedXids = 0;
 		procArray->tailKnownAssignedXids = 0;
 		procArray->headKnownAssignedXids = 0;
+
+		procArray->maxKnownAssignedDxids = TOTAL_MAX_CACHED_SUBXIDS;
+		procArray->numKnownAssignedDxids = 0;
+		procArray->tailKnownAssignedDxids = 0;
+		procArray->headKnownAssignedDxids = 0;
+
 		SpinLockInit(&procArray->known_assigned_xids_lck);
 		procArray->lastOverflowedXid = InvalidTransactionId;
 	}
@@ -262,6 +291,16 @@ CreateSharedProcArray(void)
 							&found);
 		KnownAssignedXidsValid = (bool *)
 			ShmemInitStruct("KnownAssignedXidsValid",
+							mul_size(sizeof(bool), TOTAL_MAX_CACHED_SUBXIDS),
+							&found);
+
+		KnownAssignedDxids = (TransactionId *)
+			ShmemInitStruct("KnownAssignedDxids",
+							mul_size(sizeof(DistributedTransactionId),
+									 TOTAL_MAX_CACHED_SUBXIDS),
+							&found);
+		KnownAssignedDxidsValid = (bool *)
+			ShmemInitStruct("KnownAssignedDxidsValid",
 							mul_size(sizeof(bool), TOTAL_MAX_CACHED_SUBXIDS),
 							&found);
 	}
@@ -615,7 +654,9 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	/*
 	 * Remove stale transactions, if any.
 	 */
+	*shmDistribTimeStamp = running->distTimestamp;
 	ExpireOldKnownAssignedTransactionIds(running->oldestRunningXid);
+	ExpireOldKnownAssignedDistributedTransactionIds(running->oldestRunningDxid);
 	StandbyReleaseOldLocks(running->xcnt, running->xids);
 
 	/*
@@ -1883,6 +1924,82 @@ CreateDistributedSnapshot(DistributedSnapshot *ds)
 	return true;
 }
 
+
+static bool
+CreateDistributedSnapshotForStandby(DistributedSnapshot *ds)
+{
+	/* use volatile pointer to prevent code rearrangement */
+	volatile ProcArrayStruct *pArray = procArray;
+	int			count = 0;
+	int			head,
+				tail;
+	int			i;
+	DistributedTransactionId xmin;
+	DistributedTransactionId xmax;
+	DistributedSnapshotId distribSnapshotId;
+
+	Assert(LWLockHeldByMe(ProcArrayLock));
+	Assert(ds->inProgressXidArray != NULL);
+
+	xmin = LastDistributedTransactionId;
+	xmax = latestObservedDxid;
+	distribSnapshotId = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)shmNextSnapshotId, 1);
+
+	/*
+	 * Fetch head just once, since it may change while we loop. We can stop
+	 * once we reach the initially seen head, since we are certain that an xid
+	 * cannot enter and then leave the array while we hold ProcArrayLock.  We
+	 * might miss newly-added xids, but they should be >= xmax so irrelevant
+	 * anyway.
+	 *
+	 * Must take spinlock to ensure we see up-to-date array contents.
+	 */
+	SpinLockAcquire(&pArray->known_assigned_xids_lck);
+	tail = pArray->tailKnownAssignedDxids;
+	head = pArray->headKnownAssignedDxids;
+	SpinLockRelease(&pArray->known_assigned_xids_lck);
+
+	for (i = tail; i < head; i++)
+	{
+		/* Skip any gaps in the array */
+		if (KnownAssignedDxidsValid[i])
+		{
+			DistributedTransactionId knownXid = KnownAssignedDxids[i];
+
+			/*
+			 * Update xmin if required.  Only the first XID need be checked,
+			 * since the array is sorted.
+			 */
+			if (count == 0 &&
+				TransactionIdPrecedes(knownXid, xmin))
+				xmin = knownXid;
+
+			/*
+			 * Filter out anything >= xmax, again relying on sorted property
+			 * of array.
+			 */
+			if (TransactionIdIsValid(xmax) &&
+				TransactionIdFollowsOrEquals(knownXid, xmax))
+				break;
+
+			/* Add knownXid into output array */
+			ds->inProgressXidArray[count++] = knownXid;
+		}
+	}
+
+	/*
+	 * Copy the information we just captured under lock and then sorted into
+	 * the distributed snapshot.
+	 */
+	ds->distribTransactionTimeStamp = *shmDistribTimeStamp;
+	ds->xminAllDistributedSnapshots = xmin;
+	ds->distribSnapshotId = distribSnapshotId;
+	ds->xmin = xmin;
+	ds->xmax = xmax;
+	ds->count = count;
+
+	return true;
+}
 /*----------
  * GetMaxSnapshotXidCount -- get max size for snapshot XID array
  *
@@ -2006,6 +2123,8 @@ GetSnapshotData(Snapshot snapshot)
 	if (snapshot->distribSnapshotWithLocalMapping.ds.inProgressXidArray == NULL)
 	{
 		int maxCount = GetDistributedSnapshotMaxCount();
+		if (EnableHotStandby)
+			maxCount = max_prepared_xacts;
 		if (maxCount > 0)
 		{
 			snapshot->distribSnapshotWithLocalMapping.ds.inProgressXidArray =
@@ -2261,54 +2380,6 @@ GetSnapshotData(Snapshot snapshot)
 			(errmsg("GetSnapshotData setting globalxmin and xmin to %u",
 					xmin)));
 
-	/*
-	 * Get the distributed snapshot if needed and copy it into the field 
-	 * called distribSnapshotWithLocalMapping in the snapshot structure.
-	 *
-	 * For a distributed transaction:
-	 *   => The corrresponding distributed snapshot is made up of distributed
-	 *      xids from the DTM that are considered in-progress will be kept in
-	 *      the snapshot structure separately from any local in-progress xact.
-	 *
-	 *      The MVCC function XidInSnapshot is used to evaluate whether
-	 *      a tuple is visible through a snapshot. Only committed xids are
-	 *      given to XidInSnapshot for evaluation. XidInSnapshot will first
-	 *      determine if the committed tuple is for a distributed transaction.  
-	 *      If the xact is distributed it will be evaluated only against the
-	 *      distributed snapshot and not the local snapshot.
-	 *
-	 *      Otherwise, when the committed transaction being evaluated is local,
-	 *      then it will be evaluated only against the local portion of the
-	 *      snapshot.
-	 *
-	 * For a local transaction:
-	 *   => Only the local portion of the snapshot: xmin, xmax, xcnt,
-	 *      in-progress (xip), etc, will be filled in.
-	 *
-	 *      Note that in-progress distributed transactions that have reached
-	 *      this database instance and are active will be represented in the
-	 *      local in-progress (xip) array with the distributed transaction's
-	 *      local xid.
-	 *
-	 * In summary: This 2 snapshot scheme (optional distributed, required local)
-	 * handles late arriving distributed transactions properly since that work
-	 * is only evaluated against the distributed snapshot. And, the scheme
-	 * handles local transaction work seeing distributed work properly by
-	 * including distributed transactions in the local snapshot via their
-	 * local xids.
-	 */
-	if (DistributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE)
-	{
-		snapshot->haveDistribSnapshot = CreateDistributedSnapshot(&snapshot->distribSnapshotWithLocalMapping.ds);
-
-		ereport((Debug_print_full_dtm ? LOG : DEBUG5),
-				(errmsg("Got distributed snapshot from DistributedSnapshotWithLocalXids_Create = %s",
-						(snapshot->haveDistribSnapshot ? "true" : "false"))));
-
-		/* Nice that we may have collected it, but turn it off... */
-		if (Debug_disable_distributed_snapshot)
-			snapshot->haveDistribSnapshot = false;
-	}
 
 	/*
 	 * If we're in recovery then snapshot data comes from a different place,
@@ -2324,6 +2395,55 @@ GetSnapshotData(Snapshot snapshot)
 	{
 		int		   *pgprocnos = arrayP->pgprocnos;
 		int			numProcs;
+
+		/*
+		 * Get the distributed snapshot if needed and copy it into the field
+		 * called distribSnapshotWithLocalMapping in the snapshot structure.
+		 *
+		 * For a distributed transaction:
+		 *   => The corrresponding distributed snapshot is made up of distributed
+		 *      xids from the DTM that are considered in-progress will be kept in
+		 *      the snapshot structure separately from any local in-progress xact.
+		 *
+		 *      The MVCC function XidInSnapshot is used to evaluate whether
+		 *      a tuple is visible through a snapshot. Only committed xids are
+		 *      given to XidInSnapshot for evaluation. XidInSnapshot will first
+		 *      determine if the committed tuple is for a distributed transaction.
+		 *      If the xact is distributed it will be evaluated only against the
+		 *      distributed snapshot and not the local snapshot.
+		 *
+		 *      Otherwise, when the committed transaction being evaluated is local,
+		 *      then it will be evaluated only against the local portion of the
+		 *      snapshot.
+		 *
+		 * For a local transaction:
+		 *   => Only the local portion of the snapshot: xmin, xmax, xcnt,
+		 *      in-progress (xip), etc, will be filled in.
+		 *
+		 *      Note that in-progress distributed transactions that have reached
+		 *      this database instance and are active will be represented in the
+		 *      local in-progress (xip) array with the distributed transaction's
+		 *      local xid.
+		 *
+		 * In summary: This 2 snapshot scheme (optional distributed, required local)
+		 * handles late arriving distributed transactions properly since that work
+		 * is only evaluated against the distributed snapshot. And, the scheme
+		 * handles local transaction work seeing distributed work properly by
+		 * including distributed transactions in the local snapshot via their
+		 * local xids.
+		 */
+		if (DistributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE)
+		{
+			snapshot->haveDistribSnapshot = CreateDistributedSnapshot(&snapshot->distribSnapshotWithLocalMapping.ds);
+
+			ereport((Debug_print_full_dtm ? LOG : DEBUG5),
+					(errmsg("Got distributed snapshot from DistributedSnapshotWithLocalXids_Create = %s",
+							(snapshot->haveDistribSnapshot ? "true" : "false"))));
+
+			/* Nice that we may have collected it, but turn it off... */
+			if (Debug_disable_distributed_snapshot)
+				snapshot->haveDistribSnapshot = false;
+		}
 
 		/*
 		 * Spin over procArray checking xid, xmin, and subxids.  The goal is
@@ -2412,6 +2532,8 @@ GetSnapshotData(Snapshot snapshot)
 	}
 	else
 	{
+		snapshot->haveDistribSnapshot =
+				CreateDistributedSnapshotForStandby(&snapshot->distribSnapshotWithLocalMapping.ds);
 		/*
 		 * We're in hot standby, so get XIDs from KnownAssignedXids.
 		 *
@@ -2647,9 +2769,12 @@ GetRunningTransactionData(void)
 	RunningTransactions CurrentRunningXacts = &CurrentRunningXactsData;
 	TransactionId latestCompletedXid;
 	TransactionId oldestRunningXid;
+	TransactionId oldestRunningDxid;
 	TransactionId *xids;
+	DistributedTransactionId *dxids;
 	int			index;
 	int			count;
+	int			dxCount;
 	int			subcount;
 	bool		suboverflowed;
 
@@ -2677,7 +2802,22 @@ GetRunningTransactionData(void)
 					 errmsg("out of memory")));
 	}
 
+	if (CurrentRunningXacts->dxids == NULL)
+	{
+		/*
+		 * First call
+		 */
+		CurrentRunningXacts->dxids = (DistributedTransactionId *)
+			malloc(TOTAL_MAX_CACHED_SUBXIDS * sizeof(DistributedTransactionId));
+		if (CurrentRunningXacts->dxids == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+	}
+
+
 	xids = CurrentRunningXacts->xids;
+	dxids = CurrentRunningXacts->dxids;
 
 	count = subcount = 0;
 	suboverflowed = false;
@@ -2703,6 +2843,19 @@ GetRunningTransactionData(void)
 		volatile PGXACT *pgxact = &allPgXact[pgprocno];
 		TransactionId xid;
 		int			nxids;
+
+		volatile TMGXACT	*gxact_candidate = &allTmGxact[pgprocno];
+		DistributedTransactionId gxid;
+
+		/* just fetch once */
+		gxid = gxact_candidate->gxid;
+		if (gxid != InvalidDistributedTransactionId)
+		{
+			dxids[dxCount++] = gxid;
+			if (TransactionIdPrecedes(gxid, oldestRunningDxid))
+				oldestRunningDxid = gxid;
+		}
+
 
 		/* Fetch xid just once - see GetNewTransactionId */
 		xid = pgxact->xid;
@@ -2747,6 +2900,10 @@ GetRunningTransactionData(void)
 	CurrentRunningXacts->nextXid = ShmemVariableCache->nextXid;
 	CurrentRunningXacts->oldestRunningXid = oldestRunningXid;
 	CurrentRunningXacts->latestCompletedXid = latestCompletedXid;
+
+	CurrentRunningXacts->dxcnt = dxCount;
+	CurrentRunningXacts->oldestRunningDxid = oldestRunningDxid;
+	CurrentRunningXacts->distTimestamp = *shmDistribTimeStamp;;
 
 	/* We don't release XidGenLock here, the caller is responsible for that */
 	LWLockRelease(ProcArrayLock);
@@ -3857,6 +4014,51 @@ RecordKnownAssignedTransactionIds(TransactionId xid)
 	}
 }
 
+void
+RecordKnownAssignedDistributedTransactionIds(DistributedTransactionId xid)
+{
+	Assert(standbyState >= STANDBY_INITIALIZED);
+	Assert(TransactionIdIsValid(xid));
+
+	elog(trace_recovery(DEBUG4), "record known xact %u", xid);
+
+	/*
+	 * If the KnownAssignedXids machinery isn't up yet, do nothing.
+	 */
+	if (standbyState <= STANDBY_INITIALIZED)
+		return;
+
+	/*
+	 * When a newly observed xid arrives, it is frequently the case that it is
+	 * *not* the next xid in sequence. When this occurs, we must treat the
+	 * intervening xids as running also.
+	 */
+	if (TransactionIdFollows(xid, latestObservedDxid))
+	{
+		DistributedTransactionId next_expected_xid;
+
+		/*
+		 * Add the new xids onto the KnownAssignedXids array.
+		 */
+		next_expected_xid = latestObservedDxid;
+		TransactionIdAdvance(next_expected_xid);
+		KnownAssignedDxidsAdd(next_expected_xid, xid);
+
+		/*
+		 * Now we can advance latestObservedXid
+		 */
+		latestObservedDxid = xid;
+
+#if 0
+		/* ShmemVariableCache->nextXid must be beyond any observed xid */
+		next_expected_xid = latestObservedXid;
+		TransactionIdAdvance(next_expected_xid);
+		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+		ShmemVariableCache->nextXid = next_expected_xid;
+		LWLockRelease(XidGenLock);
+#endif
+	}
+}
 /*
  * ExpireTreeKnownAssignedTransactionIds
  *		Remove the given XIDs from KnownAssignedXids.
@@ -3880,6 +4082,28 @@ ExpireTreeKnownAssignedTransactionIds(TransactionId xid, int nsubxids,
 	if (TransactionIdPrecedes(ShmemVariableCache->latestCompletedXid,
 							  max_xid))
 		ShmemVariableCache->latestCompletedXid = max_xid;
+
+	LWLockRelease(ProcArrayLock);
+}
+
+void
+ExpireTreeKnownAssignedDistributedTransactionIds(DistributedTransactionId xid)
+{
+	Assert(standbyState >= STANDBY_INITIALIZED);
+
+	/*
+	 * Uses same locking as transaction commit
+	 */
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+
+	KnownAssignedDxidsRemove(xid);
+
+#if 0
+	/* As in ProcArrayEndTransaction, advance latestCompletedXid */
+	if (TransactionIdPrecedes(ShmemVariableCache->latestCompletedXid,
+							  max_xid))
+		ShmemVariableCache->latestCompletedXid = max_xid;
+#endif
 
 	LWLockRelease(ProcArrayLock);
 }
@@ -3908,6 +4132,13 @@ ExpireOldKnownAssignedTransactionIds(TransactionId xid)
 	LWLockRelease(ProcArrayLock);
 }
 
+void
+ExpireOldKnownAssignedDistributedTransactionIds(DistributedTransactionId dxid)
+{
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	KnownAssignedDxidsRemovePreceding(dxid);
+	LWLockRelease(ProcArrayLock);
+}
 
 /*
  * Private module functions to manipulate KnownAssignedXids
@@ -4055,6 +4286,58 @@ KnownAssignedXidsCompress(bool force)
 	pArray->headKnownAssignedXids = compress_index;
 }
 
+static void
+KnownAssignedDxidsCompress(bool force)
+{
+	/* use volatile pointer to prevent code rearrangement */
+	volatile ProcArrayStruct *pArray = procArray;
+	int			head,
+				tail;
+	int			compress_index;
+	int			i;
+
+	/* no spinlock required since we hold ProcArrayLock exclusively */
+	head = pArray->headKnownAssignedDxids;
+	tail = pArray->tailKnownAssignedDxids;
+
+	if (!force)
+	{
+		/*
+		 * If we can choose how much to compress, use a heuristic to avoid
+		 * compressing too often or not often enough.
+		 *
+		 * Heuristic is if we have a large enough current spread and less than
+		 * 50% of the elements are currently in use, then compress. This
+		 * should ensure we compress fairly infrequently. We could compress
+		 * less often though the virtual array would spread out more and
+		 * snapshots would become more expensive.
+		 */
+		int			nelements = head - tail;
+
+		if (nelements < 4 * PROCARRAY_MAXPROCS ||
+			nelements < 2 * pArray->numKnownAssignedDxids)
+			return;
+	}
+
+	/*
+	 * We compress the array by reading the valid values from tail to head,
+	 * re-aligning data to 0th element.
+	 */
+	compress_index = 0;
+	for (i = tail; i < head; i++)
+	{
+		if (KnownAssignedDxidsValid[i])
+		{
+			KnownAssignedDxids[compress_index] = KnownAssignedDxids[i];
+			KnownAssignedDxidsValid[compress_index] = true;
+			compress_index++;
+		}
+	}
+
+	pArray->tailKnownAssignedDxids = 0;
+	pArray->headKnownAssignedDxids = compress_index;
+}
+
 /*
  * Add xids into KnownAssignedXids at the head of the array.
  *
@@ -4176,6 +4459,103 @@ KnownAssignedXidsAdd(TransactionId from_xid, TransactionId to_xid,
 	}
 }
 
+static void
+KnownAssignedDxidsAdd(DistributedTransactionId from_xid, DistributedTransactionId to_xid)
+{
+	/* use volatile pointer to prevent code rearrangement */
+	volatile ProcArrayStruct *pArray = procArray;
+	TransactionId next_xid;
+	int			head,
+				tail;
+	int			nxids;
+	int			i;
+
+	Assert(TransactionIdPrecedesOrEquals(from_xid, to_xid));
+
+	/*
+	 * Calculate how many array slots we'll need.  Normally this is cheap; in
+	 * the unusual case where the XIDs cross the wrap point, we do it the hard
+	 * way.
+	 */
+	if (to_xid >= from_xid)
+		nxids = to_xid - from_xid + 1;
+	else
+	{
+		nxids = 1;
+		next_xid = from_xid;
+		while (TransactionIdPrecedes(next_xid, to_xid))
+		{
+			nxids++;
+			TransactionIdAdvance(next_xid);
+		}
+	}
+
+	/*
+	 * Since only the startup process modifies the head/tail pointers, we
+	 * don't need a lock to read them here.
+	 */
+	head = pArray->headKnownAssignedDxids;
+	tail = pArray->tailKnownAssignedDxids;
+
+	Assert(head >= 0 && head <= pArray->maxKnownAssignedDxids);
+	Assert(tail >= 0 && tail < pArray->maxKnownAssignedDxids);
+
+	/*
+	 * Verify that insertions occur in TransactionId sequence.	Note that even
+	 * if the last existing element is marked invalid, it must still have a
+	 * correctly sequenced XID value.
+	 */
+	if (head > tail &&
+		TransactionIdFollowsOrEquals(KnownAssignedDxids[head - 1], from_xid))
+	{
+		//KnownAssignedXidsDisplay(LOG);
+		elog(ERROR, "out-of-order XID insertion in KnownAssignedXids");
+	}
+
+	/*
+	 * If our xids won't fit in the remaining space, compress out free space
+	 */
+	if (head + nxids > pArray->maxKnownAssignedDxids)
+	{
+		KnownAssignedDxidsCompress(true);
+
+		head = pArray->headKnownAssignedDxids;
+		/* note: we no longer care about the tail pointer */
+
+		/*
+		 * If it still won't fit then we're out of memory
+		 */
+		if (head + nxids > pArray->maxKnownAssignedDxids)
+			elog(ERROR, "too many KnownAssignedDxids");
+	}
+
+	/* Now we can insert the xids into the space starting at head */
+	next_xid = from_xid;
+	for (i = 0; i < nxids; i++)
+	{
+		KnownAssignedDxids[head] = next_xid;
+		KnownAssignedDxidsValid[head] = true;
+		TransactionIdAdvance(next_xid);
+		head++;
+	}
+
+	/* Adjust count of number of valid entries */
+	pArray->numKnownAssignedDxids += nxids;
+
+	/*
+	 * Now update the head pointer.  We use a spinlock to protect this
+	 * pointer, not because the update is likely to be non-atomic, but to
+	 * ensure that other processors see the above array updates before they
+	 * see the head pointer change.
+	 *
+	 * If we're holding ProcArrayLock exclusively, there's no need to take the
+	 * spinlock.
+	 */
+	SpinLockAcquire(&pArray->known_assigned_xids_lck);
+	pArray->headKnownAssignedDxids = head;
+	SpinLockRelease(&pArray->known_assigned_xids_lck);
+}
+
 /*
  * KnownAssignedXidsSearch
  *
@@ -4274,6 +4654,95 @@ KnownAssignedXidsSearch(TransactionId xid, bool remove)
 	return true;
 }
 
+
+static bool
+KnownAssignedDxidsSearch(DistributedTransactionId xid, bool remove)
+{
+	/* use volatile pointer to prevent code rearrangement */
+	volatile ProcArrayStruct *pArray = procArray;
+	int			first,
+				last;
+	int			head;
+	int			tail;
+	int			result_index = -1;
+
+	if (remove)
+	{
+		/* we hold ProcArrayLock exclusively, so no need for spinlock */
+		tail = pArray->tailKnownAssignedDxids;
+		head = pArray->headKnownAssignedDxids;
+	}
+	else
+	{
+		/* take spinlock to ensure we see up-to-date array contents */
+		SpinLockAcquire(&pArray->known_assigned_xids_lck);
+		tail = pArray->tailKnownAssignedDxids;
+		head = pArray->headKnownAssignedDxids;
+		SpinLockRelease(&pArray->known_assigned_xids_lck);
+	}
+
+	/*
+	 * Standard binary search.	Note we can ignore the KnownAssignedXidsValid
+	 * array here, since even invalid entries will contain sorted XIDs.
+	 */
+	first = tail;
+	last = head - 1;
+	while (first <= last)
+	{
+		int			mid_index;
+		DistributedTransactionId mid_xid;
+
+		mid_index = (first + last) / 2;
+		mid_xid = KnownAssignedDxids[mid_index];
+
+		if (xid == mid_xid)
+		{
+			result_index = mid_index;
+			break;
+		}
+		else if (TransactionIdPrecedes(xid, mid_xid))
+			last = mid_index - 1;
+		else
+			first = mid_index + 1;
+	}
+
+	if (result_index < 0)
+		return false;			/* not in array */
+
+	if (!KnownAssignedDxidsValid[result_index])
+		return false;			/* in array, but invalid */
+
+	if (remove)
+	{
+		KnownAssignedDxidsValid[result_index] = false;
+
+		pArray->numKnownAssignedDxids--;
+		Assert(pArray->numKnownAssignedDxids >= 0);
+
+		/*
+		 * If we're removing the tail element then advance tail pointer over
+		 * any invalid elements.  This will speed future searches.
+		 */
+		if (result_index == tail)
+		{
+			tail++;
+			while (tail < head && !KnownAssignedDxidsValid[tail])
+				tail++;
+			if (tail >= head)
+			{
+				/* Array is empty, so we can reset both pointers */
+				pArray->headKnownAssignedDxids = 0;
+				pArray->tailKnownAssignedDxids = 0;
+			}
+			else
+			{
+				pArray->tailKnownAssignedDxids = tail;
+			}
+		}
+	}
+
+	return true;
+}
 /*
  * Is the specified XID present in KnownAssignedXids[]?
  *
@@ -4310,6 +4779,24 @@ KnownAssignedXidsRemove(TransactionId xid)
 	 * So, just ignore the search result.
 	 */
 	(void) KnownAssignedXidsSearch(xid, true);
+}
+
+static void
+KnownAssignedDxidsRemove(DistributedTransactionId xid)
+{
+	elog(trace_recovery(DEBUG4), "remove KnownAssignedDxid %u", xid);
+
+	/*
+	 * Note: we cannot consider it an error to remove an XID that's not
+	 * present.  We intentionally remove subxact IDs while processing
+	 * XLOG_XACT_ASSIGNMENT, to avoid array overflow.  Then those XIDs will be
+	 * removed again when the top-level xact commits or aborts.
+	 *
+	 * It might be possible to track such XIDs to distinguish this case from
+	 * actual errors, but it would be complicated and probably not worth it.
+	 * So, just ignore the search result.
+	 */
+	(void) KnownAssignedDxidsSearch(xid, true);
 }
 
 /*
@@ -4410,6 +4897,72 @@ KnownAssignedXidsRemovePreceding(TransactionId removeXid)
 	KnownAssignedXidsCompress(false);
 }
 
+static void
+KnownAssignedDxidsRemovePreceding(DistributedTransactionId removeDxid)
+{
+	/* use volatile pointer to prevent code rearrangement */
+	volatile ProcArrayStruct *pArray = procArray;
+	int			count = 0;
+	int			head,
+				tail,
+				i;
+
+	if (InvalidDistributedTransactionId == removeDxid)
+	{
+		elog(trace_recovery(DEBUG4), "removing all KnownAssignedDxids");
+		pArray->numKnownAssignedDxids = 0;
+		pArray->headKnownAssignedDxids = pArray->tailKnownAssignedDxids = 0;
+		return;
+	}
+
+	elog(trace_recovery(DEBUG4), "prune KnownAssignedDxids to %u", removeDxid);
+
+	/*
+	 * Mark entries invalid starting at the tail.  Since array is sorted, we
+	 * can stop as soon as we reach a entry >= removeXid.
+	 */
+	tail = pArray->tailKnownAssignedDxids;
+	head = pArray->headKnownAssignedDxids;
+
+	for (i = tail; i < head; i++)
+	{
+		if (KnownAssignedDxidsValid[i])
+		{
+			DistributedTransactionId knownXid = KnownAssignedDxids[i];
+
+			if (TransactionIdFollowsOrEquals(knownXid, removeDxid))
+				break;
+
+			KnownAssignedDxidsValid[i] = false;
+			count++;
+		}
+	}
+
+	pArray->numKnownAssignedDxids -= count;
+	Assert(pArray->numKnownAssignedDxids >= 0);
+
+	/*
+	 * Advance the tail pointer if we've marked the tail item invalid.
+	 */
+	for (i = tail; i < head; i++)
+	{
+		if (KnownAssignedDxidsValid[i])
+			break;
+	}
+	if (i >= head)
+	{
+		/* Array is empty, so we can reset both pointers */
+		pArray->headKnownAssignedDxids = 0;
+		pArray->tailKnownAssignedDxids = 0;
+	}
+	else
+	{
+		pArray->tailKnownAssignedDxids = i;
+	}
+
+	/* Opportunistically compress the array */
+	KnownAssignedDxidsCompress(false);
+}
 /*
  * KnownAssignedXidsGet - Get an array of xids by scanning KnownAssignedXids.
  * We filter out anything >= xmax.

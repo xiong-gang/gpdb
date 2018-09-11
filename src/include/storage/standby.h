@@ -72,7 +72,12 @@ typedef struct xl_running_xacts
 	TransactionId oldestRunningXid;		/* *not* oldestXmin */
 	TransactionId latestCompletedXid;	/* so we can set xmax */
 
+	/* CDB: */
+	int			dxcnt;
+	TransactionId oldestRunningDxid;
+	DistributedTransactionTimeStamp distTimestamp;
 	TransactionId xids[1];		/* VARIABLE LENGTH ARRAY */
+	/* ARRAY OF DISTRIBUTED TRANSACTION ID */
 } xl_running_xacts;
 
 #define MinSizeOfXactRunningXacts offsetof(xl_running_xacts, xids)
@@ -103,6 +108,12 @@ typedef struct RunningTransactionsData
 	TransactionId latestCompletedXid;	/* so we can set xmax */
 
 	TransactionId *xids;		/* array of (sub)xids still running */
+
+	/* CDB: distributed transactions */
+	int			dxcnt;
+	DistributedTransactionTimeStamp distTimestamp;
+	DistributedTransactionId oldestRunningDxid;
+	DistributedTransactionId *dxids;
 } RunningTransactionsData;
 
 typedef RunningTransactionsData *RunningTransactions;
