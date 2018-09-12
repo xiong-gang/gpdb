@@ -7822,6 +7822,7 @@ StartupXLOG(void)
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 	ShmemVariableCache->latestCompletedXid = ShmemVariableCache->nextXid;
 	TransactionIdRetreat(ShmemVariableCache->latestCompletedXid);
+	ShmemVariableCache->latestCompletedDxid = *shmGIDSeq - 1;
 	elog(LOG, "latest completed transaction id is %u and next transaction id is %u",
 		ShmemVariableCache->latestCompletedXid,
 		ShmemVariableCache->nextXid);

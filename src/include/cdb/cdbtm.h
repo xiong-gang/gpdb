@@ -278,6 +278,7 @@ extern DtxContext DistributedTransactionContext;
 /* state variables for how much of the log file has been flushed */
 extern volatile bool *shmDtmStarted;
 extern volatile DistributedTransactionTimeStamp *shmDistribTimeStamp;
+extern volatile DistributedTransactionId *shmGIDSeq;
 extern uint32 *shmNextSnapshotId;
 extern TMGXACT_LOG *shmCommittedGxactArray;
 extern volatile int *shmNumCommittedGxacts;
@@ -300,7 +301,6 @@ extern void getDtxLogInfo(TMGXACT_LOG *gxact_log);
 extern bool notifyCommittedDtxTransactionIsNeeded(void);
 extern void notifyCommittedDtxTransaction(void);
 extern void	rollbackDtxTransaction(void);
-extern DistributedTransactionId getMaxDistributedXid(void);
 
 extern bool includeInCheckpointIsNeeded(TMGXACT *gxact);
 extern void insertingDistributedCommitted(void);
