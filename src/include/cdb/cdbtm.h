@@ -300,7 +300,6 @@ extern void getDtxLogInfo(TMGXACT_LOG *gxact_log);
 extern bool notifyCommittedDtxTransactionIsNeeded(void);
 extern void notifyCommittedDtxTransaction(void);
 extern void	rollbackDtxTransaction(void);
-extern DistributedTransactionId getMaxDistributedXid(void);
 
 extern bool includeInCheckpointIsNeeded(TMGXACT *gxact);
 extern void insertingDistributedCommitted(void);

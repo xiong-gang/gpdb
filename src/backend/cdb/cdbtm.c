@@ -2281,18 +2281,6 @@ generateGID(void)
 }
 
 /*
- * Return the highest global transaction id that has been generated.
- */
-DistributedTransactionId
-getMaxDistributedXid(void)
-{
-	if (!shmGIDSeq)
-		return 0;
-
-	return *shmGIDSeq;
-}
-
-/*
  * recoverTM:
  * perform TM recovery, this connects to all QE and resolve all in-doubt txn.
  *
