@@ -759,6 +759,7 @@ standby_redo(XLogRecPtr beginLoc, XLogRecPtr lsn, XLogRecord *record)
 		running.xids = xlrec->xids;
 
 		running.dxcnt = xlrec->dxcnt;
+		running.latestCompletedDxid = xlrec->latestCompletedDxid;
 		running.oldestRunningDxid = xlrec->oldestRunningDxid;
 		running.distTimestamp = xlrec->distTimestamp;
 		running.dxids = (DistributedTransactionId *) &(xlrec->xids[xlrec->xcnt]);
@@ -929,8 +930,10 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 	xlrec.nextXid = CurrRunningXacts->nextXid;
 	xlrec.oldestRunningXid = CurrRunningXacts->oldestRunningXid;
 	xlrec.latestCompletedXid = CurrRunningXacts->latestCompletedXid;
+
 	xlrec.dxcnt = CurrRunningXacts->dxcnt;
 	xlrec.oldestRunningDxid = CurrRunningXacts->oldestRunningDxid;
+	xlrec.latestCompletedDxid = CurrRunningXacts->latestCompletedDxid;
 	xlrec.distTimestamp = CurrRunningXacts->distTimestamp;
 
 	/* Header */

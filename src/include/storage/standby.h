@@ -74,7 +74,8 @@ typedef struct xl_running_xacts
 
 	/* CDB: */
 	int			dxcnt;
-	TransactionId oldestRunningDxid;
+	DistributedTransactionId oldestRunningDxid;
+	DistributedTransactionId latestCompletedDxid;
 	DistributedTransactionTimeStamp distTimestamp;
 	TransactionId xids[1];		/* VARIABLE LENGTH ARRAY */
 	/* ARRAY OF DISTRIBUTED TRANSACTION ID */
@@ -113,6 +114,7 @@ typedef struct RunningTransactionsData
 	int			dxcnt;
 	DistributedTransactionTimeStamp distTimestamp;
 	DistributedTransactionId oldestRunningDxid;
+	DistributedTransactionId latestCompletedDxid;
 	DistributedTransactionId *dxids;
 } RunningTransactionsData;
 

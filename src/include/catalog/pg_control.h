@@ -55,6 +55,8 @@ typedef struct CheckPoint
 	 * it's set to InvalidTransactionId.
 	 */
 	TransactionId oldestActiveXid;
+	DistributedTransactionTimeStamp distTimestamp;
+	DistributedTransactionId	latestCompletedDxid;
 
 	/* IN XLOG RECORD, MORE DATA FOLLOWS AT END OF STRUCT FOR DTM CHECKPOINT */
 } CheckPoint;

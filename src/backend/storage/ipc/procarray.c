@@ -400,7 +400,8 @@ ProcArrayRemove(PGPROC *proc, TransactionId latestXid)
 	}
 
 	gxid = allTmGxact[proc->pgprocno].gxid;
-	if (InvalidDistributedTransactionId != gxid &&
+	if (!EnableHotStandby &&
+		InvalidDistributedTransactionId != gxid &&
 		TransactionIdPrecedes(ShmemVariableCache->latestCompletedDxid, gxid))
 	{
 		ShmemVariableCache->latestCompletedDxid = gxid;
@@ -433,7 +434,8 @@ ProcArrayEndGxact(void)
 	Assert(LWLockHeldByMe(ProcArrayLock));
 	DistributedTransactionId gxid = MyTmGxact->gxid;
 
-	if (InvalidDistributedTransactionId != gxid &&
+	if (!EnableHotStandby &&
+		InvalidDistributedTransactionId != gxid &&
 		TransactionIdPrecedes(ShmemVariableCache->latestCompletedDxid, gxid))
 		ShmemVariableCache->latestCompletedDxid = gxid;
 	initGxact(MyTmGxact);
@@ -821,6 +823,10 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	if (TransactionIdPrecedes(ShmemVariableCache->latestCompletedXid,
 							  running->latestCompletedXid))
 		ShmemVariableCache->latestCompletedXid = running->latestCompletedXid;
+
+	if (TransactionIdPrecedes(ShmemVariableCache->latestCompletedDxid,
+							  running->latestCompletedDxid))
+		ShmemVariableCache->latestCompletedDxid = running->latestCompletedDxid;
 
 	Assert(TransactionIdIsNormal(ShmemVariableCache->latestCompletedXid));
 
@@ -1941,8 +1947,10 @@ CreateDistributedSnapshotForStandby(DistributedSnapshot *ds)
 	Assert(LWLockHeldByMe(ProcArrayLock));
 	Assert(ds->inProgressXidArray != NULL);
 
-	xmin = LastDistributedTransactionId;
-	xmax = latestObservedDxid;
+	xmax = ShmemVariableCache->latestCompletedDxid;
+	TransactionIdAdvance(xmax);
+	xmin = xmax;
+
 	distribSnapshotId = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)shmNextSnapshotId, 1);
 
 	/*
@@ -1992,7 +2000,7 @@ CreateDistributedSnapshotForStandby(DistributedSnapshot *ds)
 	 * the distributed snapshot.
 	 */
 	ds->distribTransactionTimeStamp = *shmDistribTimeStamp;
-	ds->xminAllDistributedSnapshots = xmin;
+	ds->xminAllDistributedSnapshots = xmin;  //todo: pass from master
 	ds->distribSnapshotId = distribSnapshotId;
 	ds->xmin = xmin;
 	ds->xmax = xmax;
@@ -2768,6 +2776,7 @@ GetRunningTransactionData(void)
 	ProcArrayStruct *arrayP = procArray;
 	RunningTransactions CurrentRunningXacts = &CurrentRunningXactsData;
 	TransactionId latestCompletedXid;
+	TransactionId latestCompletedDxid;
 	TransactionId oldestRunningXid;
 	TransactionId oldestRunningDxid;
 	TransactionId *xids;
@@ -2830,6 +2839,7 @@ GetRunningTransactionData(void)
 	LWLockAcquire(XidGenLock, LW_SHARED);
 
 	latestCompletedXid = ShmemVariableCache->latestCompletedXid;
+	latestCompletedDxid = ShmemVariableCache->latestCompletedDxid;
 
 	oldestRunningXid = ShmemVariableCache->nextXid;
 
@@ -2903,6 +2913,7 @@ GetRunningTransactionData(void)
 
 	CurrentRunningXacts->dxcnt = dxCount;
 	CurrentRunningXacts->oldestRunningDxid = oldestRunningDxid;
+	CurrentRunningXacts->latestCompletedDxid = latestCompletedDxid;
 	CurrentRunningXacts->distTimestamp = *shmDistribTimeStamp;;
 
 	/* We don't release XidGenLock here, the caller is responsible for that */
@@ -4098,6 +4109,9 @@ ExpireTreeKnownAssignedDistributedTransactionIds(DistributedTransactionId xid)
 
 	KnownAssignedDxidsRemove(xid);
 
+	/* Advance latestCompletedDxid */
+	if (TransactionIdPrecedes(ShmemVariableCache->latestCompletedDxid, xid))
+		ShmemVariableCache->latestCompletedDxid = xid;
 #if 0
 	/* As in ProcArrayEndTransaction, advance latestCompletedXid */
 	if (TransactionIdPrecedes(ShmemVariableCache->latestCompletedXid,
