@@ -66,10 +66,9 @@ extern bool Test_print_direct_dispatch_info;
 #define UTILITYMODEDTMREDO_FILE "savedtmredo.file"
 
 static LWLockId shmControlLock;
-static slock_t *shmControlSeqnoLock;
 static volatile bool *shmTmRecoverred;
 volatile DistributedTransactionTimeStamp *shmDistribTimeStamp;
-static volatile DistributedTransactionId *shmGIDSeq = NULL;
+volatile DistributedTransactionId *shmGIDSeq;
 
 volatile bool *shmDtmStarted;
 uint32 *shmNextSnapshotId;
@@ -1568,7 +1567,6 @@ tmShmemInit(void)
 		elog(FATAL, "could not initialize transaction manager share memory");
 
 	shmControlLock = shared->ControlLock;
-	shmControlSeqnoLock = &shared->ControlSeqnoLock;
 	shmTmRecoverred = &shared->recoverred;
 	shmDistribTimeStamp = &shared->distribTimeStamp;
 	shmGIDSeq = &shared->seqno;
@@ -1585,7 +1583,7 @@ tmShmemInit(void)
 		*shmDistribTimeStamp = (DistributedTransactionTimeStamp) t;
 		elog(DEBUG1, "DTM start timestamp %u", *shmDistribTimeStamp);
 
-		*shmGIDSeq = FirstDistributedTransactionId;
+		ShmemVariableCache->latestCompletedDxid = *shmGIDSeq = FirstDistributedTransactionId;
 	}
 	shmDtmStarted = &shared->DtmStarted;
 	shmNextSnapshotId = &shared->NextSnapshotId;
@@ -1598,7 +1596,6 @@ tmShmemInit(void)
 		shared->ControlLock = LWLockAssign();
 		shmControlLock = shared->ControlLock;
 
-		SpinLockInit(shmControlSeqnoLock);
 		*shmNextSnapshotId = 0;
 		*shmDtmStarted = false;
 		*shmTmRecoverred = false;
@@ -2239,31 +2236,13 @@ generateGID(void)
 {
 	DistributedTransactionId gxid;
 
-	SpinLockAcquire(shmControlSeqnoLock);
+	gxid = pg_atomic_add_fetch_u32((pg_atomic_uint32*)shmGIDSeq, 1);
+	if (gxid == LastDistributedTransactionId)
+		ereport(PANIC,
+				(errmsg("reached limit of %u global transactions per start",
+						LastDistributedTransactionId)));
 
-	/* tm lock acquired by caller */
-	if (*shmGIDSeq >= LastDistributedTransactionId)
-	{
-		SpinLockRelease(shmControlSeqnoLock);
-		ereport(FATAL,
-				(errmsg("reached limit of %u global transactions per start", LastDistributedTransactionId)));
-	}
-	gxid = ++(*shmGIDSeq);
-
-	SpinLockRelease(shmControlSeqnoLock);
 	return gxid;
-}
-
-/*
- * Return the highest global transaction id that has been generated.
- */
-DistributedTransactionId
-getMaxDistributedXid(void)
-{
-	if (!shmGIDSeq)
-		return 0;
-
-	return *shmGIDSeq;
 }
 
 /*
@@ -2303,9 +2282,6 @@ recoverTM(void)
 	recoverInDoubtTransactions();
 
 	/* finished recovery successfully. */
-
-	*shmGIDSeq = 1;
-
 	*shmDtmStarted = true;
 	elog(LOG, "DTM Started");
 }
