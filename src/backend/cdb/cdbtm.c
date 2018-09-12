@@ -69,7 +69,7 @@ static LWLockId shmControlLock;
 static slock_t *shmControlSeqnoLock;
 static volatile bool *shmTmRecoverred;
 volatile DistributedTransactionTimeStamp *shmDistribTimeStamp;
-static volatile DistributedTransactionId *shmGIDSeq = NULL;
+volatile DistributedTransactionId *shmGIDSeq;
 
 volatile bool *shmDtmStarted;
 uint32 *shmNextSnapshotId;
@@ -2267,18 +2267,6 @@ generateGID(void)
 
 	SpinLockRelease(shmControlSeqnoLock);
 	return gxid;
-}
-
-/*
- * Return the highest global transaction id that has been generated.
- */
-DistributedTransactionId
-getMaxDistributedXid(void)
-{
-	if (!shmGIDSeq)
-		return 0;
-
-	return *shmGIDSeq;
 }
 
 /*
