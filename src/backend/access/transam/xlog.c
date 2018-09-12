@@ -5669,8 +5669,6 @@ BootStrapXLOG(void)
 	checkPoint.oldestXidDB = TemplateDbOid;
 	checkPoint.time = (pg_time_t) time(NULL);
 	checkPoint.oldestActiveXid = InvalidTransactionId;
-	checkPoint.distTimestamp = 0;
-	checkPoint.latestCompletedDxid = InvalidDistributedTransactionId;
 
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
@@ -7233,8 +7231,8 @@ StartupXLOG(void)
 				running.latestCompletedXid = latestCompletedXid;
 				running.xids = xids;
 
-				running.distTimestamp = checkPoint.distTimestamp;
-				running.latestCompletedDxid = checkPoint.latestCompletedDxid;
+				running.distTimestamp = 0;
+				running.latestCompletedDxid = InvalidDistributedTransactionId;
 				running.oldestRunningDxid = InvalidDistributedTransactionId;
 				running.dxids = 0;
 				running.dxcnt = 0;
@@ -9067,8 +9065,6 @@ CreateCheckPoint(int flags)
 							 &checkPoint.nextMulti,
 							 &checkPoint.nextMultiOffset);
 
-	checkPoint.distTimestamp = *shmDistribTimeStamp;
-	checkPoint.latestCompletedDxid = ShmemVariableCache->latestCompletedDxid;
 	/*
 	 * Having constructed the checkpoint record, ensure all shmem disk buffers
 	 * and commit-log buffers are flushed to disk.

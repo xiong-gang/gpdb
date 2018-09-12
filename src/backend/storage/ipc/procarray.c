@@ -656,7 +656,11 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	/*
 	 * Remove stale transactions, if any.
 	 */
-	*shmDistribTimeStamp = running->distTimestamp;
+	if (*shmDistribTimeStamp == 0)
+		*shmDistribTimeStamp = running->distTimestamp;
+	if (ShmemVariableCache->latestCompletedDxid == InvalidDistributedTransactionId)
+		ShmemVariableCache->latestCompletedDxid = running->latestCompletedDxid;
+
 	ExpireOldKnownAssignedTransactionIds(running->oldestRunningXid);
 	ExpireOldKnownAssignedDistributedTransactionIds(running->oldestRunningDxid);
 	StandbyReleaseOldLocks(running->xcnt, running->xids);
@@ -823,10 +827,6 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	if (TransactionIdPrecedes(ShmemVariableCache->latestCompletedXid,
 							  running->latestCompletedXid))
 		ShmemVariableCache->latestCompletedXid = running->latestCompletedXid;
-
-	if (TransactionIdPrecedes(ShmemVariableCache->latestCompletedDxid,
-							  running->latestCompletedDxid))
-		ShmemVariableCache->latestCompletedDxid = running->latestCompletedDxid;
 
 	Assert(TransactionIdIsNormal(ShmemVariableCache->latestCompletedXid));
 
