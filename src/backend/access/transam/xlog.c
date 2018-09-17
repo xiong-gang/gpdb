@@ -771,7 +771,7 @@ static void rm_redo_error_callback(void *arg);
 static int	get_sync_bit(int method);
 
 /* New functions added for WAL replication */
-static void XLogProcessCheckpointRecord(XLogRecord *rec);
+static void XLogProcessCheckpointRecord(CheckpointExtendedRecord *rec);
 
 static void GetXLogCleanUpTo(XLogRecPtr recptr, uint32 *_logId, uint32 *_logSeg);
 static void checkXLogConsistency(XLogRecord *record, XLogRecPtr EndRecPtr);
@@ -6452,19 +6452,15 @@ ApplyStartupRedo(
  * record is processed as well.
  */
 static void
-XLogProcessCheckpointRecord(XLogRecord *rec)
+XLogProcessCheckpointRecord(CheckpointExtendedRecord *rec)
 {
-	CheckpointExtendedRecord ckptExtended;
+	if (!rec->dtxCheckpoint)
+		return;
 
-	UnpackCheckPointRecord(rec, &ckptExtended);
-
-	if (ckptExtended.dtxCheckpoint)
-	{
-		/* Handle the DTX information. */
-		UtilityModeFindOrCreateDtmRedoFile();
-		redoDtxCheckPoint(ckptExtended.dtxCheckpoint);
-		UtilityModeCloseDtmRedoFile();
-	}
+	/* Handle the DTX information. */
+	UtilityModeFindOrCreateDtmRedoFile();
+	redoDtxCheckPoint(rec->dtxCheckpoint);
+	UtilityModeCloseDtmRedoFile();
 }
 
 DBState
@@ -6663,12 +6659,9 @@ CheckRequiredParameterValues(void)
 	{
 		if (ControlFile->wal_level < WAL_LEVEL_HOT_STANDBY)
 		{
-			ControlFile->wal_level = WAL_LEVEL_HOT_STANDBY;
-			/*
 			ereport(ERROR,
 					(errmsg("hot standby is not possible because wal_level was not set to \"hot_standby\" on the master server"),
 					 errhint("Either set wal_level to \"hot_standby\" on the master, or turn off hot_standby here.")));
-					 */
 		}
 
 		/* We ignore autovacuum_max_workers when we make this test. */
@@ -6707,6 +6700,7 @@ StartupXLOG(void)
 	bool		bgwriterLaunched = false;
 	bool		backupFromStandby = false;
 	DBState		dbstate_at_startup;
+	CheckpointExtendedRecord ckptExtended;
 
 	/*
 	 * Read control file and check XLOG status looks valid.
@@ -6870,6 +6864,7 @@ StartupXLOG(void)
 		if (!StandbyModeRequested)
 			ereport(FATAL,
 					(errmsg("Found backup.label file without any standby mode request")));
+		InArchiveRecovery = true;
 
 		/* Activate recovery in standby mode */
 		StandbyMode = true;
@@ -6884,6 +6879,7 @@ StartupXLOG(void)
 		if (record != NULL)
 		{
 			memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
+			UnpackCheckPointRecord(record, &ckptExtended);
 			wasShutdown = (record->xl_info == XLOG_CHECKPOINT_SHUTDOWN);
 			ereport(DEBUG1,
 					(errmsg("checkpoint record is at %X/%X",
@@ -6966,13 +6962,12 @@ StartupXLOG(void)
 			}
 		}
 		memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
+		UnpackCheckPointRecord(record, &ckptExtended);
 		wasShutdown = (record->xl_info == XLOG_CHECKPOINT_SHUTDOWN);
 	}
 
 	LastRec = RecPtr = checkPointLoc;
 
-	CheckpointExtendedRecord ckptExtended;
-	UnpackCheckPointRecord(record, &ckptExtended);
 	if (ckptExtended.ptas)
 		SetupCheckpointPreparedTransactionList(ckptExtended.ptas);
 
@@ -6980,7 +6975,7 @@ StartupXLOG(void)
 	 * Find Xacts that are distributed committed from the checkpoint record and
 	 * store them such that they can utilized later during DTM recovery.
 	 */
-	XLogProcessCheckpointRecord(record);
+	XLogProcessCheckpointRecord(&ckptExtended);
 
 	ereport(DEBUG1,
 			(errmsg("redo record is at %X/%X; shutdown %s",
@@ -7404,8 +7399,9 @@ StartupXLOG(void)
 					(xlogRecInfo == XLOG_CHECKPOINT_SHUTDOWN
 					 || xlogRecInfo == XLOG_CHECKPOINT_ONLINE))
 				{
-					XLogProcessCheckpointRecord(record);
 					memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
+					UnpackCheckPointRecord(record, &ckptExtended);
+					XLogProcessCheckpointRecord(&ckptExtended);
 				}
 
 				/*

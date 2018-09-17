@@ -48,6 +48,7 @@ static void validate_xlog_location(char *str);
 Datum
 pg_start_backup(PG_FUNCTION_ARGS)
 {
+#if 0
 	XLogRecPtr	startpoint = {0,0};
 	char		startxlogstr[MAXFNAMELEN];
 
@@ -55,6 +56,25 @@ pg_start_backup(PG_FUNCTION_ARGS)
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("pg_start_backup() is not supported in Greenplum Database"),
 			 errhint("Contact support to get more information and resolve the issue")));
+
+	snprintf(startxlogstr, sizeof(startxlogstr), "%X/%X",
+			 startpoint.xlogid, startpoint.xrecoff);
+	PG_RETURN_TEXT_P(cstring_to_text(startxlogstr));
+#endif 
+	text	   *backupid = PG_GETARG_TEXT_P(0);
+	bool		fast = PG_GETARG_BOOL(1);
+	char	   *backupidstr;
+	XLogRecPtr	startpoint;
+	char		startxlogstr[MAXFNAMELEN];
+
+	backupidstr = text_to_cstring(backupid);
+
+	if (!superuser() && !has_rolreplication(GetUserId()))
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+		   errmsg("must be superuser or replication role to run a backup")));
+
+	startpoint = do_pg_start_backup(backupidstr, fast, NULL);
 
 	snprintf(startxlogstr, sizeof(startxlogstr), "%X/%X",
 			 startpoint.xlogid, startpoint.xrecoff);
@@ -79,6 +99,7 @@ pg_start_backup(PG_FUNCTION_ARGS)
 Datum
 pg_stop_backup(PG_FUNCTION_ARGS)
 {
+#if 0
 	XLogRecPtr	stoppoint = {0,0};
 	char		stopxlogstr[MAXFNAMELEN];
 
@@ -86,6 +107,20 @@ pg_stop_backup(PG_FUNCTION_ARGS)
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("pg_stop_backup() is not supported in Greenplum Database"),
 			 errhint("Contact support to get more information and resolve the issue")));
+
+	snprintf(stopxlogstr, sizeof(stopxlogstr), "%X/%X",
+			 stoppoint.xlogid, stoppoint.xrecoff);
+	PG_RETURN_TEXT_P(cstring_to_text(stopxlogstr));
+#endif
+	XLogRecPtr	stoppoint;
+	char		stopxlogstr[MAXFNAMELEN];
+
+	if (!superuser() && !has_rolreplication(GetUserId()))
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+		 (errmsg("must be superuser or replication role to run a backup"))));
+
+	stoppoint = do_pg_stop_backup(NULL, true);
 
 	snprintf(stopxlogstr, sizeof(stopxlogstr), "%X/%X",
 			 stoppoint.xlogid, stoppoint.xrecoff);

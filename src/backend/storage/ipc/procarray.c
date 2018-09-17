@@ -4029,7 +4029,9 @@ void
 RecordKnownAssignedDistributedTransactionIds(DistributedTransactionId xid)
 {
 	Assert(standbyState >= STANDBY_INITIALIZED);
-	Assert(TransactionIdIsValid(xid));
+
+	if (xid == InvalidDistributedTransactionId)
+		return;
 
 	elog(trace_recovery(DEBUG4), "record known xact %u", xid);
 
@@ -4051,8 +4053,7 @@ RecordKnownAssignedDistributedTransactionIds(DistributedTransactionId xid)
 		/*
 		 * Add the new xids onto the KnownAssignedXids array.
 		 */
-		next_expected_xid = latestObservedDxid;
-		TransactionIdAdvance(next_expected_xid);
+		next_expected_xid = latestObservedDxid + 1;
 		KnownAssignedDxidsAdd(next_expected_xid, xid);
 
 		/*
@@ -4102,6 +4103,8 @@ ExpireTreeKnownAssignedDistributedTransactionIds(DistributedTransactionId xid)
 {
 	Assert(standbyState >= STANDBY_INITIALIZED);
 
+	if (xid == InvalidDistributedTransactionId)
+		return;
 	/*
 	 * Uses same locking as transaction commit
 	 */

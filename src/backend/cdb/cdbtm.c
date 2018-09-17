@@ -3049,7 +3049,7 @@ sendDtxExplicitBegin(void)
 	rememberDtxExplicitBegin();
 
 	dtmPreCommand("sendDtxExplicitBegin", "(none)", NULL,
-				   /* is two-phase */ true, /* withSnapshot */ true, /* inCursor */ false);
+				   /* is two-phase */ !EnableHotStandby, /* withSnapshot */ true, /* inCursor */ false);
 
 	/*
 	 * Be explicit about both the isolation level and the access mode since in
