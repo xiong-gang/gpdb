@@ -61,6 +61,7 @@
 #include "utils/resource_manager.h"
 #include "utils/sharedsnapshot.h"
 #include "access/clog.h"
+#include "utils/snapshot.h"
 #include "utils/snapmgr.h"
 #include "utils/timestamp.h"
 #include "pg_trace.h"
@@ -1304,7 +1305,7 @@ RecordTransactionCommit(void)
 		if (nrels > 0 || nmsgs > 0 || RelcacheInitFileInval || forceSyncCommit
 				|| isDtxPrepared)
 		{
-			XLogRecData rdata[5];
+			XLogRecData rdata[7];
 			int			lastrdata = 0;
 			xl_xact_commit xlrec;
 
@@ -1362,12 +1363,32 @@ RecordTransactionCommit(void)
 			{
 				/* add global transaction information */
 				getDtxLogInfo(&gxact_log);
-
 				rdata[lastrdata].next = &(rdata[4]);
 				rdata[4].data = (char *) &gxact_log;
 				rdata[4].len = sizeof(gxact_log);
 				rdata[4].buffer = InvalidBuffer;
-				rdata[4].next = NULL;
+				lastrdata = 4;
+
+				Snapshot snapshot = GetTransactionSnapshot();
+				DistributedSnapshot *ds = &snapshot->distribSnapshotWithLocalMapping.ds;
+				if (ds != NULL)
+				{
+					rdata[lastrdata].next = &(rdata[5]);
+					rdata[5].data = (char *)ds;
+					rdata[5].len = offsetof(DistributedSnapshot, inProgressXidArray);
+					rdata[5].buffer = InvalidBuffer;
+					lastrdata = 5;
+
+					if (ds->count > 0)
+					{
+						rdata[lastrdata].next = &(rdata[6]);
+						rdata[6].data = (char *) ds->inProgressXidArray;
+						rdata[6].len = ds->count * sizeof(DistributedTransactionId);
+						rdata[6].buffer = InvalidBuffer;
+						lastrdata = 6;
+					}
+				}
+				rdata[lastrdata].next = NULL;
 
 				insertingDistributedCommitted();
 
@@ -1561,42 +1582,18 @@ cleanup:
  *	RecordDistributedForgetCommitted
  */
 void
-RecordDistributedForgetCommitted(TMGXACT_LOG *gxact_log, DistributedSnapshot *ds)
+RecordDistributedForgetCommitted(TMGXACT_LOG *gxact_log)
 {
 	xl_xact_distributed_forget xlrec;
-	XLogRecData rdata[2];
-	XLogRecPtr recptr;
-	int lastrdata = 0;
+	XLogRecData rdata[1];
 
 	memcpy(&xlrec.gxact_log, gxact_log, sizeof(TMGXACT_LOG));
-	if (ds != NULL)
-	{
-		xlrec.distribTransactionTimeStamp = ds->distribTransactionTimeStamp;
-		xlrec.xminAllDistributedSnapshots = ds->xminAllDistributedSnapshots;
-		xlrec.xmin = ds->xmin;
-		xlrec.xmax = ds->xmax;
-		xlrec.count = ds->count;
-	}
-
 	rdata[0].data = (char *) &xlrec;
-	rdata[0].len = offsetof(xl_xact_distributed_forget, inProgressXidArray);
+	rdata[0].len = sizeof(xl_xact_distributed_forget);
 	rdata[0].buffer = InvalidBuffer;
-
-	if (ds && ds->count > 0)
-	{
-		rdata[0].next = &(rdata[1]);
-		rdata[1].data = (char *) ds->inProgressXidArray;
-		rdata[1].len = ds->count * sizeof(DistributedTransactionId);
-		rdata[1].buffer = InvalidBuffer;
-		lastrdata = 1;
-	}
-
-	rdata[lastrdata].next = NULL;
+	rdata[0].next = NULL;
 
 	XLogInsert(RM_XACT_ID, XLOG_XACT_DISTRIBUTED_FORGET, rdata);
-
-	//recptr = XLogInsert(RM_XACT_ID, XLOG_XACT_DISTRIBUTED_FORGET, rdata);
-	//SyncRepWaitForLSN(recptr);
 }
 
 /*
@@ -5764,16 +5761,23 @@ xactGetCommittedChildren(TransactionId **ptr)
 /*
  *	XLOG support routines
  */
-static TMGXACT_LOG *
-xact_get_distributed_info_from_commit(xl_xact_commit *xlrec)
+static void
+xact_get_distributed_info_from_commit(xl_xact_commit *xlrec,
+									 TMGXACT_LOG **ppgxact,
+									 DistributedSnapshot **ppds)
 {
 	TransactionId *xacts;
 	SharedInvalidationMessage *msgs;
+	TMGXACT_LOG *gxact;
+	DistributedSnapshot *ds;
 
 	xacts = (TransactionId *) &xlrec->xnodes[xlrec->nrels];
 	msgs = (SharedInvalidationMessage *) &xacts[xlrec->nsubxacts];
-
-	return (TMGXACT_LOG *) &msgs[xlrec->nmsgs];
+	gxact = (TMGXACT_LOG *) &msgs[xlrec->nmsgs];
+	ds = (DistributedSnapshot*)&gxact[1];
+	*ppgxact = gxact;
+	*ppds = ds;
+	return;
 }
 
 /*
@@ -5958,6 +5962,7 @@ static void
 xact_redo_distributed_commit(xl_xact_commit *xlrec, TransactionId xid, XLogRecPtr lsn)
 {
 	TMGXACT_LOG *gxact_log;
+	DistributedSnapshot *ds;
 	
 	DistributedTransactionTimeStamp	distribTimeStamp;
 	DistributedTransactionId 		distribXid;
@@ -5971,7 +5976,7 @@ xact_redo_distributed_commit(xl_xact_commit *xlrec, TransactionId xid, XLogRecPt
 	/* 
 	 * Get the global transaction information first.
 	 */
-	gxact_log = xact_get_distributed_info_from_commit(xlrec);
+	xact_get_distributed_info_from_commit(xlrec, &gxact_log, &ds);
 
 	/*
 	 * Crack open the gid to get the timestamp.
@@ -6060,6 +6065,8 @@ xact_redo_distributed_commit(xl_xact_commit *xlrec, TransactionId xid, XLogRecPt
 		ExpireTreeKnownAssignedDistributedTransactionIds(distribXid);
 	}
 #endif 
+
+	updateDistributedSnapshotStandby(ds);
 	redoDistributedCommitRecord(gxact_log);
 }
 
@@ -6143,7 +6150,6 @@ static void
 xact_redo_distributed_forget(xl_xact_distributed_forget *xlrec, TransactionId xid __attribute__((unused)) )
 {
 	redoDistributedForgetCommitRecord(&xlrec->gxact_log);
-	updateDistributedSnapshotStandby(xlrec);
 }
 
 

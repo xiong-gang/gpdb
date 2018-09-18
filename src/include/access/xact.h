@@ -293,7 +293,7 @@ extern void UnregisterXactCallbackOnce(XactCallback callback, void *arg);
 extern void RegisterSubXactCallback(SubXactCallback callback, void *arg);
 extern void UnregisterSubXactCallback(SubXactCallback callback, void *arg);
 
-extern void RecordDistributedForgetCommitted(TMGXACT_LOG *gxact_log, DistributedSnapshot *ds);
+extern void RecordDistributedForgetCommitted(TMGXACT_LOG *gxact_log);
 
 extern int	xactGetCommittedChildren(TransactionId **ptr);
 

@@ -710,11 +710,6 @@ static void
 doInsertForgetCommitted()
 {
 	TMGXACT_LOG gxact_log;
-	DistributedSnapshot ds;
-
-	LWLockAcquire(ProcArrayLock, LW_SHARED);
-	CreateDistributedSnapshot(&ds);
-	LWLockRelease(ProcArrayLock);
 
 	setCurrentGxactState(DTX_STATE_INSERTING_FORGET_COMMITTED);
 
@@ -723,7 +718,7 @@ doInsertForgetCommitted()
 	memcpy(&gxact_log.gid, currentGxact->gid, TMGIDSIZE);
 	gxact_log.gxid = currentGxact->gxid;
 
-	RecordDistributedForgetCommitted(&gxact_log, &ds);
+	RecordDistributedForgetCommitted(&gxact_log);
 
 	setCurrentGxactState(DTX_STATE_INSERTED_FORGET_COMMITTED);
 }
@@ -2353,7 +2348,7 @@ recoverInDoubtTransactions(void)
 
 		doNotifyCommittedInDoubt(gxact_log->gid);
 
-		RecordDistributedForgetCommitted(gxact_log, NULL);
+		RecordDistributedForgetCommitted(gxact_log);
 	}
 
 	*shmNumCommittedGxacts = 0;
@@ -3395,18 +3390,18 @@ performDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	elog(DTM_DEBUG5, "performDtxProtocolCommand successful return for distributed transaction %s", gid);
 }
 
-void updateDistributedSnapshotStandby(xl_xact_distributed_forget *xlrec)
+void updateDistributedSnapshotStandby(DistributedSnapshot *ds)
 {
 	if (!EnableHotStandby)
 		return;
 	if (!DistributedSnapshotStandby)
 		return;
 
-	DistributedSnapshotStandby->distribTransactionTimeStamp = xlrec->distribTransactionTimeStamp;
-	DistributedSnapshotStandby->xminAllDistributedSnapshots = xlrec->xminAllDistributedSnapshots;
-	DistributedSnapshotStandby->xmin = xlrec->xmin;
-	DistributedSnapshotStandby->xmax = xlrec->xmax;
-	DistributedSnapshotStandby->count = xlrec->count;
+	DistributedSnapshotStandby->distribTransactionTimeStamp = ds->distribTransactionTimeStamp;
+	DistributedSnapshotStandby->xminAllDistributedSnapshots = ds->xminAllDistributedSnapshots;
+	DistributedSnapshotStandby->xmin = ds->xmin;
+	DistributedSnapshotStandby->xmax = ds->xmax;
+	DistributedSnapshotStandby->count = ds->count;
 
 	if (DistributedSnapshotStandby->inProgressXidArray)
 	{
@@ -3414,11 +3409,11 @@ void updateDistributedSnapshotStandby(xl_xact_distributed_forget *xlrec)
 		DistributedSnapshotStandby->inProgressXidArray = NULL;
 	}
 
-	if(xlrec->count > 0)
+	if(ds->count > 0)
 	{
-		int size = sizeof(DistributedSnapshotId) * xlrec->count;
+		int size = sizeof(DistributedSnapshotId) * ds->count;
 		DistributedSnapshotStandby->inProgressXidArray = palloc(size);
-		memcpy(DistributedSnapshotStandby->inProgressXidArray, xlrec->inProgressXidArray, size);
+		memcpy(DistributedSnapshotStandby->inProgressXidArray, &ds->inProgressXidArray, size);
 	}
 }
 

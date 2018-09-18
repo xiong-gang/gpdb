@@ -347,7 +347,7 @@ extern void UtilityModeFindOrCreateDtmRedoFile(void);
 extern void UtilityModeCloseDtmRedoFile(void);
 
 extern bool doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType);
-extern void updateDistributedSnapshotStandby(xl_xact_distributed_forget *xlrec);
+extern void updateDistributedSnapshotStandby(DistributedSnapshot *xlrec);
 extern bool CreateDistributedSnapshot(DistributedSnapshot *ds);
 extern bool GetDistributedSnapshotForStandby(DistributedSnapshot *ds);
 
