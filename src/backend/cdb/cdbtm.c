@@ -49,6 +49,7 @@
 #include "utils/fmgroids.h"
 #include "utils/sharedsnapshot.h"
 #include "utils/snapmgr.h"
+#include "port/atomics.h"
 
 extern bool Test_print_direct_dispatch_info;
 
@@ -93,6 +94,7 @@ typedef struct InDoubtDtx
 	char		gid[TMGIDSIZE];
 } InDoubtDtx;
 
+DistributedSnapshot *DistributedSnapshotStandby;
 
 /* here are some flag options relationed to the txnOptions field of
  * PQsendGpQuery
@@ -134,7 +136,7 @@ static bool doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand, 
 							 bool *badGangs, bool raiseError, CdbDispatchDirectDesc *direct,
 							 char *serializedDtxContextInfo, int serializedDtxContextInfoLen);
 static void doPrepareTransaction(void);
-static void doInsertForgetCommitted(void);
+static void doInsertForgetCommitted();
 static void clearTransactionState(void);
 static void doNotifyingCommitPrepared(void);
 static void doNotifyingAbort(void);
@@ -705,21 +707,23 @@ doPrepareTransaction(void)
  * Insert FORGET COMMITTED into the xlog.
  */
 static void
-doInsertForgetCommitted(void)
+doInsertForgetCommitted()
 {
 	TMGXACT_LOG gxact_log;
+	DistributedSnapshot ds;
 
-	elog(DTM_DEBUG5, "doInsertForgetCommitted entering in state = %s", DtxStateToString(currentGxact->state));
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	CreateDistributedSnapshot(&ds);
+	LWLockRelease(ProcArrayLock);
 
 	setCurrentGxactState(DTX_STATE_INSERTING_FORGET_COMMITTED);
 
 	if (strlen(currentGxact->gid) >= TMGIDSIZE)
-		elog(PANIC, "Distribute transaction identifier too long (%d)",
-			 (int) strlen(currentGxact->gid));
+		elog(PANIC, "Distribute transaction identifier too long (%d)", (int)strlen(currentGxact->gid));
 	memcpy(&gxact_log.gid, currentGxact->gid, TMGIDSIZE);
 	gxact_log.gxid = currentGxact->gxid;
 
-	RecordDistributedForgetCommitted(&gxact_log);
+	RecordDistributedForgetCommitted(&gxact_log, &ds);
 
 	setCurrentGxactState(DTX_STATE_INSERTED_FORGET_COMMITTED);
 }
@@ -862,7 +866,6 @@ doNotifyingCommitPrepared(void)
 		 "succeeded to all the segments for gid = %s.", currentGxact->gid);
 
 	doInsertForgetCommitted();
-
 	clearTransactionState();
 	resetCurrentGxact();
 }
@@ -1941,6 +1944,7 @@ redoDistributedForgetCommitRecord(TMGXACT_LOG *gxact_log)
 		}
 	}
 
+
 	elog((Debug_print_full_dtm ? WARNING : DEBUG5),
 		 "Crash recovery redo did not find committed distributed transaction gid = %s for forget",
 		 gxact_log->gid);
@@ -2349,7 +2353,7 @@ recoverInDoubtTransactions(void)
 
 		doNotifyCommittedInDoubt(gxact_log->gid);
 
-		RecordDistributedForgetCommitted(gxact_log);
+		RecordDistributedForgetCommitted(gxact_log, NULL);
 	}
 
 	*shmNumCommittedGxacts = 0;
@@ -3389,4 +3393,73 @@ performDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 			break;
 	}
 	elog(DTM_DEBUG5, "performDtxProtocolCommand successful return for distributed transaction %s", gid);
+}
+
+void updateDistributedSnapshotStandby(xl_xact_distributed_forget *xlrec)
+{
+	if (!EnableHotStandby)
+		return;
+	if (!DistributedSnapshotStandby)
+		return;
+
+	DistributedSnapshotStandby->distribTransactionTimeStamp = xlrec->distribTransactionTimeStamp;
+	DistributedSnapshotStandby->xminAllDistributedSnapshots = xlrec->xminAllDistributedSnapshots;
+	DistributedSnapshotStandby->xmin = xlrec->xmin;
+	DistributedSnapshotStandby->xmax = xlrec->xmax;
+	DistributedSnapshotStandby->count = xlrec->count;
+
+	if (DistributedSnapshotStandby->inProgressXidArray)
+	{
+		pfree(DistributedSnapshotStandby->inProgressXidArray);
+		DistributedSnapshotStandby->inProgressXidArray = NULL;
+	}
+
+	if(xlrec->count > 0)
+	{
+		int size = sizeof(DistributedSnapshotId) * xlrec->count;
+		DistributedSnapshotStandby->inProgressXidArray = palloc(size);
+		memcpy(DistributedSnapshotStandby->inProgressXidArray, xlrec->inProgressXidArray, size);
+	}
+}
+
+bool
+GetDistributedSnapshotForStandby(DistributedSnapshot *ds)
+{
+	if (!DistributedSnapshotStandby)
+		return false;
+
+	ds->distribSnapshotId = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)shmNextSnapshotId, 1);
+	ds->distribTransactionTimeStamp = DistributedSnapshotStandby->distribTransactionTimeStamp;
+	ds->xminAllDistributedSnapshots = DistributedSnapshotStandby->xminAllDistributedSnapshots;
+	ds->xmin = DistributedSnapshotStandby->xmin;
+	ds->xmax = DistributedSnapshotStandby->xmax;
+	ds->count = DistributedSnapshotStandby->count;
+	memcpy(ds->inProgressXidArray, DistributedSnapshotStandby->inProgressXidArray,
+		   ds->count*sizeof(DistributedSnapshotId));
+	return true;
+}
+
+Size
+DistributedSnapshotStandbyShmemSize(void)
+{
+	Size		size;
+
+	size = offsetof(DistributedSnapshot, inProgressXidArray);
+	size = add_size(size, mul_size(max_prepared_xacts, sizeof(DistributedTransactionId)));
+
+	return size;
+}
+
+void
+DistributedSnapshotStandbyInit(void)
+{
+	bool		found;
+
+	DistributedSnapshotStandby = (DistributedSnapshot *)
+		ShmemInitStruct("Distributed snapshot standby",
+						DistributedSnapshotStandbyShmemSize(),
+						&found);
+
+	if (!found)
+		MemSet(DistributedSnapshotStandby, 0, sizeof(DistributedSnapshot));
 }

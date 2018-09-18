@@ -1561,19 +1561,42 @@ cleanup:
  *	RecordDistributedForgetCommitted
  */
 void
-RecordDistributedForgetCommitted(TMGXACT_LOG *gxact_log)
+RecordDistributedForgetCommitted(TMGXACT_LOG *gxact_log, DistributedSnapshot *ds)
 {
 	xl_xact_distributed_forget xlrec;
-	XLogRecData rdata[1];
+	XLogRecData rdata[2];
+	XLogRecPtr recptr;
+	int lastrdata = 0;
 
 	memcpy(&xlrec.gxact_log, gxact_log, sizeof(TMGXACT_LOG));
+	if (ds != NULL)
+	{
+		xlrec.distribTransactionTimeStamp = ds->distribTransactionTimeStamp;
+		xlrec.xminAllDistributedSnapshots = ds->xminAllDistributedSnapshots;
+		xlrec.xmin = ds->xmin;
+		xlrec.xmax = ds->xmax;
+		xlrec.count = ds->count;
+	}
 
 	rdata[0].data = (char *) &xlrec;
-	rdata[0].len = sizeof(xl_xact_distributed_forget);
+	rdata[0].len = offsetof(xl_xact_distributed_forget, inProgressXidArray);
 	rdata[0].buffer = InvalidBuffer;
-	rdata[0].next = NULL;
+
+	if (ds && ds->count > 0)
+	{
+		rdata[0].next = &(rdata[1]);
+		rdata[1].data = (char *) ds->inProgressXidArray;
+		rdata[1].len = ds->count * sizeof(DistributedTransactionId);
+		rdata[1].buffer = InvalidBuffer;
+		lastrdata = 1;
+	}
+
+	rdata[lastrdata].next = NULL;
 
 	XLogInsert(RM_XACT_ID, XLOG_XACT_DISTRIBUTED_FORGET, rdata);
+
+	//recptr = XLogInsert(RM_XACT_ID, XLOG_XACT_DISTRIBUTED_FORGET, rdata);
+	//SyncRepWaitForLSN(recptr);
 }
 
 /*
@@ -6027,6 +6050,7 @@ xact_redo_distributed_commit(xl_xact_commit *xlrec, TransactionId xid, XLogRecPt
 #endif
 	}
 
+#if 0
 	/*
 	 * End copy of xact_redo_commit logic.
 	 */
@@ -6035,6 +6059,7 @@ xact_redo_distributed_commit(xl_xact_commit *xlrec, TransactionId xid, XLogRecPt
 		RecordKnownAssignedDistributedTransactionIds(distribXid);
 		ExpireTreeKnownAssignedDistributedTransactionIds(distribXid);
 	}
+#endif 
 	redoDistributedCommitRecord(gxact_log);
 }
 
@@ -6118,6 +6143,7 @@ static void
 xact_redo_distributed_forget(xl_xact_distributed_forget *xlrec, TransactionId xid __attribute__((unused)) )
 {
 	redoDistributedForgetCommitRecord(&xlrec->gxact_log);
+	updateDistributedSnapshotStandby(xlrec);
 }
 
 

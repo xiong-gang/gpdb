@@ -1798,7 +1798,7 @@ DistributedSnapshotMappedEntry_Compare(const void *p1, const void *p2)
 /*
  * create distributed snapshot based on current visible distributed transaction
  */
-static bool
+bool
 CreateDistributedSnapshot(DistributedSnapshot *ds)
 {
 	int			i;
@@ -1931,9 +1931,19 @@ CreateDistributedSnapshot(DistributedSnapshot *ds)
 }
 
 
+#if 0
 static bool
 CreateDistributedSnapshotForStandby(DistributedSnapshot *ds)
 {
+	ds->distribSnapshotId = pg_atomic_add_fetch_u32((pg_atomic_uint32 *)shmNextSnapshotId, 1);
+	ds->distribTransactionTimeStamp = DistributedSnapshotStandby.distribTransactionTimeStamp;
+	ds->xminAllDistributedSnapshots = DistributedSnapshotStandby.xminAllDistributedSnapshots;
+	ds->xmin = DistributedSnapshotStandby.xmin;
+	ds->xmax = DistributedSnapshotStandby.xmax;
+	ds->count = DistributedSnapshotStandby.count;
+	memcpy(ds->inProgressXidArray, DistributedSnapshotStandby.inProgressXidArray,
+		   ds->count*sizeof(DistributedSnapshotId));
+	return true;
 	/* use volatile pointer to prevent code rearrangement */
 	volatile ProcArrayStruct *pArray = procArray;
 	int			count = 0;
@@ -2008,6 +2018,7 @@ CreateDistributedSnapshotForStandby(DistributedSnapshot *ds)
 
 	return true;
 }
+#endif
 /*----------
  * GetMaxSnapshotXidCount -- get max size for snapshot XID array
  *
@@ -2541,7 +2552,8 @@ GetSnapshotData(Snapshot snapshot)
 	else
 	{
 		snapshot->haveDistribSnapshot =
-				CreateDistributedSnapshotForStandby(&snapshot->distribSnapshotWithLocalMapping.ds);
+				GetDistributedSnapshotForStandby(&snapshot->distribSnapshotWithLocalMapping.ds);
+
 		/*
 		 * We're in hot standby, so get XIDs from KnownAssignedXids.
 		 *

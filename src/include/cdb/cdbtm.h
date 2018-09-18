@@ -10,6 +10,7 @@
 #include "storage/lwlock.h"
 #include "lib/stringinfo.h"
 #include "access/xlogdefs.h"
+#include "access/xact.h"
 #include "cdb/cdbdistributedsnapshot.h"
 #include "cdb/cdblocaldistribxact.h"
 #include "cdb/cdbdtxcontextinfo.h"
@@ -346,5 +347,11 @@ extern void UtilityModeFindOrCreateDtmRedoFile(void);
 extern void UtilityModeCloseDtmRedoFile(void);
 
 extern bool doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType);
+extern void updateDistributedSnapshotStandby(xl_xact_distributed_forget *xlrec);
+extern bool CreateDistributedSnapshot(DistributedSnapshot *ds);
+extern bool GetDistributedSnapshotForStandby(DistributedSnapshot *ds);
 
+extern Size DistributedSnapshotStandbyShmemSize(void);
+extern void DistributedSnapshotStandbyInit(void);
+extern uint32 *shmNextSnapshotId;
 #endif   /* CDBTM_H */
