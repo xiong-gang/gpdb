@@ -742,8 +742,6 @@ static void rm_redo_error_callback(void *arg);
 static int	get_sync_bit(int method);
 
 /* New functions added for WAL replication */
-static void XLogProcessCheckpointRecord(XLogRecord *rec);
-
 static void GetXLogCleanUpTo(XLogRecPtr recptr, XLogSegNo *_logSegNo);
 
 #ifdef WAL_DEBUG
@@ -3982,7 +3980,7 @@ UpdateControlFile(void)
 				 errmsg("could not close control file: %m")));
 
 	Assert (ControlFileWatcher->watcherInitialized);
-	if (!InRecovery)
+	if (!RecoveryInProgress())
 		ControlFileWatcherCheckForChange();
 }
 
@@ -4591,6 +4589,9 @@ XLogReadRecoveryCommandFile(int emode)
 						RECOVERY_COMMAND_FILE)));
 	}
 
+	/* Enable fetching from archive recovery area */
+	ArchiveRecoveryRequested = true;
+
 	FreeConfigVariables(head);
 }
 
@@ -4998,29 +4999,6 @@ ApplyStartupRedo(
 
 }
 
-/*
- * Process passed checkpoint record either during normal recovery or
- * in standby mode.
- *
- * If in standby mode, master mirroring information stored by the checkpoint
- * record is processed as well.
- */
-static void
-XLogProcessCheckpointRecord(XLogRecord *rec)
-{
-	CheckpointExtendedRecord ckptExtended;
-
-	UnpackCheckPointRecord(rec, &ckptExtended);
-
-	if (ckptExtended.dtxCheckpoint)
-	{
-		/* Handle the DTX information. */
-		UtilityModeFindOrCreateDtmRedoFile();
-		redoDtxCheckPoint(ckptExtended.dtxCheckpoint);
-		UtilityModeCloseDtmRedoFile();
-	}
-}
-
 DBState
 GetCurrentDBState(void)
 {
@@ -5260,6 +5238,7 @@ StartupXLOG(void)
 	XLogReaderState *xlogreader;
 	XLogPageReadPrivate private;
 	bool		fast_promoted = false;
+	CheckpointExtendedRecord ckptExtended;
 
 	/*
 	 * Read control file and check XLOG status looks valid.
@@ -5432,6 +5411,13 @@ StartupXLOG(void)
 			ereport(FATAL,
 					(errmsg("Found backup.label file without any standby mode request")));
 
+		/*
+		 * Archive recovery was requested, and thanks to the backup label
+		 * file, we know how far we need to replay to reach consistency. Enter
+		 * archive recovery directly.
+		 */
+		InArchiveRecovery = true;
+
 		/* Activate recovery in standby mode */
 		StandbyMode = true;
 
@@ -5445,6 +5431,7 @@ StartupXLOG(void)
 		if (record != NULL)
 		{
 			memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
+			UnpackCheckPointRecord(record, &ckptExtended);
 			wasShutdown = (record->xl_info == XLOG_CHECKPOINT_SHUTDOWN);
 			ereport(DEBUG1,
 					(errmsg("checkpoint record is at %X/%X",
@@ -5548,6 +5535,7 @@ StartupXLOG(void)
 					 (errmsg("could not locate a valid checkpoint record")));
 		}
 		memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
+		UnpackCheckPointRecord(record, &ckptExtended);
 		wasShutdown = (record->xl_info == XLOG_CHECKPOINT_SHUTDOWN);
 	}
 
@@ -5595,8 +5583,6 @@ StartupXLOG(void)
 
 	LastRec = RecPtr = checkPointLoc;
 
-	CheckpointExtendedRecord ckptExtended;
-	UnpackCheckPointRecord(record, &ckptExtended);
 	if (ckptExtended.ptas)
 		SetupCheckpointPreparedTransactionList(ckptExtended.ptas);
 
@@ -5604,7 +5590,8 @@ StartupXLOG(void)
 	 * Find Xacts that are distributed committed from the checkpoint record and
 	 * store them such that they can utilized later during DTM recovery.
 	 */
-	XLogProcessCheckpointRecord(record);
+	UtilityModeFindOrCreateDtmRedoFile();
+	redoDtxCheckPoint(ckptExtended.dtxCheckpoint);
 
 	ereport(DEBUG1,
 			(errmsg("redo record is at %X/%X; shutdown %s",
@@ -5815,7 +5802,6 @@ StartupXLOG(void)
 		/* Check that the GUCs used to generate the WAL allow recovery */
 		CheckRequiredParameterValues();
 
-		UtilityModeFindOrCreateDtmRedoFile();
 		
 		/*
 		 * We're in recovery, so unlogged relations may be trashed and must be
@@ -6070,8 +6056,9 @@ StartupXLOG(void)
 					(xlogRecInfo == XLOG_CHECKPOINT_SHUTDOWN
 					 || xlogRecInfo == XLOG_CHECKPOINT_ONLINE))
 				{
-					XLogProcessCheckpointRecord(record);
 					memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
+					UnpackCheckPointRecord(record, &ckptExtended);
+					redoDtxCheckPoint(ckptExtended.dtxCheckpoint);
 				}
 
 				/*
@@ -6236,8 +6223,6 @@ StartupXLOG(void)
 	if (StandbyMode)
 	{
 		Assert(ControlFile->state == DB_IN_STANDBY_MODE);
-		StandbyMode = false;
-
 		elog(LOG, "updating pg_control to state DB_IN_STANDBY_PROMOTED");
 
 		/* Transition to promoted mode */
@@ -6385,14 +6370,13 @@ StartupXLOG(void)
 	 */
 	if (ArchiveRecoveryRequested)
 		exitArchiveRecovery(xlogreader->readPageTLI, endLogSegNo);
-
-	/*
-	 * Recovery command file must be deleted during promotion to prevent
-	 * StartupXLOG from incorrectly concluding that we are still a standby.
-	 * This could happen if the promoted standby goes through a restart.
-	 */
-	if (ControlFile->state == DB_IN_STANDBY_PROMOTED)
+	else if (ControlFile->state == DB_IN_STANDBY_PROMOTED)
 	{
+		/*
+		 * Recovery command file must be deleted during promotion to prevent
+		 * StartupXLOG from incorrectly concluding that we are still a standby.
+		 * This could happen if the promoted standby goes through a restart.
+		 */
 		elog(LOG, "pg_control state is DB_IN_STANDBY_PROMOTED hence renaming recovery file");
 		renameRecoveryFile();
 	}
@@ -6678,6 +6662,7 @@ StartupXLOG(void)
 	if (needToPromoteCatalog)
 	{
 		UpdateCatalogForStandbyPromotion();
+		ResetTmForPromotion();
 	}
 
 	/*
