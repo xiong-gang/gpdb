@@ -129,6 +129,44 @@ ftsprobe_start(void)
 			/* Close the postmaster's sockets */
 			ClosePostmasterPorts(false);
 
+			char *argv[] = {"segment"};
+			ftsMain(1, argv);
+			break;
+#endif
+		default:
+			return (int)FtsProbePID;
+	}
+
+	
+	/* shouldn't get here */
+	return 0;
+}
+
+int
+arbiterprobe_start(void)
+{
+	if (GpIdentity.dbid != 2)
+		return 0;
+
+	pid_t		FtsProbePID;
+
+#ifdef EXEC_BACKEND
+	switch ((FtsProbePID = ftsprobe_forkexec()))
+#else
+	switch ((FtsProbePID = fork_process()))
+#endif
+	{
+		case -1:
+			ereport(LOG,
+					(errmsg("could not fork ftsprobe process: %m")));
+			return 0;
+
+#ifndef EXEC_BACKEND
+		case 0:
+			/* in postmaster child ... */
+			/* Close the postmaster's sockets */
+			ClosePostmasterPorts(false);
+
 			ftsMain(0, NULL);
 			break;
 #endif
@@ -200,7 +238,8 @@ ftsMain(int argc, char *argv[])
 	char	   *fullpath;
 
 	IsUnderPostmaster = true;
-	am_ftsprobe = true;
+	if (argc == 1 && strcmp(argv[0], "segment") == 0)
+		am_ftsprobe = true;
 
 	/* Stay away from PMChildSlot */
 	MyPMChildSlot = -1;
@@ -496,6 +535,9 @@ void FtsLoop()
 										 ALLOCSET_DEFAULT_INITSIZE,	/* always have some memory */
 										 ALLOCSET_DEFAULT_INITSIZE,
 										 ALLOCSET_DEFAULT_MAXSIZE);
+	//WIP
+	bool standby_down = false;
+
 	while (!shutdown_requested)
 	{
 		bool		has_mirrors;
@@ -512,16 +554,53 @@ void FtsLoop()
 
 		probe_start_time = time(NULL);
 
-		/* Need a transaction to access the catalogs */
-		StartTransactionCommand();
+		if (am_ftsprobe)
+		{
+			/* Need a transaction to access the catalogs */
+			StartTransactionCommand();
+			cdbs = readCdbComponentInfoAndUpdateStatus(probeContext);
 
-		cdbs = readCdbComponentInfoAndUpdateStatus(probeContext);
+			/* Check here gp_segment_configuration if has mirror's */
+			has_mirrors = gp_segment_config_has_mirrors();
 
-		/* Check here gp_segment_configuration if has mirror's */
-		has_mirrors = gp_segment_config_has_mirrors();
+			/* close the transaction we started above */
+			CommitTransactionCommand();
+		}
+		else
+		{
+			has_mirrors = !standby_down;
+			cdbs = palloc0(sizeof(CdbComponentDatabases));
+			cdbs->total_segment_dbs = 0;
+			cdbs->total_segments = 0;
+			cdbs->total_entry_dbs = 2;
+			cdbs->segment_db_info = NULL;
+			cdbs->entry_db_info = 
+				(CdbComponentDatabaseInfo *) palloc0(sizeof(CdbComponentDatabaseInfo) * 2);
 
-		/* close the transaction we started above */
-		CommitTransactionCommand();
+			cdbs->entry_db_info[0].dbid = 1;
+			cdbs->entry_db_info[0].segindex = -1;
+			cdbs->entry_db_info[0].role = 'p';
+			cdbs->entry_db_info[0].preferred_role = 'p';
+			cdbs->entry_db_info[0].mode = 's';
+			cdbs->entry_db_info[0].status = 'u';
+			cdbs->entry_db_info[0].hostname = "Jialuns-MacBook-Pro.local";
+			cdbs->entry_db_info[0].address = "Jialuns-MacBook-Pro.local";
+			cdbs->entry_db_info[0].port = 15432;
+			cdbs->entry_db_info[0].hostip = "127.0.0.1";
+			strcpy(cdbs->entry_db_info[0].hostaddrs, "127.0.0.1");
+
+			cdbs->entry_db_info[1].dbid = 8;
+			cdbs->entry_db_info[1].segindex = -1;
+			cdbs->entry_db_info[1].role = 'm';
+			cdbs->entry_db_info[1].preferred_role = 'm';
+			cdbs->entry_db_info[1].mode = 's';
+			cdbs->entry_db_info[1].status = 'u';
+			cdbs->entry_db_info[1].hostname = "Jialuns-MacBook-Pro.local";
+			cdbs->entry_db_info[1].address = "Jialuns-MacBook-Pro.local";
+			cdbs->entry_db_info[1].port = 16432;
+			cdbs->entry_db_info[1].hostip = "127.0.0.1";
+			strcpy(cdbs->entry_db_info[1].hostaddrs, "127.0.0.1");
+		}
 
 		/* Reset this as we are performing the probe */
 		probe_requested = false;

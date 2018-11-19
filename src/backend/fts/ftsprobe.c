@@ -38,11 +38,26 @@ static CdbComponentDatabaseInfo *
 FtsGetPeerSegment(CdbComponentDatabases *cdbs,
 				  int content, int dbid)
 {
-	int i;
-
-	for (i=0; i < cdbs->total_segment_dbs; i++)
+	int array_size = 0;
+	if (am_ftsprobe)
 	{
-		CdbComponentDatabaseInfo *segInfo = &cdbs->segment_db_info[i];
+		array_size = cdbs->total_segment_dbs;
+	}
+	else
+	{
+		/* master standby */
+		Assert(cdbs->total_entry_dbs >= 1);
+		array_size = cdbs->total_entry_dbs;
+	}
+	int i;
+	CdbComponentDatabaseInfo *segInfo = NULL;
+
+	for (i=0; i < array_size; i++)
+	{
+		if (am_ftsprobe)
+			segInfo = &cdbs->segment_db_info[i];
+		else
+			segInfo = &cdbs->entry_db_info[i];
 
 		if (segInfo->segindex == content && segInfo->dbid != dbid)
 		{
@@ -613,10 +628,15 @@ probeRecordResponse(fts_segment_info *ftsInfo, PGresult *result)
 	Assert (retryRequested);
 	ftsInfo->result.retryRequested = *retryRequested;
 
+	int *isRoleArbiter = (int *) PQgetvalue(result, 0,
+										   Anum_fts_message_response_is_role_arbiter);
+	Assert (isRoleArbiter);
+	ftsInfo->result.isRoleArbiter = *isRoleArbiter;
+
 	elogif(gp_log_fts >= GPVARS_VERBOSITY_TERSE, LOG,
 		   "FTS: segment (content=%d, dbid=%d, role=%c) reported "
 		   "isMirrorUp %d, isInSync %d, isSyncRepEnabled %d, "
-		   "isRoleMirror %d, and retryRequested %d to the prober.",
+		   "isRoleMirror %d, retryRequested %d and isRoleArbiter %d  to the prober.",
 		   ftsInfo->primary_cdbinfo->segindex,
 		   ftsInfo->primary_cdbinfo->dbid,
 		   ftsInfo->primary_cdbinfo->role,
@@ -624,7 +644,8 @@ probeRecordResponse(fts_segment_info *ftsInfo, PGresult *result)
 		   ftsInfo->result.isInSync,
 		   ftsInfo->result.isSyncRepEnabled,
 		   ftsInfo->result.isRoleMirror,
-		   ftsInfo->result.retryRequested);
+		   ftsInfo->result.retryRequested,
+		   ftsInfo->result.isRoleArbiter);
 }
 
 /*
@@ -876,6 +897,9 @@ updateConfiguration(CdbComponentDatabaseInfo *primary,
 					char newPrimaryRole, char newMirrorRole,
 					bool IsInSync, bool IsPrimaryAlive, bool IsMirrorAlive)
 {
+	if (!am_ftsprobe)
+		return false;
+
 	bool UpdatePrimary = (IsPrimaryAlive != SEGMENT_IS_ALIVE(primary));
 	bool UpdateMirror = (IsMirrorAlive != SEGMENT_IS_ALIVE(mirror));
 
@@ -1191,15 +1215,33 @@ FtsIsSegmentAlive(CdbComponentDatabaseInfo *segInfo)
 static void
 FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context)
 {
-	context->num_pairs = cdbs->total_segments;
+	int array_size = 0;
+	if (am_ftsprobe)
+	{
+		array_size = cdbs->total_segment_dbs;
+		context->num_pairs = cdbs->total_segments;
+	}
+	else
+	{
+		/* master standby */
+		Assert(cdbs->total_entry_dbs >= 1);
+		array_size = cdbs->total_entry_dbs;
+		context->num_pairs = 1;
+	}
+
 	context->perSegInfos = (fts_segment_info *) palloc0(
 		context->num_pairs * sizeof(fts_segment_info));
 
 	int fts_index = 0;
 	int cdb_index = 0;
-	for(; cdb_index < cdbs->total_segment_dbs; cdb_index++)
+	for(; cdb_index < array_size; cdb_index++)
 	{
-		CdbComponentDatabaseInfo *primary = &(cdbs->segment_db_info[cdb_index]);
+		CdbComponentDatabaseInfo *primary = NULL;
+		if (am_ftsprobe)
+			primary = &(cdbs->segment_db_info[cdb_index]);
+		else
+			primary = &(cdbs->entry_db_info[cdb_index]);
+
 		if (!SEGMENT_IS_ACTIVE_PRIMARY(primary))
 			continue;
 		CdbComponentDatabaseInfo *mirror = FtsGetPeerSegment(cdbs,
@@ -1230,6 +1272,7 @@ FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context)
 		ftsInfo->result.isSyncRepEnabled = false;
 		ftsInfo->result.retryRequested = false;
 		ftsInfo->result.isRoleMirror = false;
+		ftsInfo->result.isRoleArbiter = false;
 		ftsInfo->result.dbid = primary->dbid;
 		ftsInfo->state = FTS_PROBE_SEGMENT;
 		ftsInfo->recovery_making_progress = false;
@@ -1256,7 +1299,7 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs)
 	fts_context context;
 
 	FtsWalRepInitProbeContext(cdbs, &context);
-	InitPollFds(cdbs->total_segments);
+	InitPollFds(context.num_pairs);
 
 	while (!allDone(&context) && FtsIsActive())
 	{

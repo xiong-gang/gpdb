@@ -24,6 +24,7 @@ typedef struct
 	bool isSyncRepEnabled;
 	bool isRoleMirror;
 	bool retryRequested;
+	bool isRoleArbiter;
 } fts_result;
 
 /* States used by FTS main loop for probing segments. */

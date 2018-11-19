@@ -217,6 +217,14 @@ SendFtsResponse(FtsResponse *response, const char *messagetype)
 	pq_sendint(&buf, -1, 4);		/* typmod */
 	pq_sendint(&buf, 0, 2);		/* format code */
 
+	pq_sendstring(&buf, "is_role_arbiter");
+	pq_sendint(&buf, 0, 4);		/* table oid */
+	pq_sendint(&buf, Anum_fts_message_response_is_role_arbiter, 2);		/* attnum */
+	pq_sendint(&buf, BOOLOID, 4);		/* type oid */
+	pq_sendint(&buf, 1, 2);	/* typlen */
+	pq_sendint(&buf, -1, 4);		/* typmod */
+	pq_sendint(&buf, 0, 2);		/* format code */
+
 	pq_endmessage(&buf);
 
 	/* Send a DataRow message */
@@ -238,6 +246,9 @@ SendFtsResponse(FtsResponse *response, const char *messagetype)
 	pq_sendint(&buf, 1, 4); /* col5 len */
 	pq_sendint(&buf, response->RequestRetry, 1);
 
+	pq_sendint(&buf, 1, 4); /* col6 len */
+	pq_sendint(&buf, response->IsRoleArbiter, 1);
+
 	pq_endmessage(&buf);
 	EndCommand(messagetype, DestRemote);
 	pq_flush();
@@ -252,6 +263,7 @@ HandleFtsWalRepProbe(void)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
+		false, /* IsRoleArbiter */
 	};
 
 	if (am_mirror)
@@ -308,6 +320,7 @@ HandleFtsWalRepSyncRepOff(void)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
+		false, /* IsRoleArbiter */
 	};
 
 	ereport(LOG,
@@ -327,6 +340,7 @@ HandleFtsWalRepPromote(void)
 		false, /* IsSyncRepEnabled */
 		am_mirror,  /* IsRoleMirror */
 		false, /* RequestRetry */
+		false, /* IsRoleArbiter */
 	};
 
 	ereport(LOG,

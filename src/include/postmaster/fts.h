@@ -25,12 +25,13 @@
 #define FTS_MSG_SYNCREP_OFF "SYNCREP_OFF"
 #define FTS_MSG_PROMOTE "PROMOTE"
 
-#define Natts_fts_message_response 5
+#define Natts_fts_message_response 6
 #define Anum_fts_message_response_is_mirror_up 0
 #define Anum_fts_message_response_is_in_sync 1
 #define Anum_fts_message_response_is_syncrep_enabled 2
 #define Anum_fts_message_response_is_role_mirror 3
 #define Anum_fts_message_response_request_retry 4
+#define Anum_fts_message_response_is_role_arbiter 5
 
 #define FTS_MESSAGE_RESPONSE_NTUPLES 1
 
@@ -41,6 +42,7 @@ typedef struct FtsResponse
 	bool IsSyncRepEnabled;
 	bool IsRoleMirror;
 	bool RequestRetry;
+	bool IsRoleArbiter;
 } FtsResponse;
 
 extern bool am_ftsprobe;
@@ -123,6 +125,7 @@ typedef struct
  * FTS process interface
  */
 extern int ftsprobe_start(void);
+extern int arbiterprobe_start(void);
 
 /*
  * Interface for checking if FTS is active

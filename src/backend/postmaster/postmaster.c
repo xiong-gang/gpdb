@@ -209,6 +209,7 @@ typedef enum pmsub_type
 	BackoffProc,
 	PerfmonSegmentInfoProc,
 	GlobalDeadLockDetectorProc,
+	ArbiterProbeProc,
 	MaxPMSubType
 } PMSubType;
 
@@ -412,6 +413,9 @@ static PMSubProc PMSubProcList[MaxPMSubType] =
 	{0, GlobalDeadLockDetectorProc,
 	(PMSubStartCallback*)&global_deadlock_detector_start,
 	"global deadlock detector process", PMSUBPROC_FLAG_QD, true},
+	{0, ArbiterProbeProc,
+	(PMSubStartCallback*)&arbiterprobe_start,
+	"arbiterprobe process", PMSUBPROC_FLAG_QE, true},
 };
 
 static PMSubProc *FTSSubProc = &PMSubProcList[FtsProbeProc];
@@ -2243,10 +2247,6 @@ retry1:
 			{
 				if (strcmp(valptr, GPCONN_TYPE_FTS) == 0)
 				{
-					if (IS_QUERY_DISPATCHER())
-						ereport(FATAL,
-								(errcode(ERRCODE_PROTOCOL_VIOLATION),
-								 errmsg("cannot handle FTS connection on master")));
 					am_ftshandler = true;
 					am_mirror = IsRoleMirror();
 
