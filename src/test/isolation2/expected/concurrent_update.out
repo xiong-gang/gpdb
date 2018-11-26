@@ -6,8 +6,12 @@ INSERT 1
 
 1: BEGIN;
 BEGIN
+1: SET optimizer=off;
+SET
 1: UPDATE t_concurrent_update SET b=b+10 WHERE a=1;
 UPDATE 1
+2: SET optimizer=off;
+SET
 2&: UPDATE t_concurrent_update SET b=b+10 WHERE a=1;  <waiting ...>
 1: END;
 END
