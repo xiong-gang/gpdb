@@ -45,6 +45,30 @@
 volatile FtsProbeInfo *ftsProbeInfo = NULL;	/* Probe process updates this structure */
 static LWLockId ftsControlLock;
 
+ArbiterControlBlock *shmArbiterControl = NULL;
+
+Size
+Arbiter_ShmemSize()
+{
+	return sizeof(ArbiterControlBlock);
+}
+
+void
+Arbiter_ShmemInit()
+{
+	bool found = false;
+	Size shmemSize = Arbiter_ShmemSize();
+	shmArbiterControl = (ArbiterControlBlock*)
+				ShmemInitStruct("Arbiter Control Block", shmemSize, &found);	
+	if (!shmArbiterControl)
+		elog(FATAL, "could not initialize arbiter shared memory");
+
+	if (!found)
+	{
+		shmArbiterControl->startArbiter = false;
+		shmArbiterControl->isStandbyInSync = false;
+	}
+}
 /*
  * get fts share memory size
  */
@@ -98,17 +122,24 @@ ftsUnlock(void)
 void
 FtsNotifyProber(void)
 {
-	Assert(Gp_role == GP_ROLE_DISPATCH);
-	uint8 probeTick = ftsProbeInfo->probeTick;
-
-	/* signal fts-probe */
-	SendPostmasterSignal(PMSIGNAL_WAKEN_FTS);
-
-	/* sit and spin */
-	while (probeTick == ftsProbeInfo->probeTick)
+	if (Gp_role != GP_ROLE_DISPATCH)
 	{
-		pg_usleep(50000);
-		CHECK_FOR_INTERRUPTS();
+		SendPostmasterSignal(PMSIGNAL_WAKEN_FTS);
+	}
+	else
+	{
+		Assert(Gp_role == GP_ROLE_DISPATCH);
+		uint8 probeTick = ftsProbeInfo->probeTick;
+
+		/* signal fts-probe */
+		SendPostmasterSignal(PMSIGNAL_WAKEN_FTS);
+
+		/* sit and spin */
+		while (probeTick == ftsProbeInfo->probeTick)
+		{
+			pg_usleep(50000);
+			CHECK_FOR_INTERRUPTS();
+		}
 	}
 }
 

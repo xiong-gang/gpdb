@@ -93,5 +93,6 @@ typedef struct
 	fts_segment_info *perSegInfos;
 } fts_context;
 
-extern bool FtsWalRepMessageSegments(CdbComponentDatabases *context);
+extern bool FtsWalRepMessageSegments(CdbComponentDatabases *cdbs, bool *arbiterStarted);
+extern bool FtsWalRepMessageOneSegment(CdbComponentDatabaseInfo *cdb, const char *message);
 #endif

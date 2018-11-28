@@ -1022,20 +1022,27 @@ processResponse(fts_context *context)
 				{
 					if (!ftsInfo->result.retryRequested)
 					{
-						/*
-						 * Primaries that have syncrep enabled continue to block
-						 * commits until FTS update the mirror status as down.
-						 */
-						is_updated |= updateConfiguration(
-							primary, mirror,
-							GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY,
-							GP_SEGMENT_CONFIGURATION_ROLE_MIRROR,
-							IsInSync, IsPrimaryAlive, IsMirrorAlive);
-						/*
-						 * If mirror was marked up in configuration, it must have
-						 * been marked down by updateConfiguration().
-						 */
-						AssertImply(SEGMENT_IS_ALIVE(mirror), is_updated);
+						if (!am_ftsprobe) 
+						{
+							shmArbiterControl->isStandbyInSync = false;
+						}
+						else
+						{
+							/*
+							 * Primaries that have syncrep enabled continue to block
+							 * commits until FTS update the mirror status as down.
+							 */
+							is_updated |= updateConfiguration(
+									primary, mirror,
+									GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY,
+									GP_SEGMENT_CONFIGURATION_ROLE_MIRROR,
+									IsInSync, IsPrimaryAlive, IsMirrorAlive);
+							/*
+							 * If mirror was marked up in configuration, it must have
+							 * been marked down by updateConfiguration().
+							 */
+							AssertImply(SEGMENT_IS_ALIVE(mirror), is_updated);
+						}
 						/*
 						 * Now that the configuration is updated, FTS must notify
 						 * the primaries to unblock commits by sending syncrep off
@@ -1085,6 +1092,9 @@ processResponse(fts_context *context)
 						GP_SEGMENT_CONFIGURATION_ROLE_MIRROR,
 						IsInSync, IsPrimaryAlive, IsMirrorAlive);
 					ftsInfo->state = FTS_RESPONSE_PROCESSED;
+
+					if (!am_ftsprobe)
+						shmArbiterControl->isStandbyInSync = IsInSync;
 				}
 				break;
 			case FTS_PROBE_FAILED:
@@ -1120,12 +1130,15 @@ processResponse(fts_context *context)
 					 * for gang creation, FTS should no longer probe the failed
 					 * primary.
 					 */
-					is_updated |= updateConfiguration(
-						primary, mirror,
-						GP_SEGMENT_CONFIGURATION_ROLE_MIRROR, /* newPrimaryRole */
-						GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY, /* newMirrorRole */
-						IsInSync, IsPrimaryAlive, IsMirrorAlive);
-					Assert(is_updated);
+					if (am_ftsprobe)
+					{
+						is_updated |= updateConfiguration(
+								primary, mirror,
+								GP_SEGMENT_CONFIGURATION_ROLE_MIRROR, /* newPrimaryRole */
+								GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY, /* newMirrorRole */
+								IsInSync, IsPrimaryAlive, IsMirrorAlive);
+						Assert(is_updated);
+					}
 
 					/*
 					 * Swap the primary and mirror references so that the
@@ -1136,9 +1149,12 @@ processResponse(fts_context *context)
 						   "FTS promoting mirror (content=%d, dbid=%d) "
 						   "to be the new primary",
 						   mirror->segindex, mirror->dbid);
-					ftsInfo->state = FTS_PROMOTE_SEGMENT;
-					ftsInfo->primary_cdbinfo = mirror;
-					ftsInfo->mirror_cdbinfo = primary;
+					if (am_ftsprobe || shmArbiterControl->isStandbyInSync)
+					{
+						ftsInfo->state = FTS_PROMOTE_SEGMENT;
+						ftsInfo->primary_cdbinfo = mirror;
+						ftsInfo->mirror_cdbinfo = primary;
+					}
 				}
 				else
 				{
@@ -1184,7 +1200,7 @@ processResponse(fts_context *context)
 				break;
 		}
 		/* Close connection and reset result for next message, if any. */
-		memset(&ftsInfo->result, 0, sizeof(fts_result));
+		//memset(&ftsInfo->result, 0, sizeof(fts_result));
 		PQfinish(ftsInfo->conn);
 		ftsInfo->conn = NULL;
 		ftsInfo->poll_events = ftsInfo->poll_revents = 0;
@@ -1293,10 +1309,11 @@ InitPollFds(size_t size)
 }
 
 bool
-FtsWalRepMessageSegments(CdbComponentDatabases *cdbs)
+FtsWalRepMessageSegments(CdbComponentDatabases *cdbs, bool *arbiterStarted)
 {
 	bool is_updated = false;
 	fts_context context;
+	fts_result *arbiterRes = NULL;
 
 	FtsWalRepInitProbeContext(cdbs, &context);
 	InitPollFds(context.num_pairs);
@@ -1310,6 +1327,26 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs)
 		processRetry(&context);
 		is_updated |= processResponse(&context);
 	}
+
+	if (cdbs->arbiter_db_info)
+	{
+		int i;
+		for (i = 0; i < context.num_pairs; i++)
+		{
+			fts_result *result = &context.perSegInfos[i].result;
+			if (result->dbid == cdbs->arbiter_db_info->dbid)
+			{
+				arbiterRes = result;
+				break;
+			}
+		}
+
+		if (arbiterRes)
+		{
+			*arbiterStarted = arbiterRes->isRoleArbiter;
+		}
+	}
+
 	int i;
 	if (!FtsIsActive())
 	{
@@ -1342,6 +1379,43 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs)
 	pfree(context.perSegInfos);
 	pfree(PollFds);
 	return is_updated;
+}
+
+bool
+FtsWalRepMessageOneSegment(CdbComponentDatabaseInfo *cdb, const char *message)
+{
+	PGconn *conn;
+	PGresult *res;
+	char conninfo[1024];
+	int ntuples;
+	int nfields;
+
+	snprintf(conninfo, 1024, "host=%s port=%d gpconntype=%s",
+			 cdb->hostip, cdb->port, GPCONN_TYPE_FTS);
+	conn = PQconnectdb(conninfo);
+	if (PQstatus(conn) != CONNECTION_OK)
+		return false;
+
+	res = PQexec(conn, message);
+	if (!res || PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		PQfinish(conn);
+		return false;
+	}
+
+	ntuples = PQntuples(res);
+	nfields = PQnfields(res);
+	if (nfields != Natts_fts_message_response ||
+		ntuples != FTS_MESSAGE_RESPONSE_NTUPLES)
+	{
+		PQclear(res);
+		PQfinish(conn);
+		return false;
+	}
+
+	PQfinish(conn);
+	PQclear(res);
+	return true;
 }
 
 /* EOF */

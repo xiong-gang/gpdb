@@ -47,6 +47,24 @@ typedef struct FtsControlBlock
 
 extern volatile FtsProbeInfo *ftsProbeInfo;
 
+typedef struct MasterProbeInfo
+{
+	char hostIP[50];
+	int	port;
+} MasterProbeInfo;
+
+typedef struct ArbiterControlBlock 
+{
+	MasterProbeInfo masterInfo[2];
+	bool			startArbiter;
+	bool			isStandbyInSync;
+} ArbiterControlBlock;
+
+extern ArbiterControlBlock *shmArbiterControl;
+
+extern Size Arbiter_ShmemSize();
+extern void Arbiter_ShmemInit();
+
 extern int	FtsShmemSize(void);
 extern void FtsShmemInit(void);
 

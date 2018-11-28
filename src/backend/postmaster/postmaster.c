@@ -288,6 +288,7 @@ static pid_t StartupPID = 0,
 			AutoVacPID = 0,
 			PgArchPID = 0,
 			PgStatPID = 0,
+			ArbiterPID = 0,
 			SysLoggerPID = 0;
 
 /* Startup/shutdown state */
@@ -417,6 +418,7 @@ static PMSubProc PMSubProcList[MaxPMSubType] =
 	(PMSubStartCallback*)&arbiterprobe_start,
 	"arbiterprobe process", PMSUBPROC_FLAG_QE, true},
 };
+
 
 static PMSubProc *FTSSubProc = &PMSubProcList[FtsProbeProc];
 
@@ -5542,6 +5544,23 @@ sigusr1_handler(SIGNAL_ARGS)
 	if (CheckPostmasterSignal(PMSIGNAL_WAKEN_FTS) && FTSSubProc->pid != 0)
 	{
 		signal_child(FTSSubProc->pid, SIGINT);
+	}
+
+	if (CheckPostmasterSignal(PMSIGNAL_START_ARBITER) &&
+		Shutdown == NoShutdown)
+	{
+		PMSubProc *arbiterSubProc = &PMSubProcList[ArbiterProbeProc];
+
+		if (arbiterSubProc->pid == 0 &&
+			StartupPID == 0 &&
+			pmState > PM_STARTUP &&
+			!FatalError &&
+			Shutdown == NoShutdown &&
+			ServiceStartable(arbiterSubProc))
+		{
+			arbiterSubProc->pid =
+				(arbiterSubProc->serverStart)();
+		}
 	}
 
 	if (CheckPostmasterSignal(PMSIGNAL_ADVANCE_STATE_MACHINE) &&

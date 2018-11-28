@@ -16,6 +16,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "libpq-fe.h"
+#include "libpq-int.h"
+#include "cdb/cdbfts.h"
 #include "access/xlog.h"
 #include "libpq/pqformat.h"
 #include "libpq/libpq.h"
@@ -25,6 +28,7 @@
 #include "utils/guc.h"
 #include "replication/gp_replication.h"
 #include "storage/fd.h"
+#include "storage/pmsignal.h"
 
 #define FTS_PROBE_FILE_NAME "fts_probe_file.bak"
 #define FTS_PROBE_MAGIC_STRING "FtS PrObEr MaGiC StRiNg, pRoBiNg cHeCk......."
@@ -363,6 +367,46 @@ HandleFtsWalRepPromote(void)
 	SendFtsResponse(&response, FTS_MSG_PROMOTE);
 }
 
+static void
+HandleFtsWalRepNewArbiter(const char *query)
+{
+	FtsResponse response = {
+		false, /* IsMirrorUp */
+		false, /* IsInSync */
+		false, /* IsSyncRepEnabled */
+		false, /* IsRoleMirror */
+		false, /* RequestRetry */
+	};
+	int dbid;
+
+	sscanf(query, FTS_MSG_NEW_ARBITER":%d", &dbid);
+	ereport(LOG,
+			(errmsg("turning off synchronous wal replication due to FTS request")));
+
+	SendFtsResponse(&response, FTS_MSG_NEW_ARBITER);
+}
+
+static void
+HandleFtsWalRepStartArbiter(const char *query)
+{
+	FtsResponse response = {
+		false, /* IsMirrorUp */
+		false, /* IsInSync */
+		false, /* IsSyncRepEnabled */
+		false, /* IsRoleMirror */
+		false, /* RequestRetry */
+		false, /* IsRoleArbiter */
+	};
+
+	sscanf(query, FTS_MSG_START_ARBITER";%[^;];%d;%[^;];%d",
+		   shmArbiterControl->masterInfo[0].hostIP, &shmArbiterControl->masterInfo[0].port,
+		   shmArbiterControl->masterInfo[1].hostIP, &shmArbiterControl->masterInfo[1].port);
+
+	shmArbiterControl->startArbiter = true;
+	SendPostmasterSignal(PMSIGNAL_START_ARBITER);
+	SendFtsResponse(&response, FTS_MSG_START_ARBITER);
+}
+
 void
 HandleFtsMessage(const char* query_string)
 {
@@ -377,7 +421,14 @@ HandleFtsMessage(const char* query_string)
 	else if (strncmp(query_string, FTS_MSG_PROMOTE,
 					 strlen(FTS_MSG_PROMOTE)) == 0)
 		HandleFtsWalRepPromote();
+	else if (strncmp(query_string, FTS_MSG_NEW_ARBITER,
+					 strlen(FTS_MSG_NEW_ARBITER)) == 0)
+		HandleFtsWalRepNewArbiter(query_string);
+	else if (strncmp(query_string, FTS_MSG_START_ARBITER,
+					 strlen(FTS_MSG_START_ARBITER)) == 0)
+		HandleFtsWalRepStartArbiter(query_string);
 	else
 		ereport(ERROR,
 				(errmsg("received unknown FTS query: %s", query_string)));
 }
+

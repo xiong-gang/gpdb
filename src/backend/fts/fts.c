@@ -145,10 +145,10 @@ ftsprobe_start(void)
 int
 arbiterprobe_start(void)
 {
-	if (GpIdentity.dbid != 2)
-		return 0;
-
 	pid_t		FtsProbePID;
+
+	if (!shmArbiterControl->startArbiter)
+		return 0;
 
 #ifdef EXEC_BACKEND
 	switch ((FtsProbePID = ftsprobe_forkexec()))
@@ -522,6 +522,176 @@ probeWalRepUpdateConfig(int16 dbid, int16 segindex, char role,
 	}
 }
 
+void
+probeWalRepUpdateArbiter(int16 dbid)
+{
+	Relation configrel;
+	HeapTuple configtuple;
+	HeapTuple newtuple;
+	Datum configvals[Natts_gp_segment_configuration];
+	bool confignulls[Natts_gp_segment_configuration] = { false };
+	bool repls[Natts_gp_segment_configuration] = { false };
+	ScanKeyData scankey;
+	SysScanDesc sscan;
+	ResourceOwner save = CurrentResourceOwner;
+
+	StartTransactionCommand();
+	GetTransactionSnapshot();
+
+	configrel = heap_open(GpSegmentConfigRelationId,
+						  RowExclusiveLock);
+
+	/* update the old arbiter segment to false */
+	ScanKeyInit(&scankey,
+				Anum_gp_segment_configuration_arbiter,
+				BTEqualStrategyNumber, F_BOOLEQ,
+				BoolGetDatum(true));
+	sscan = systable_beginscan(configrel, InvalidOid, false, NULL, 1, &scankey);
+
+	configtuple = systable_getnext(sscan);
+	if (!HeapTupleIsValid(configtuple))
+	{
+		elog(ERROR, "FTS cannot find arbiter=true in %s",
+			 RelationGetRelationName(configrel));
+	}
+
+	configvals[Anum_gp_segment_configuration_arbiter-1] = BoolGetDatum(false);
+	repls[Anum_gp_segment_configuration_arbiter-1] = true;
+	newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
+								 configvals, confignulls, repls);
+	simple_heap_update(configrel, &configtuple->t_self, newtuple);
+	systable_endscan(sscan);
+
+	/* update the new arbiter segment to true */
+	ScanKeyInit(&scankey,
+				Anum_gp_segment_configuration_dbid,
+				BTEqualStrategyNumber, F_INT2EQ,
+				Int16GetDatum(dbid));
+	sscan = systable_beginscan(configrel, GpSegmentConfigDbidIndexId,
+							   true, NULL, 1, &scankey);
+
+	configtuple = systable_getnext(sscan);
+	if (!HeapTupleIsValid(configtuple))
+	{
+		elog(ERROR, "FTS cannot find dbid=%d in %s", dbid,
+			 RelationGetRelationName(configrel));
+	}
+
+	configvals[Anum_gp_segment_configuration_arbiter-1] = BoolGetDatum(true);
+	repls[Anum_gp_segment_configuration_arbiter-1] = true;
+	newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
+								 configvals, confignulls, repls);
+	simple_heap_update(configrel, &configtuple->t_self, newtuple);
+	CatalogUpdateIndexes(configrel, newtuple);
+	systable_endscan(sscan);
+
+	pfree(newtuple);
+	heap_close(configrel, RowExclusiveLock);
+
+	CommitTransactionCommand();
+	CurrentResourceOwner = save;
+}
+
+static
+bool StandbyIsAlive()
+{
+	return true;
+}
+
+
+static
+bool NotifyStandbyNewArbiter(CdbComponentDatabaseInfo *standby, int dbid)
+{
+	char message[50];
+	snprintf(message, 50, "%s:%d", FTS_MSG_NEW_ARBITER, dbid);
+	return FtsWalRepMessageOneSegment(standby, message);
+}
+
+static
+CdbComponentDatabaseInfo *GetNewArbiter(CdbComponentDatabases *cdbs)
+{
+	int i;
+	CdbComponentDatabaseInfo *arbiter = NULL;
+
+	for (i = 0; i < cdbs->total_segment_dbs; i++)
+	{
+		CdbComponentDatabaseInfo *cdb = &cdbs->segment_db_info[i];
+		if (!FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdb->dbid]) &&
+			cdb->role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+		{
+			arbiter = cdb;
+			break;
+		}
+	}
+
+	return arbiter;
+}
+
+
+static
+bool startArbiter(CdbComponentDatabases *cdbs)
+{
+	char message[200];
+	CdbComponentDatabaseInfo *master = NULL;
+	CdbComponentDatabaseInfo *standby = NULL;
+	int i;
+
+	for (i = 0; i < cdbs->total_entry_dbs; i++)
+	{
+		CdbComponentDatabaseInfo *cdb = &cdbs->entry_db_info[i];
+		if (cdb->preferred_role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+			master = cdb;
+		else
+			standby = cdb;
+	}
+
+	if (!standby || !master)
+		return false;
+
+	snprintf(message, 200,
+			"%s;%s;%d;%s;%d",
+			FTS_MSG_START_ARBITER, master->hostip, master->port,
+			standby->hostip, standby->port);
+	return FtsWalRepMessageOneSegment(cdbs->arbiter_db_info, message);
+}
+
+static
+void appointNewArbiter(CdbComponentDatabases *cdbs)
+{
+	int i;
+	CdbComponentDatabaseInfo *master = NULL;
+	CdbComponentDatabaseInfo *standby = NULL;
+
+	CdbComponentDatabaseInfo *arbiter = GetNewArbiter(cdbs);
+	if (arbiter == NULL)
+	{
+		elog(WARNING, "No valid arbiter candidate");
+		return;
+	}
+	cdbs->arbiter_db_info = arbiter;
+
+	for (i = 0; i < cdbs->total_entry_dbs; i++)
+	{
+		CdbComponentDatabaseInfo *cdb = &cdbs->entry_db_info[i];
+		if (cdb->preferred_role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+			master = cdb;
+		else
+			standby = cdb;
+	}
+
+	/* Arbiter is appoint when master and standby are both alive */
+	if (!StandbyIsAlive())
+		return;
+
+	if (!NotifyStandbyNewArbiter(standby, arbiter->dbid))
+		return;
+
+	if (!startArbiter(cdbs))
+		return;
+
+	probeWalRepUpdateArbiter(arbiter->dbid);
+}
+
 static
 void FtsLoop()
 {
@@ -529,6 +699,7 @@ void FtsLoop()
 	MemoryContext probeContext = NULL, oldContext = NULL;
 	time_t elapsed,	probe_start_time;
 	CdbComponentDatabases *cdbs = NULL;
+	bool	arbiterStarted = false;
 
 	probeContext = AllocSetContextCreate(TopMemoryContext,
 										 "FtsProbeMemCtxt",
@@ -577,17 +748,17 @@ void FtsLoop()
 			cdbs->entry_db_info = 
 				(CdbComponentDatabaseInfo *) palloc0(sizeof(CdbComponentDatabaseInfo) * 2);
 
+			// TODO:
 			cdbs->entry_db_info[0].dbid = 1;
 			cdbs->entry_db_info[0].segindex = -1;
 			cdbs->entry_db_info[0].role = 'p';
 			cdbs->entry_db_info[0].preferred_role = 'p';
 			cdbs->entry_db_info[0].mode = 's';
 			cdbs->entry_db_info[0].status = 'u';
-			cdbs->entry_db_info[0].hostname = "Jialuns-MacBook-Pro.local";
-			cdbs->entry_db_info[0].address = "Jialuns-MacBook-Pro.local";
-			cdbs->entry_db_info[0].port = 15432;
-			cdbs->entry_db_info[0].hostip = "127.0.0.1";
-			strcpy(cdbs->entry_db_info[0].hostaddrs, "127.0.0.1");
+			cdbs->entry_db_info[0].hostname = "";
+			cdbs->entry_db_info[0].address = "";
+			cdbs->entry_db_info[0].port = shmArbiterControl->masterInfo[0].port;
+			cdbs->entry_db_info[0].hostip = shmArbiterControl->masterInfo[0].hostIP;
 
 			cdbs->entry_db_info[1].dbid = 8;
 			cdbs->entry_db_info[1].segindex = -1;
@@ -595,11 +766,10 @@ void FtsLoop()
 			cdbs->entry_db_info[1].preferred_role = 'm';
 			cdbs->entry_db_info[1].mode = 's';
 			cdbs->entry_db_info[1].status = 'u';
-			cdbs->entry_db_info[1].hostname = "Jialuns-MacBook-Pro.local";
-			cdbs->entry_db_info[1].address = "Jialuns-MacBook-Pro.local";
-			cdbs->entry_db_info[1].port = 16432;
-			cdbs->entry_db_info[1].hostip = "127.0.0.1";
-			strcpy(cdbs->entry_db_info[1].hostaddrs, "127.0.0.1");
+			cdbs->entry_db_info[1].hostname = "";
+			cdbs->entry_db_info[1].address = "";
+			cdbs->entry_db_info[1].port = shmArbiterControl->masterInfo[1].port;
+			cdbs->entry_db_info[1].hostip = shmArbiterControl->masterInfo[1].hostIP;
 		}
 
 		/* Reset this as we are performing the probe */
@@ -631,7 +801,7 @@ void FtsLoop()
 			 */
 			oldContext = MemoryContextSwitchTo(probeContext);
 
-			updated_probe_state = FtsWalRepMessageSegments(cdbs);
+			updated_probe_state = FtsWalRepMessageSegments(cdbs, &arbiterStarted);
 
 			MemoryContextSwitchTo(oldContext);
 
@@ -641,6 +811,15 @@ void FtsLoop()
 			/* Bump the version if configuration was updated. */
 			if (updated_probe_state)
 				ftsProbeInfo->fts_statusVersion++;
+		}
+
+		if (cdbs->arbiter_db_info)
+		{
+			/* arbiter is down, appoint a new one */
+			if (FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdbs->arbiter_db_info->dbid]))
+				appointNewArbiter(cdbs);
+			else if (!arbiterStarted)
+				startArbiter(cdbs);
 		}
 
 		/* free current components info and free ip addr caches */	

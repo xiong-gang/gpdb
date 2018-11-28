@@ -519,8 +519,8 @@ DESCR("Perform the catalog operations necessary for adding a new segment mirror"
 DATA(insert OID = 5049 ( gp_remove_segment_mirror  PGNSP PGUID 12 1 0 0 0 f f f f f f v 1 0 16 "21" _null_ _null_ _null_ _null_ gp_remove_segment_mirror _null_ _null_ _null_ n a ));
 DESCR("Remove a segment mirror from the system catalog");
 
-/* gp_add_segment(int2, int2, "char", "char", "char", "char", int4, text, text, text) => int2 */
-DATA(insert OID = 5050 ( gp_add_segment  PGNSP PGUID 12 1 0 0 0 f f f f f f v 10 0 21 "21 21 18 18 18 18 23 25 25 25" _null_ _null_ _null_ _null_ gp_add_segment _null_ _null_ _null_ n a ));
+/* gp_add_segment(int2, int2, "char", "char", "char", "char", int4, bool, text, text, text) => int2 */
+DATA(insert OID = 5050 ( gp_add_segment  PGNSP PGUID 12 1 0 0 0 f f f f f f v 11 0 21 "21 21 18 18 18 18 23 16 25 25 25" _null_ _null_ _null_ _null_ gp_add_segment _null_ _null_ _null_ n a ));
 DESCR("Perform the catalog operations necessary for adding a new segment");
 
 /* gp_expand_lock_catalog() => void */
