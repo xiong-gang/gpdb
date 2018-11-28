@@ -24,6 +24,8 @@
 #define	FTS_MSG_PROBE "PROBE"
 #define FTS_MSG_SYNCREP_OFF "SYNCREP_OFF"
 #define FTS_MSG_PROMOTE "PROMOTE"
+#define FTS_MSG_NEW_ARBITER "NEW_ARBITER"
+#define FTS_MSG_START_ARBITER "START_ARBITER"
 
 #define Natts_fts_message_response 5
 #define Anum_fts_message_response_is_mirror_up 0
@@ -135,4 +137,5 @@ extern bool FtsIsActive(void);
 extern void HandleFtsMessage(const char* query_string);
 extern void probeWalRepUpdateConfig(int16 dbid, int16 segindex, char role,
 									bool IsSegmentAlive, bool IsInSync);
+extern void probeWalRepUpdateArbiter(int16 dbid);
 #endif   /* FTS_H */

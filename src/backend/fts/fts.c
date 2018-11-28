@@ -483,6 +483,162 @@ probeWalRepUpdateConfig(int16 dbid, int16 segindex, char role,
 	}
 }
 
+void
+probeWalRepUpdateArbiter(int16 dbid)
+{
+	Relation configrel;
+	HeapTuple configtuple;
+	HeapTuple newtuple;
+	Datum configvals[Natts_gp_segment_configuration];
+	bool confignulls[Natts_gp_segment_configuration] = { false };
+	bool repls[Natts_gp_segment_configuration] = { false };
+	ScanKeyData scankey;
+	SysScanDesc sscan;
+	ResourceOwner save = CurrentResourceOwner;
+
+	StartTransactionCommand();
+	GetTransactionSnapshot();
+
+	configrel = heap_open(GpSegmentConfigRelationId,
+						  RowExclusiveLock);
+
+	/* update the old arbiter segment to false */
+	ScanKeyInit(&scankey,
+				Anum_gp_segment_configuration_arbiter,
+				BTEqualStrategyNumber, F_BOOLEQ,
+				BoolGetDatum(true));
+	sscan = systable_beginscan(configrel, InvalidOid, false, NULL, 1, &scankey);
+
+	configtuple = systable_getnext(sscan);
+	if (!HeapTupleIsValid(configtuple))
+	{
+		elog(ERROR, "FTS cannot find arbiter=true in %s",
+			 RelationGetRelationName(configrel));
+	}
+
+	configvals[Anum_gp_segment_configuration_arbiter-1] = BoolGetDatum(false);
+	repls[Anum_gp_segment_configuration_arbiter-1] = true;
+	newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
+								 configvals, confignulls, repls);
+	simple_heap_update(configrel, &configtuple->t_self, newtuple);
+	systable_endscan(sscan);
+
+	/* update the new arbiter segment to true */
+	ScanKeyInit(&scankey,
+				Anum_gp_segment_configuration_dbid,
+				BTEqualStrategyNumber, F_INT2EQ,
+				Int16GetDatum(dbid));
+	sscan = systable_beginscan(configrel, GpSegmentConfigDbidIndexId,
+							   true, NULL, 1, &scankey);
+
+	configtuple = systable_getnext(sscan);
+	if (!HeapTupleIsValid(configtuple))
+	{
+		elog(ERROR, "FTS cannot find dbid=%d in %s", dbid,
+			 RelationGetRelationName(configrel));
+	}
+
+	configvals[Anum_gp_segment_configuration_arbiter-1] = BoolGetDatum(true);
+	repls[Anum_gp_segment_configuration_arbiter-1] = true;
+	newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
+								 configvals, confignulls, repls);
+	simple_heap_update(configrel, &configtuple->t_self, newtuple);
+	CatalogUpdateIndexes(configrel, newtuple);
+	systable_endscan(sscan);
+
+	pfree(newtuple);
+	heap_close(configrel, RowExclusiveLock);
+
+	CommitTransactionCommand();
+	CurrentResourceOwner = save;
+}
+
+static
+bool StandbyIsAlive()
+{
+	return true;
+}
+
+
+static
+bool NotifyStandbyNewArbiter(CdbComponentDatabaseInfo *standby, int dbid)
+{
+	char message[50];
+	snprintf(message, 50, "%s:%d", FTS_MSG_NEW_ARBITER, dbid);
+	return FtsWalRepMessageOneSegment(standby, message);
+}
+
+static
+CdbComponentDatabaseInfo *GetNewArbiter(CdbComponentDatabases *cdbs)
+{
+	int i;
+	CdbComponentDatabaseInfo *arbiter = NULL;
+
+	for (i = 0; i < cdbs->total_segment_dbs; i++)
+	{
+		CdbComponentDatabaseInfo *cdb = &cdbs->segment_db_info[i];
+		if (cdb->status == GP_SEGMENT_CONFIGURATION_STATUS_UP &&
+			cdb->role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+		{
+			arbiter = cdb;
+			break;
+		}
+	}
+
+	return arbiter;
+}
+
+
+static
+bool StartArbiter(CdbComponentDatabaseInfo *master,
+				  CdbComponentDatabaseInfo *standby,
+				  CdbComponentDatabaseInfo *arbiter)
+{
+	char message[200];
+
+	snprintf(message, 200,
+			"%s:%s:%d:%s:%d",
+			FTS_MSG_START_ARBITER, master->hostip, master->port,
+			standby->hostip, standby->port);
+	return FtsWalRepMessageOneSegment(arbiter, message);
+}
+
+static
+void appointNewArbiter(CdbComponentDatabases *cdbs)
+{
+	int i;
+	CdbComponentDatabaseInfo *master = NULL;
+	CdbComponentDatabaseInfo *standby = NULL;
+
+	CdbComponentDatabaseInfo *arbiter = GetNewArbiter(cdbs);
+	if (arbiter == NULL)
+	{
+		elog(WARNING, "No valid arbiter candidate");
+		return;
+	}
+
+	for (i = 0; i < cdbs->total_entry_dbs; i++)
+	{
+		CdbComponentDatabaseInfo *cdb = &cdbs->entry_db_info[i];
+		if (cdb->preferred_role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+			master = cdb;
+		else
+			standby = cdb;
+	}
+
+	/* Arbiter is appoint when master and standby are both alive */
+	if (!StandbyIsAlive())
+		return;
+
+	if (!NotifyStandbyNewArbiter(standby, arbiter->dbid))
+		return;
+
+	if (!StartArbiter(master, standby, arbiter))
+		return;
+
+	probeWalRepUpdateArbiter(arbiter->dbid);
+}
+
 static
 void FtsLoop()
 {
@@ -562,6 +718,12 @@ void FtsLoop()
 			/* Bump the version if configuration was updated. */
 			if (updated_probe_state)
 				ftsProbeInfo->fts_statusVersion++;
+		}
+
+		/* arbiter is down, appoint a new one */
+		if (cdbs->arbiter_db_info->status == GP_SEGMENT_CONFIGURATION_STATUS_DOWN)
+		{
+			appointNewArbiter(cdbs);
 		}
 
 		/* free current components info and free ip addr caches */	

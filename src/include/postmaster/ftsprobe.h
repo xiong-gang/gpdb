@@ -93,4 +93,5 @@ typedef struct
 } fts_context;
 
 extern bool FtsWalRepMessageSegments(CdbComponentDatabases *context);
+extern bool FtsWalRepMessageOneSegment(CdbComponentDatabaseInfo *cdb, const char *message);
 #endif

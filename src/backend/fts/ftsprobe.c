@@ -1301,4 +1301,41 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs)
 	return is_updated;
 }
 
+bool
+FtsWalRepMessageOneSegment(CdbComponentDatabaseInfo *cdb, const char *message)
+{
+	PGconn *conn;
+	PGresult *res;
+	char conninfo[1024];
+	int ntuples;
+	int nfields;
+
+	snprintf(conninfo, 1024, "host=%s port=%d gpconntype=%s",
+			 cdb->hostip, cdb->port, GPCONN_TYPE_FTS);
+	conn = PQconnectdb(conninfo);
+	if (PQstatus(conn) != CONNECTION_OK)
+		return false;
+
+	res = PQexec(conn, message);
+	if (!res || PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		PQfinish(conn);
+		return false;
+	}
+
+	ntuples = PQntuples(res);
+	nfields = PQnfields(res);
+	if (nfields != Natts_fts_message_response ||
+		ntuples != FTS_MESSAGE_RESPONSE_NTUPLES)
+	{
+		PQclear(res);
+		PQfinish(conn);
+		return false;
+	}
+
+	PQfinish(conn);
+	PQclear(res);
+	return true;
+}
+
 /* EOF */

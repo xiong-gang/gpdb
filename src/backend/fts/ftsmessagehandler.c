@@ -349,6 +349,42 @@ HandleFtsWalRepPromote(void)
 	SendFtsResponse(&response, FTS_MSG_PROMOTE);
 }
 
+static void
+HandleFtsWalRepNewArbiter(const char *query)
+{
+	FtsResponse response = {
+		false, /* IsMirrorUp */
+		false, /* IsInSync */
+		false, /* IsSyncRepEnabled */
+		false, /* IsRoleMirror */
+		false, /* RequestRetry */
+	};
+	int dbid;
+
+	sscanf(query, "%s:%d", FTS_MSG_NEW_ARBITER, &dbid);
+	ereport(LOG,
+			(errmsg("turning off synchronous wal replication due to FTS request")));
+
+	SendFtsResponse(&response, FTS_MSG_NEW_ARBITER);
+}
+
+static void
+HandleFtsWalRepStartArbiter(const char *query)
+{
+	FtsResponse response = {
+		false, /* IsMirrorUp */
+		false, /* IsInSync */
+		false, /* IsSyncRepEnabled */
+		false, /* IsRoleMirror */
+		false, /* RequestRetry */
+	};
+
+	ereport(LOG,
+			(errmsg("turning off synchronous wal replication due to FTS request")));
+
+	SendFtsResponse(&response, FTS_MSG_START_ARBITER);
+}
+
 void
 HandleFtsMessage(const char* query_string)
 {
@@ -363,6 +399,12 @@ HandleFtsMessage(const char* query_string)
 	else if (strncmp(query_string, FTS_MSG_PROMOTE,
 					 strlen(FTS_MSG_PROMOTE)) == 0)
 		HandleFtsWalRepPromote();
+	else if (strncmp(query_string, FTS_MSG_NEW_ARBITER,
+					 strlen(FTS_MSG_NEW_ARBITER)) == 0)
+		HandleFtsWalRepNewArbiter(query_string);
+	else if (strncmp(query_string, FTS_MSG_START_ARBITER,
+					 strlen(FTS_MSG_START_ARBITER)) == 0)
+		HandleFtsWalRepStartArbiter(query_string);
 	else
 		ereport(ERROR,
 				(errmsg("received unknown FTS query: %s", query_string)));
