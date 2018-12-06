@@ -421,6 +421,7 @@ static PMSubProc PMSubProcList[MaxPMSubType] =
 
 
 static PMSubProc *FTSSubProc = &PMSubProcList[FtsProbeProc];
+static PMSubProc *ArbiterSubProc = &PMSubProcList[ArbiterProbeProc];
 
 static bool ReachedNormalRunning = false;		/* T if we've reached PM_RUN */
 
@@ -5541,9 +5542,12 @@ sigusr1_handler(SIGNAL_ARGS)
 	}
 
 	Assert(FTSSubProc->procType == FtsProbeProc);
-	if (CheckPostmasterSignal(PMSIGNAL_WAKEN_FTS) && FTSSubProc->pid != 0)
+	if (CheckPostmasterSignal(PMSIGNAL_WAKEN_FTS))
 	{
-		signal_child(FTSSubProc->pid, SIGINT);
+		if (FTSSubProc->pid != 0)
+			signal_child(FTSSubProc->pid, SIGINT);
+		if (ArbiterSubProc->pid != 0)
+			signal_child(ArbiterSubProc->pid, SIGINT);
 	}
 
 	if (CheckPostmasterSignal(PMSIGNAL_START_ARBITER) &&

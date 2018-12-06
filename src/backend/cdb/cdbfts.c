@@ -122,24 +122,17 @@ ftsUnlock(void)
 void
 FtsNotifyProber(void)
 {
-	if (Gp_role != GP_ROLE_DISPATCH)
-	{
-		SendPostmasterSignal(PMSIGNAL_WAKEN_FTS);
-	}
-	else
-	{
-		Assert(Gp_role == GP_ROLE_DISPATCH);
-		uint8 probeTick = ftsProbeInfo->probeTick;
+	//Assert(Gp_role == GP_ROLE_DISPATCH);
+	uint8 probeTick = ftsProbeInfo->probeTick;
 
-		/* signal fts-probe */
-		SendPostmasterSignal(PMSIGNAL_WAKEN_FTS);
+	/* signal fts-probe */
+	SendPostmasterSignal(PMSIGNAL_WAKEN_FTS);
 
-		/* sit and spin */
-		while (probeTick == ftsProbeInfo->probeTick)
-		{
-			pg_usleep(50000);
-			CHECK_FOR_INTERRUPTS();
-		}
+	/* sit and spin */
+	while (probeTick == ftsProbeInfo->probeTick)
+	{
+		pg_usleep(50000);
+		CHECK_FOR_INTERRUPTS();
 	}
 }
 
