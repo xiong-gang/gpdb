@@ -297,11 +297,11 @@ getCdbComponentInfo(bool DNSLookupAsError)
 		pRow->port = DatumGetInt32(attr);
 
 		/*
-		 * is arbiter
+		 * is master prober
 		 */
-		attr = heap_getattr(gp_seg_config_tuple, Anum_gp_segment_configuration_arbiter, RelationGetDescr(gp_seg_config_rel), &isNull);
+		attr = heap_getattr(gp_seg_config_tuple, Anum_gp_segment_configuration_master_prober, RelationGetDescr(gp_seg_config_rel), &isNull);
 		Assert(!isNull);
-		pRow->isArbiter = DatumGetBool(attr);
+		pRow->isMasterProber = DatumGetBool(attr);
 
 		pRow->hostip = NULL;
 		getAddressesForDBid(pRow, DNSLookupAsError ? ERROR : LOG);
@@ -435,8 +435,8 @@ getCdbComponentInfo(bool DNSLookupAsError)
 	for (i = 0; i < component_databases->total_segment_dbs; i++)
 	{
 		cdbInfo = &component_databases->segment_db_info[i];
-		if (cdbInfo->isArbiter)
-			component_databases->arbiter_db_info = cdbInfo;
+		if (cdbInfo->isMasterProber)
+			component_databases->master_prober_info = cdbInfo;
 
 		if (cdbInfo->role != GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY || cdbInfo->hostip == NULL)
 			continue;
@@ -1407,12 +1407,12 @@ dbid_get_dbinfo(int16 dbid)
 		i->port = DatumGetInt32(attr);
 
 		/*
-		 * is arbiter
+		 * is master prober
 		 */
-		attr = heap_getattr(tuple, Anum_gp_segment_configuration_arbiter,
+		attr = heap_getattr(tuple, Anum_gp_segment_configuration_master_prober,
 							RelationGetDescr(rel), &isNull);
 		Assert(!isNull);
-		i->isArbiter = DatumGetBool(attr);
+		i->isMasterProber = DatumGetBool(attr);
 
 		Assert(systable_getnext(scan) == NULL); /* should be only 1 */
 	}

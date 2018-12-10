@@ -176,7 +176,6 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 
 		size = add_size(size, SharedSnapshotShmemSize());
 		size = add_size(size, FtsShmemSize());
-		size = add_size(size, Arbiter_ShmemSize());
 		size = add_size(size, tmShmemSize());
 		size = add_size(size, CheckpointerShmemSize());
 		size = add_size(size, CancelBackendMsgShmemSize());
@@ -264,7 +263,6 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
     FtsShmemInit();
-	Arbiter_ShmemInit();
     tmShmemInit();
 	InitBufferPool();
 

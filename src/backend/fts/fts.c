@@ -142,44 +142,6 @@ ftsprobe_start(void)
 	return 0;
 }
 
-int
-arbiterprobe_start(void)
-{
-	pid_t		FtsProbePID;
-
-	if (!shmArbiterControl->startArbiter)
-		return 0;
-
-#ifdef EXEC_BACKEND
-	switch ((FtsProbePID = ftsprobe_forkexec()))
-#else
-	switch ((FtsProbePID = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork ftsprobe process: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			ftsMain(0, NULL);
-			break;
-#endif
-		default:
-			return (int)FtsProbePID;
-	}
-
-	
-	/* shouldn't get here */
-	return 0;
-}
-
-
 /*=========================================================================
  * HELPER FUNCTIONS
  */
@@ -523,7 +485,7 @@ probeWalRepUpdateConfig(int16 dbid, int16 segindex, char role,
 }
 
 void
-probeWalRepUpdateArbiter(int16 dbid)
+probeWalRepUpdateMasterProber(int16 dbid)
 {
 	Relation configrel;
 	HeapTuple configtuple;
@@ -541,9 +503,9 @@ probeWalRepUpdateArbiter(int16 dbid)
 	configrel = heap_open(GpSegmentConfigRelationId,
 						  RowExclusiveLock);
 
-	/* update the old arbiter segment to false */
+	/* update the old master prober segment */
 	ScanKeyInit(&scankey,
-				Anum_gp_segment_configuration_arbiter,
+				Anum_gp_segment_configuration_master_prober,
 				BTEqualStrategyNumber, F_BOOLEQ,
 				BoolGetDatum(true));
 	sscan = systable_beginscan(configrel, InvalidOid, false, NULL, 1, &scankey);
@@ -551,18 +513,18 @@ probeWalRepUpdateArbiter(int16 dbid)
 	configtuple = systable_getnext(sscan);
 	if (!HeapTupleIsValid(configtuple))
 	{
-		elog(ERROR, "FTS cannot find arbiter=true in %s",
+		elog(ERROR, "FTS cannot find master_prober=true in %s",
 			 RelationGetRelationName(configrel));
 	}
 
-	configvals[Anum_gp_segment_configuration_arbiter-1] = BoolGetDatum(false);
-	repls[Anum_gp_segment_configuration_arbiter-1] = true;
+	configvals[Anum_gp_segment_configuration_master_prober-1] = BoolGetDatum(false);
+	repls[Anum_gp_segment_configuration_master_prober-1] = true;
 	newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
 								 configvals, confignulls, repls);
 	simple_heap_update(configrel, &configtuple->t_self, newtuple);
 	systable_endscan(sscan);
 
-	/* update the new arbiter segment to true */
+	/* update the new master prober segment */
 	ScanKeyInit(&scankey,
 				Anum_gp_segment_configuration_dbid,
 				BTEqualStrategyNumber, F_INT2EQ,
@@ -577,8 +539,8 @@ probeWalRepUpdateArbiter(int16 dbid)
 			 RelationGetRelationName(configrel));
 	}
 
-	configvals[Anum_gp_segment_configuration_arbiter-1] = BoolGetDatum(true);
-	repls[Anum_gp_segment_configuration_arbiter-1] = true;
+	configvals[Anum_gp_segment_configuration_master_prober-1] = BoolGetDatum(true);
+	repls[Anum_gp_segment_configuration_master_prober-1] = true;
 	newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
 								 configvals, confignulls, repls);
 	simple_heap_update(configrel, &configtuple->t_self, newtuple);
@@ -592,44 +554,62 @@ probeWalRepUpdateArbiter(int16 dbid)
 	CurrentResourceOwner = save;
 }
 
-static
-bool StandbyIsAlive()
+bool amMasterProber()
 {
-	return true;
-}
-
-
-static
-bool NotifyStandbyNewArbiter(CdbComponentDatabaseInfo *standby, int dbid)
-{
-	char message[50];
-	snprintf(message, 50, "%s:%d", FTS_MSG_NEW_ARBITER, dbid);
-	return FtsWalRepMessageOneSegment(standby, message);
+	return !IS_QUERY_DISPATCHER();
 }
 
 static
-CdbComponentDatabaseInfo *GetNewArbiter(CdbComponentDatabases *cdbs)
+bool standbyIsAlive()
 {
-	int i;
-	CdbComponentDatabaseInfo *arbiter = NULL;
-
-	for (i = 0; i < cdbs->total_segment_dbs; i++)
+	int walsndPid = 0;
+	LWLockAcquire(SyncRepLock, LW_SHARED);
+	for (i = 0; i < max_wal_senders; i++)
 	{
-		CdbComponentDatabaseInfo *cdb = &cdbs->segment_db_info[i];
-		if (!FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdb->dbid]) &&
-			cdb->role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+		if (WalSndCtl->walsnds[i].pid != 0)
 		{
-			arbiter = cdb;
+			walsndPid = WalSndCtl->walsnds[i].pid;
+			break;
+		}
+	}
+	LWLockRelease(SyncRepLock);
+
+	return (walsndPid != 0);
+}
+
+static
+bool notifyStandbyNewMasterProber(CdbComponentDatabases *cdbs, int dbid)
+{
+	CdbComponentDatabaseInfo *standby = NULL;
+	char		message[50];
+	int		i;
+
+	for (i = 0; i < cdbs->total_entry_dbs; i++)
+	{
+		CdbComponentDatabaseInfo *cdb = &cdbs->entry_db_info[i];
+		if (cdb->role != GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+		{
+			standby = cdb;
 			break;
 		}
 	}
 
-	return arbiter;
+	if (standby == NULL)
+		return false;
+
+	if (!standbyIsAlive(standby))
+	{
+		elog(LOG, "FTS: cannot start new master prober when "
+				"standby is not reachable");
+		return false;
+	}
+
+	snprintf(message, sizeof(message), FTS_MSG_NEW_MASTER_PROBER_FMT, dbid);
+	return FtsWalRepMessageOneSegment(standby, message);
 }
 
-
 static
-bool startArbiter(CdbComponentDatabases *cdbs)
+bool startMasterProber(CdbComponentDatabases *cdbs)
 {
 	char message[200];
 	CdbComponentDatabaseInfo *master = NULL;
@@ -648,48 +628,96 @@ bool startArbiter(CdbComponentDatabases *cdbs)
 	if (!standby || !master)
 		return false;
 
+	/*
+	 * "START_MASTER_PROBER;<master_dbid>;<master_role>;<master_hostip>;<master_port>;
+	 * <standby_dbid>;<standby_role>;<standby_hostip>;<standby_port>"
+	 */
 	snprintf(message, 200,
-			"%s;%s;%d;%s;%d",
-			FTS_MSG_START_ARBITER, master->hostip, master->port,
-			standby->hostip, standby->port);
-	return FtsWalRepMessageOneSegment(cdbs->arbiter_db_info, message);
+			FTS_MSG_START_MASTER_PROBER_FMT,
+			master->dbid, master->role, master->hostip, master->port,
+			standby->dbid, standby->role, standby->hostip, standby->port);
+	return FtsWalRepMessageOneSegment(cdbs->master_prober_info, message);
 }
 
 static
-void appointNewArbiter(CdbComponentDatabases *cdbs)
+bool appointNewMasterProber(CdbComponentDatabases *cdbs)
 {
 	int i;
-	CdbComponentDatabaseInfo *master = NULL;
-	CdbComponentDatabaseInfo *standby = NULL;
+	CdbComponentDatabaseInfo *masterProber = NULL;
 
-	CdbComponentDatabaseInfo *arbiter = GetNewArbiter(cdbs);
-	if (arbiter == NULL)
+	for (i = 0; i < cdbs->total_segment_dbs; i++)
 	{
-		elog(WARNING, "No valid arbiter candidate");
-		return;
-	}
-	cdbs->arbiter_db_info = arbiter;
-
-	for (i = 0; i < cdbs->total_entry_dbs; i++)
-	{
-		CdbComponentDatabaseInfo *cdb = &cdbs->entry_db_info[i];
-		if (cdb->preferred_role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
-			master = cdb;
-		else
-			standby = cdb;
+		CdbComponentDatabaseInfo *cdb = &cdbs->segment_db_info[i];
+		if (!FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdb->dbid]) &&
+			cdb->role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+		{
+			masterProber = cdb;
+			break;
+		}
 	}
 
-	/* Arbiter is appoint when master and standby are both alive */
-	if (!StandbyIsAlive())
-		return;
+	if (masterProber == NULL)
+	{
+		elog(LOG, "FTS: No valid master prober");
+		return false;
+	}
+	cdbs->master_prober_info = masterProber;
 
-	if (!NotifyStandbyNewArbiter(standby, arbiter->dbid))
-		return;
+	if (!notifyStandbyNewMasterProber(cdbs, masterProber->dbid))
+	{
+		elog(LOG, "FTS: failed to notify standby the new master prober");
+		return false;
+	}
 
-	if (!startArbiter(cdbs))
-		return;
+	if (!startMasterProber(cdbs))
+	{
+		elog(LOG, "FTS: failed to start master prober");
+		return false;
+	}
 
-	probeWalRepUpdateArbiter(arbiter->dbid);
+	probeWalRepUpdateMasterProber(masterProber->dbid);
+	return true;
+}
+
+static
+CdbComponentDatabases *initMasterProberTargets()
+{
+	CdbComponentDatabaseInfo		*master;
+	CdbComponentDatabaseInfo		*standby;
+	CdbComponentDatabases		*cdbs;
+
+	cdbs = palloc0(sizeof(CdbComponentDatabases));
+	cdbs->total_entry_dbs = 2;
+	cdbs->entry_db_info =
+		(CdbComponentDatabaseInfo *) palloc0(sizeof(CdbComponentDatabaseInfo) * 2);
+
+	master = &cdbs->entry_db_info[0];
+
+
+	master->dbid = shmFtsControl->masterInfo[0].dbid;
+	master->role = shmFtsControl->masterInfo[0].role;
+	master->preferred_role = shmFtsControl->masterInfo[0].preferredRole;
+	master->port = shmFtsControl->masterInfo[0].port;
+	master->hostip = shmFtsControl->masterInfo[0].hostIP;
+	master->segindex = -1;
+	master->mode = 's';
+	master->status = 'u';
+	master->hostname = "";
+	master->address = "";
+
+	standby = &cdbs->entry_db_info[1];
+	standby->dbid = shmFtsControl->masterInfo[1].dbid;
+	standby->role = shmFtsControl->masterInfo[1].role;
+	standby->preferred_role = shmFtsControl->masterInfo[1].preferredRole;
+	standby->port = shmFtsControl->masterInfo[1].port;
+	standby->hostip = shmFtsControl->masterInfo[1].hostIP;
+	standby->segindex = -1;
+	standby->mode = 's';
+	standby->status = 'u';
+	standby->hostname = "";
+	standby->address = "";
+
+	return cdbs;
 }
 
 static
@@ -699,20 +727,23 @@ void FtsLoop()
 	MemoryContext probeContext = NULL, oldContext = NULL;
 	time_t elapsed,	probe_start_time;
 	CdbComponentDatabases *cdbs = NULL;
-	bool	arbiterStarted = false;
+	bool		masterProberStarted = false;
+	bool		has_mirrors = false;
 
 	probeContext = AllocSetContextCreate(TopMemoryContext,
 										 "FtsProbeMemCtxt",
 										 ALLOCSET_DEFAULT_INITSIZE,	/* always have some memory */
 										 ALLOCSET_DEFAULT_INITSIZE,
 										 ALLOCSET_DEFAULT_MAXSIZE);
-	//WIP
-	bool standby_down = false;
+
+	if (amMasterProber())
+	{
+		cdbs = initMasterProberTargets();
+		has_mirrors = true;
+	}
 
 	while (!shutdown_requested)
 	{
-		bool		has_mirrors;
-
 		/* no need to live on if postmaster has died */
 		if (!PostmasterIsAlive())
 			exit(1);
@@ -725,7 +756,7 @@ void FtsLoop()
 
 		probe_start_time = time(NULL);
 
-		if (am_ftsprobe)
+		if (!amMasterProber())
 		{
 			/* Need a transaction to access the catalogs */
 			StartTransactionCommand();
@@ -736,40 +767,6 @@ void FtsLoop()
 
 			/* close the transaction we started above */
 			CommitTransactionCommand();
-		}
-		else
-		{
-			has_mirrors = !standby_down;
-			cdbs = palloc0(sizeof(CdbComponentDatabases));
-			cdbs->total_segment_dbs = 0;
-			cdbs->total_segments = 0;
-			cdbs->total_entry_dbs = 2;
-			cdbs->segment_db_info = NULL;
-			cdbs->entry_db_info = 
-				(CdbComponentDatabaseInfo *) palloc0(sizeof(CdbComponentDatabaseInfo) * 2);
-
-			// TODO:
-			cdbs->entry_db_info[0].dbid = 1;
-			cdbs->entry_db_info[0].segindex = -1;
-			cdbs->entry_db_info[0].role = 'p';
-			cdbs->entry_db_info[0].preferred_role = 'p';
-			cdbs->entry_db_info[0].mode = 's';
-			cdbs->entry_db_info[0].status = 'u';
-			cdbs->entry_db_info[0].hostname = "";
-			cdbs->entry_db_info[0].address = "";
-			cdbs->entry_db_info[0].port = shmArbiterControl->masterInfo[0].port;
-			cdbs->entry_db_info[0].hostip = shmArbiterControl->masterInfo[0].hostIP;
-
-			cdbs->entry_db_info[1].dbid = 8;
-			cdbs->entry_db_info[1].segindex = -1;
-			cdbs->entry_db_info[1].role = 'm';
-			cdbs->entry_db_info[1].preferred_role = 'm';
-			cdbs->entry_db_info[1].mode = 's';
-			cdbs->entry_db_info[1].status = 'u';
-			cdbs->entry_db_info[1].hostname = "";
-			cdbs->entry_db_info[1].address = "";
-			cdbs->entry_db_info[1].port = shmArbiterControl->masterInfo[1].port;
-			cdbs->entry_db_info[1].hostip = shmArbiterControl->masterInfo[1].hostIP;
 		}
 
 		/* Reset this as we are performing the probe */
@@ -801,7 +798,7 @@ void FtsLoop()
 			 */
 			oldContext = MemoryContextSwitchTo(probeContext);
 
-			updated_probe_state = FtsWalRepMessageSegments(cdbs, &arbiterStarted);
+			updated_probe_state = FtsWalRepMessageSegments(cdbs, &masterProberStarted);
 
 			MemoryContextSwitchTo(oldContext);
 
@@ -813,13 +810,23 @@ void FtsLoop()
 				ftsProbeInfo->fts_statusVersion++;
 		}
 
-		if (cdbs->arbiter_db_info)
+		if (amMasterProber() && cdbs->master_prober_info)
 		{
-			/* arbiter is down, appoint a new one */
-			if (FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdbs->arbiter_db_info->dbid]))
-				appointNewArbiter(cdbs);
-			else if (!arbiterStarted)
-				startArbiter(cdbs);
+			/* master prober is down, appoint a new one */
+			if (FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdbs->master_prober_info->dbid]))
+			{
+				elog(LOG, "FTS:  master prober on segment %d is down, start a new one",
+					 cdbs->master_prober_info->dbid);
+
+				if (!appointNewMasterProber(cdbs))
+					elog(LOG, "FTS: failed to start a new master prober");
+			}
+			else if (!masterProberStarted)
+			{
+				startMasterProber(cdbs);
+				elogif(gp_log_fts == GPVARS_VERBOSITY_DEBUG, LOG,
+						"FTS: start master prober");
+			}
 		}
 
 		/* free current components info and free ip addr caches */	

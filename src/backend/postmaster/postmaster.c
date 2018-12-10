@@ -136,6 +136,7 @@
 #include "utils/timeout.h"
 
 #include "cdb/cdbgang.h"                /* cdbgang_parse_gpqeid_params */
+#include "cdb/cdbfts.h"
 #include "cdb/cdbtm.h"
 #include "cdb/cdbvars.h"
 
@@ -209,7 +210,6 @@ typedef enum pmsub_type
 	BackoffProc,
 	PerfmonSegmentInfoProc,
 	GlobalDeadLockDetectorProc,
-	ArbiterProbeProc,
 	MaxPMSubType
 } PMSubType;
 
@@ -288,7 +288,6 @@ static pid_t StartupPID = 0,
 			AutoVacPID = 0,
 			PgArchPID = 0,
 			PgStatPID = 0,
-			ArbiterPID = 0,
 			SysLoggerPID = 0;
 
 /* Startup/shutdown state */
@@ -414,14 +413,9 @@ static PMSubProc PMSubProcList[MaxPMSubType] =
 	{0, GlobalDeadLockDetectorProc,
 	(PMSubStartCallback*)&global_deadlock_detector_start,
 	"global deadlock detector process", PMSUBPROC_FLAG_QD, true},
-	{0, ArbiterProbeProc,
-	(PMSubStartCallback*)&arbiterprobe_start,
-	"arbiterprobe process", PMSUBPROC_FLAG_QE, true},
 };
 
-
 static PMSubProc *FTSSubProc = &PMSubProcList[FtsProbeProc];
-static PMSubProc *ArbiterSubProc = &PMSubProcList[ArbiterProbeProc];
 
 static bool ReachedNormalRunning = false;		/* T if we've reached PM_RUN */
 
@@ -1654,6 +1648,8 @@ ServiceStartable(PMSubProc *subProc)
 		result = 0;
 	else if (subProc->procType == PerfmonSegmentInfoProc && !gp_enable_gpperfmon && !gp_enable_query_metrics)
 		result = 0;
+	else if (subProc->procType == FtsProbeProc)
+		result = shouldStartFts();
 	else
 		result = ((subProc->flags & flagNeeded) != 0);
 
@@ -5542,28 +5538,24 @@ sigusr1_handler(SIGNAL_ARGS)
 	}
 
 	Assert(FTSSubProc->procType == FtsProbeProc);
-	if (CheckPostmasterSignal(PMSIGNAL_WAKEN_FTS))
+	if (CheckPostmasterSignal(PMSIGNAL_WAKEN_FTS) && FTSSubProc->pid != 0)
 	{
-		if (FTSSubProc->pid != 0)
-			signal_child(FTSSubProc->pid, SIGINT);
-		if (ArbiterSubProc->pid != 0)
-			signal_child(ArbiterSubProc->pid, SIGINT);
+		signal_child(FTSSubProc->pid, SIGINT);
 	}
 
-	if (CheckPostmasterSignal(PMSIGNAL_START_ARBITER) &&
+	//todo:
+	if (CheckPostmasterSignal(PMSIGNAL_START_MASTER_PROBER) &&
 		Shutdown == NoShutdown)
 	{
-		PMSubProc *arbiterSubProc = &PMSubProcList[ArbiterProbeProc];
-
-		if (arbiterSubProc->pid == 0 &&
+		if (FTSSubProc->pid == 0 &&
 			StartupPID == 0 &&
 			pmState > PM_STARTUP &&
 			!FatalError &&
 			Shutdown == NoShutdown &&
-			ServiceStartable(arbiterSubProc))
+			ServiceStartable(FTSSubProc))
 		{
-			arbiterSubProc->pid =
-				(arbiterSubProc->serverStart)();
+			FTSSubProc->pid =
+				(FTSSubProc->serverStart)();
 		}
 	}
 

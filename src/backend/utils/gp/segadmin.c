@@ -272,8 +272,8 @@ add_segment_config(seginfo *i)
 		CharGetDatum(i->db.status);
 	values[Anum_gp_segment_configuration_port - 1] =
 		Int32GetDatum(i->db.port);
-	values[Anum_gp_segment_configuration_arbiter - 1] =
-		BoolGetDatum(i->db.isArbiter);
+	values[Anum_gp_segment_configuration_master_prober - 1] =
+		BoolGetDatum(i->db.isMasterProber);
 	values[Anum_gp_segment_configuration_hostname - 1] =
 		CStringGetTextDatum(i->db.hostname);
 	values[Anum_gp_segment_configuration_address - 1] =
@@ -414,7 +414,7 @@ gp_add_segment_primary(PG_FUNCTION_ARGS)
 	new.db.preferred_role = GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY;
 	new.db.mode = GP_SEGMENT_CONFIGURATION_MODE_NOTINSYNC;
 	new.db.status = GP_SEGMENT_CONFIGURATION_STATUS_UP;
-	new.db.isArbiter = false;
+	new.db.isMasterProber = false;
 
 	add_segment(new);
 
@@ -464,8 +464,8 @@ gp_add_segment(PG_FUNCTION_ARGS)
 	new.db.port = PG_GETARG_INT32(6);
 
 	if (PG_ARGISNULL(7))
-		elog(ERROR, "arbiter cannot be NULL");
-	new.db.isArbiter = PG_GETARG_BOOL(7);
+		elog(ERROR, "isMasterProber cannot be NULL");
+	new.db.isMasterProber = PG_GETARG_BOOL(7);
 
 	if (PG_ARGISNULL(8))
 		elog(ERROR, "hostname cannot be NULL");
@@ -568,7 +568,7 @@ gp_add_segment_mirror(PG_FUNCTION_ARGS)
 	new.db.status = GP_SEGMENT_CONFIGURATION_STATUS_DOWN;
 	new.db.role = GP_SEGMENT_CONFIGURATION_ROLE_MIRROR;
 	new.db.preferred_role = GP_SEGMENT_CONFIGURATION_ROLE_MIRROR;
-	new.db.isArbiter = false;
+	new.db.isMasterProber = false;
 
 	add_segment(new);
 
@@ -687,7 +687,7 @@ gp_add_master_standby(PG_FUNCTION_ARGS)
 	new.db.preferred_role = GP_SEGMENT_CONFIGURATION_ROLE_MIRROR;
 	new.db.mode = GP_SEGMENT_CONFIGURATION_MODE_INSYNC;
 	new.db.status = GP_SEGMENT_CONFIGURATION_STATUS_UP;
-	new.db.isArbiter = false;
+	new.db.isMasterProber = false;
 
 	new.db.hostname = TextDatumGetCString(PG_GETARG_TEXT_P(0));
 

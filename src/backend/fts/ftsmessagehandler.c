@@ -19,6 +19,7 @@
 #include "libpq-fe.h"
 #include "libpq-int.h"
 #include "cdb/cdbfts.h"
+#include "cdb/cdbvars.h"
 #include "access/xlog.h"
 #include "libpq/pqformat.h"
 #include "libpq/libpq.h"
@@ -221,9 +222,9 @@ SendFtsResponse(FtsResponse *response, const char *messagetype)
 	pq_sendint(&buf, -1, 4);		/* typmod */
 	pq_sendint(&buf, 0, 2);		/* format code */
 
-	pq_sendstring(&buf, "is_role_arbiter");
+	pq_sendstring(&buf, "is_master_prober");
 	pq_sendint(&buf, 0, 4);		/* table oid */
-	pq_sendint(&buf, Anum_fts_message_response_is_role_arbiter, 2);		/* attnum */
+	pq_sendint(&buf, Anum_fts_message_response_is_master_prober, 2);		/* attnum */
 	pq_sendint(&buf, BOOLOID, 4);		/* type oid */
 	pq_sendint(&buf, 1, 2);	/* typlen */
 	pq_sendint(&buf, -1, 4);		/* typmod */
@@ -251,7 +252,7 @@ SendFtsResponse(FtsResponse *response, const char *messagetype)
 	pq_sendint(&buf, response->RequestRetry, 1);
 
 	pq_sendint(&buf, 1, 4); /* col6 len */
-	pq_sendint(&buf, response->IsRoleArbiter, 1);
+	pq_sendint(&buf, response->IsMasterProber, 1);
 
 	pq_endmessage(&buf);
 	EndCommand(messagetype, DestRemote);
@@ -267,7 +268,7 @@ HandleFtsWalRepProbe(void)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
-		false, /* IsRoleArbiter */
+		false, /* IsMasterProber */
 	};
 
 	if (am_mirror)
@@ -324,7 +325,7 @@ HandleFtsWalRepSyncRepOff(void)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
-		false, /* IsRoleArbiter */
+		false, /* IsMasterProber */
 	};
 
 	ereport(LOG,
@@ -336,7 +337,7 @@ HandleFtsWalRepSyncRepOff(void)
 }
 
 static void
-HandleFtsWalRepPromote(void)
+HandleFtsWalRepPromote(const char *query)
 {
 	FtsResponse response = {
 		false, /* IsMirrorUp */
@@ -344,50 +345,58 @@ HandleFtsWalRepPromote(void)
 		false, /* IsSyncRepEnabled */
 		am_mirror,  /* IsRoleMirror */
 		false, /* RequestRetry */
-		false, /* IsRoleArbiter */
+		false, /* IsMasterProber */
 	};
+	int dbid;
 
 	ereport(LOG,
 			(errmsg("promoting mirror to primary due to FTS request")));
 
-	/*
-	 * FTS sends promote message to a mirror.  The mirror may be undergoing
-	 * promotion.  Promote messages should therefore be handled in an
-	 * idempotent way.
-	 */
-	DBState state = GetCurrentDBState();
-	if (state == DB_IN_STANDBY_MODE)
-		SignalPromote();
+	sscanf(query, FTS_MSG_PROMOTE_FMT, &dbid);
+
+	if (IS_QUERY_DISPATCHER() && dbid != shmFtsControl->masterProberDBID)
+	{
+		elog(LOG, "ignoring promote request from deprecated master prober %d,"
+			 " current master prober %d", dbid, shmFtsControl->masterProberDBID);
+	}
 	else
 	{
-		elog(LOG, "ignoring promote request, walreceiver not running,"
-			 " DBState = %d", state);
+		/*
+		 * FTS sends promote message to a mirror.  The mirror may be undergoing
+		 * promotion.  Promote messages should therefore be handled in an
+		 * idempotent way.
+		 */
+		DBState state = GetCurrentDBState();
+		if (state == DB_IN_STANDBY_MODE)
+			SignalPromote();
+		else
+		{
+			elog(LOG, "ignoring promote request, walreceiver not running,"
+				 " DBState = %d", state);
+		}
 	}
 
 	SendFtsResponse(&response, FTS_MSG_PROMOTE);
 }
 
-static void
-HandleFtsWalRepNewArbiter(const char *query)
+static bool
+ftsMessageNextParam(char **cpp, char **npp)
 {
-	FtsResponse response = {
-		false, /* IsMirrorUp */
-		false, /* IsInSync */
-		false, /* IsSyncRepEnabled */
-		false, /* IsRoleMirror */
-		false, /* RequestRetry */
-	};
-	int dbid;
+	*cpp = *npp;
+	if (!*cpp)
+		return false;
 
-	sscanf(query, FTS_MSG_NEW_ARBITER":%d", &dbid);
-	ereport(LOG,
-			(errmsg("turning off synchronous wal replication due to FTS request")));
-
-	SendFtsResponse(&response, FTS_MSG_NEW_ARBITER);
+	*npp = strchr(*npp, ';');
+	if (*npp)
+	{
+		**npp = '\0';
+		++*npp;
+	}
+	return true;
 }
 
 static void
-HandleFtsWalRepStartArbiter(const char *query)
+HandleFtsWalRepNewMasterProber(const char *query)
 {
 	FtsResponse response = {
 		false, /* IsMirrorUp */
@@ -395,16 +404,57 @@ HandleFtsWalRepStartArbiter(const char *query)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
-		false, /* IsRoleArbiter */
+		false, /* IsMasterProber */
 	};
 
-	sscanf(query, FTS_MSG_START_ARBITER";%[^;];%d;%[^;];%d",
-		   shmArbiterControl->masterInfo[0].hostIP, &shmArbiterControl->masterInfo[0].port,
-		   shmArbiterControl->masterInfo[1].hostIP, &shmArbiterControl->masterInfo[1].port);
+	sscanf(query, FTS_MSG_NEW_MASTER_PROBER_FMT, &shmFtsControl->masterProberDBID);
+	SendFtsResponse(&response, FTS_MSG_NEW_MASTER_PROBER);
+}
 
-	shmArbiterControl->startArbiter = true;
-	SendPostmasterSignal(PMSIGNAL_START_ARBITER);
-	SendFtsResponse(&response, FTS_MSG_START_ARBITER);
+static void
+HandleFtsWalRepStartMasterProber(const char *query)
+{
+	FtsResponse response = {
+		false, /* IsMirrorUp */
+		false, /* IsInSync */
+		false, /* IsSyncRepEnabled */
+		false, /* IsRoleMirror */
+		false, /* RequestRetry */
+		false, /* IsMasterProber */
+	};
+
+	/* START_MASTER_PROBER;<prober_dbid>;<dbid>;<role>;<hostip>;<port>;<dbid>;<role>;<hostip>;<port> */
+	char	   *message = pstrdup(query);
+	char	   *cp;
+	char	   *np = message;
+
+	if (ftsMessageNextParam(&cp, &np) &&
+		strncmp(cp, FTS_MSG_START_MASTER_PROBER, strlen(FTS_MSG_START_MASTER_PROBER)) == 0)
+		elog(ERROR, "Unexpected message");
+
+	if (ftsMessageNextParam(&cp, &np))
+		shmFtsControl->masterInfo[0].dbid = strtol(cp, NULL, 10);
+	if (ftsMessageNextParam(&cp, &np))
+		shmFtsControl->masterInfo[0].role = *cp;
+	if (ftsMessageNextParam(&cp, &np))
+		strncpy(shmFtsControl->masterInfo[0].hostIP, cp, sizeof(shmFtsControl->masterInfo[0].hostIP));
+	if (ftsMessageNextParam(&cp, &np))
+		shmFtsControl->masterInfo[0].port = strtol(cp, NULL, 10);
+	shmFtsControl->masterInfo[0].preferredRole = 'p';
+
+	if (ftsMessageNextParam(&cp, &np))
+		shmFtsControl->masterInfo[1].dbid = strtol(cp, NULL, 10);
+	if (ftsMessageNextParam(&cp, &np))
+		shmFtsControl->masterInfo[1].role = *cp;
+	if (ftsMessageNextParam(&cp, &np))
+		strncpy(shmFtsControl->masterInfo[1].hostIP, cp, sizeof(shmFtsControl->masterInfo[1].hostIP));
+	if (ftsMessageNextParam(&cp, &np))
+		shmFtsControl->masterInfo[1].port = strtol(cp, NULL, 10);
+	shmFtsControl->masterInfo[0].preferredRole = 'm';
+
+	shmFtsControl->startMasterProber = true;
+	SendPostmasterSignal(PMSIGNAL_START_MASTER_PROBER);
+	SendFtsResponse(&response, FTS_MSG_START_MASTER_PROBER);
 }
 
 void
@@ -420,13 +470,13 @@ HandleFtsMessage(const char* query_string)
 		HandleFtsWalRepSyncRepOff();
 	else if (strncmp(query_string, FTS_MSG_PROMOTE,
 					 strlen(FTS_MSG_PROMOTE)) == 0)
-		HandleFtsWalRepPromote();
-	else if (strncmp(query_string, FTS_MSG_NEW_ARBITER,
-					 strlen(FTS_MSG_NEW_ARBITER)) == 0)
-		HandleFtsWalRepNewArbiter(query_string);
-	else if (strncmp(query_string, FTS_MSG_START_ARBITER,
-					 strlen(FTS_MSG_START_ARBITER)) == 0)
-		HandleFtsWalRepStartArbiter(query_string);
+		HandleFtsWalRepPromote(query_string);
+	else if (strncmp(query_string, FTS_MSG_NEW_MASTER_PROBER,
+					 strlen(FTS_MSG_NEW_MASTER_PROBER)) == 0)
+		HandleFtsWalRepNewMasterProber(query_string);
+	else if (strncmp(query_string, FTS_MSG_START_MASTER_PROBER,
+					 strlen(FTS_MSG_START_MASTER_PROBER)) == 0)
+		HandleFtsWalRepStartMasterProber(query_string);
 	else
 		ereport(ERROR,
 				(errmsg("received unknown FTS query: %s", query_string)));

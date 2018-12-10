@@ -44,43 +44,14 @@
 
 volatile FtsProbeInfo *ftsProbeInfo = NULL;	/* Probe process updates this structure */
 static LWLockId ftsControlLock;
+FtsControlBlock *shmFtsControl = NULL;
 
-ArbiterControlBlock *shmArbiterControl = NULL;
-
-Size
-Arbiter_ShmemSize()
-{
-	return sizeof(ArbiterControlBlock);
-}
-
-void
-Arbiter_ShmemInit()
-{
-	bool found = false;
-	Size shmemSize = Arbiter_ShmemSize();
-	shmArbiterControl = (ArbiterControlBlock*)
-				ShmemInitStruct("Arbiter Control Block", shmemSize, &found);	
-	if (!shmArbiterControl)
-		elog(FATAL, "could not initialize arbiter shared memory");
-
-	if (!found)
-	{
-		shmArbiterControl->startArbiter = false;
-		shmArbiterControl->isStandbyInSync = false;
-	}
-}
 /*
  * get fts share memory size
  */
 int
 FtsShmemSize(void)
 {
-	/*
-	 * this shared memory block doesn't even need to *exist* on the QEs!
-	 */
-	if ((Gp_role != GP_ROLE_DISPATCH) && (Gp_role != GP_ROLE_UTILITY))
-		return 0;
-
 	return MAXALIGN(sizeof(FtsControlBlock));
 }
 
@@ -88,22 +59,25 @@ void
 FtsShmemInit(void)
 {
 	bool		found;
-	FtsControlBlock *shared;
 
-	shared = (FtsControlBlock *) ShmemInitStruct("Fault Tolerance manager", FtsShmemSize(), &found);
-	if (!shared)
+	shmFtsControl = (FtsControlBlock *) ShmemInitStruct("Fault Tolerance manager", FtsShmemSize(), &found);
+	if (!shmFtsControl)
 		elog(FATAL, "FTS: could not initialize fault tolerance manager share memory");
 
 	/* Initialize locks and shared memory area */
-	ftsControlLock = shared->ControlLock;
-	ftsProbeInfo = &shared->fts_probe_info;
+	ftsControlLock = shmFtsControl->ControlLock;
+	ftsProbeInfo = &shmFtsControl->fts_probe_info;
 
-	if (!IsUnderPostmaster)
+	if (!IsUnderPostmaster && !found)
 	{
-		shared->ControlLock = LWLockAssign();
-		ftsControlLock = shared->ControlLock;
+		shmFtsControl->ControlLock = LWLockAssign();
+		ftsControlLock = shmFtsControl->ControlLock;
 
-		shared->fts_probe_info.fts_statusVersion = 0;
+		shmFtsControl->fts_probe_info.fts_statusVersion = 0;
+		shmFtsControl->isStandbyInSync = false;
+		shmFtsControl->startMasterProber = false;
+		shmFtsControl->masterInfo[0] = 'p';
+		shmFtsControl->masterInfo[1] = 'm';
 	}
 }
 
@@ -181,4 +155,10 @@ uint8
 getFtsVersion(void)
 {
 	return ftsProbeInfo->fts_statusVersion;
+}
+
+bool
+shouldStartFts(void)
+{
+	return (IS_QUERY_DISPATCHER() || shmFtsControl->startMasterProber);
 }

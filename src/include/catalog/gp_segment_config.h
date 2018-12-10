@@ -53,7 +53,7 @@ CATALOG(gp_segment_configuration,5036) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 	char		status;
 	int32		port;
 
-	bool		arbiter;
+	bool		master_prober;
 #ifdef CATALOG_VARLEN
 	text		hostname;
 	text		address;
@@ -84,7 +84,7 @@ typedef FormData_gp_segment_configuration *Form_gp_segment_configuration;
 #define Anum_gp_segment_configuration_mode				5
 #define Anum_gp_segment_configuration_status			6
 #define Anum_gp_segment_configuration_port				7
-#define Anum_gp_segment_configuration_arbiter			8
+#define Anum_gp_segment_configuration_master_prober		8
 #define Anum_gp_segment_configuration_hostname		9
 #define Anum_gp_segment_configuration_address			10
 #define Anum_gp_segment_configuration_datadir			11

@@ -560,7 +560,12 @@ ftsSend(fts_context *context)
 				else if (ftsInfo->state == FTS_SYNCREP_OFF_SEGMENT)
 					message = FTS_MSG_SYNCREP_OFF;
 				else
-					message = FTS_MSG_PROMOTE;
+				{
+					char tmpStr[30];
+					snprintf(tmpStr, sizeof(tmpStr), FTS_MSG_PROMOTE_FMT, GpIdentity.dbid);
+					message = tmpStr;
+				}
+
 				if (PQsendQuery(ftsInfo->conn, message))
 				{
 					/*
@@ -628,15 +633,15 @@ probeRecordResponse(fts_segment_info *ftsInfo, PGresult *result)
 	Assert (retryRequested);
 	ftsInfo->result.retryRequested = *retryRequested;
 
-	int *isRoleArbiter = (int *) PQgetvalue(result, 0,
-										   Anum_fts_message_response_is_role_arbiter);
-	Assert (isRoleArbiter);
-	ftsInfo->result.isRoleArbiter = *isRoleArbiter;
+	int *isMasterProber = (int *) PQgetvalue(result, 0,
+										   Anum_fts_message_response_is_master_prober);
+	Assert (isMasterProber);
+	ftsInfo->result.isMasterProber = *isMasterProber;
 
 	elogif(gp_log_fts >= GPVARS_VERBOSITY_TERSE, LOG,
 		   "FTS: segment (content=%d, dbid=%d, role=%c) reported "
 		   "isMirrorUp %d, isInSync %d, isSyncRepEnabled %d, "
-		   "isRoleMirror %d, retryRequested %d and isRoleArbiter %d  to the prober.",
+		   "isRoleMirror %d, retryRequested %d and isMasterProber %d  to the prober.",
 		   ftsInfo->primary_cdbinfo->segindex,
 		   ftsInfo->primary_cdbinfo->dbid,
 		   ftsInfo->primary_cdbinfo->role,
@@ -645,7 +650,7 @@ probeRecordResponse(fts_segment_info *ftsInfo, PGresult *result)
 		   ftsInfo->result.isSyncRepEnabled,
 		   ftsInfo->result.isRoleMirror,
 		   ftsInfo->result.retryRequested,
-		   ftsInfo->result.isRoleArbiter);
+		   ftsInfo->result.isMasterProber);
 }
 
 /*
@@ -1024,7 +1029,7 @@ processResponse(fts_context *context)
 					{
 						if (!am_ftsprobe) 
 						{
-							shmArbiterControl->isStandbyInSync = false;
+							shmFtsControl->isStandbyInSync = false;
 						}
 						else
 						{
@@ -1094,7 +1099,7 @@ processResponse(fts_context *context)
 					ftsInfo->state = FTS_RESPONSE_PROCESSED;
 
 					if (!am_ftsprobe)
-						shmArbiterControl->isStandbyInSync = IsInSync;
+						shmFtsControl->isStandbyInSync = IsInSync;
 				}
 				break;
 			case FTS_PROBE_FAILED:
@@ -1149,7 +1154,7 @@ processResponse(fts_context *context)
 						   "FTS promoting mirror (content=%d, dbid=%d) "
 						   "to be the new primary",
 						   mirror->segindex, mirror->dbid);
-					if (am_ftsprobe || shmArbiterControl->isStandbyInSync)
+					if (am_ftsprobe || shmFtsControl->isStandbyInSync)
 					{
 						ftsInfo->state = FTS_PROMOTE_SEGMENT;
 						ftsInfo->primary_cdbinfo = mirror;
@@ -1288,7 +1293,7 @@ FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context)
 		ftsInfo->result.isSyncRepEnabled = false;
 		ftsInfo->result.retryRequested = false;
 		ftsInfo->result.isRoleMirror = false;
-		ftsInfo->result.isRoleArbiter = false;
+		ftsInfo->result.isMasterProber = false;
 		ftsInfo->result.dbid = primary->dbid;
 		ftsInfo->state = FTS_PROBE_SEGMENT;
 		ftsInfo->recovery_making_progress = false;
@@ -1309,11 +1314,11 @@ InitPollFds(size_t size)
 }
 
 bool
-FtsWalRepMessageSegments(CdbComponentDatabases *cdbs, bool *arbiterStarted)
+FtsWalRepMessageSegments(CdbComponentDatabases *cdbs, bool *masterProberStarted)
 {
 	bool is_updated = false;
 	fts_context context;
-	fts_result *arbiterRes = NULL;
+	fts_result *masterProberRes = NULL;
 
 	FtsWalRepInitProbeContext(cdbs, &context);
 	InitPollFds(context.num_pairs);
@@ -1328,23 +1333,21 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs, bool *arbiterStarted)
 		is_updated |= processResponse(&context);
 	}
 
-	if (cdbs->arbiter_db_info)
+	if (!amMasterProber() && cdbs->master_prober_info)
 	{
 		int i;
 		for (i = 0; i < context.num_pairs; i++)
 		{
 			fts_result *result = &context.perSegInfos[i].result;
-			if (result->dbid == cdbs->arbiter_db_info->dbid)
+			if (result->dbid == cdbs->master_prober_info->dbid)
 			{
-				arbiterRes = result;
+				masterProberRes = result;
 				break;
 			}
 		}
 
-		if (arbiterRes)
-		{
-			*arbiterStarted = arbiterRes->isRoleArbiter;
-		}
+		if (masterProberRes)
+			*masterProberStarted = masterProberRes->isMasterProber;
 	}
 
 	int i;

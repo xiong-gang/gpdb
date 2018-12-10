@@ -24,8 +24,15 @@
 #define	FTS_MSG_PROBE "PROBE"
 #define FTS_MSG_SYNCREP_OFF "SYNCREP_OFF"
 #define FTS_MSG_PROMOTE "PROMOTE"
-#define FTS_MSG_NEW_ARBITER "NEW_ARBITER"
-#define FTS_MSG_START_ARBITER "START_ARBITER"
+#define FTS_MSG_NEW_MASTER_PROBER "NEW_MASTER_PROBER"
+#define FTS_MSG_START_MASTER_PROBER "START_MASTER_PROBER"
+
+#define FTS_MSG_PROMOTE_FMT \
+	FTS_MSG_PROMOTE":%d"
+#define FTS_MSG_NEW_MASTER_PROBER_FMT \
+	FTS_MSG_NEW_MASTER_PROBER":%d"
+#define FTS_MSG_START_MASTER_PROBER_FMT \
+	FTS_MSG_START_MASTER_PROBER";%d;%c;%s;%d;%d;%c;%s;%d"
 
 #define Natts_fts_message_response 6
 #define Anum_fts_message_response_is_mirror_up 0
@@ -33,7 +40,7 @@
 #define Anum_fts_message_response_is_syncrep_enabled 2
 #define Anum_fts_message_response_is_role_mirror 3
 #define Anum_fts_message_response_request_retry 4
-#define Anum_fts_message_response_is_role_arbiter 5
+#define Anum_fts_message_response_is_master_prober 5
 
 #define FTS_MESSAGE_RESPONSE_NTUPLES 1
 
@@ -44,7 +51,7 @@ typedef struct FtsResponse
 	bool IsSyncRepEnabled;
 	bool IsRoleMirror;
 	bool RequestRetry;
-	bool IsRoleArbiter;
+	bool IsMasterProber;
 } FtsResponse;
 
 extern bool am_ftsprobe;
@@ -127,7 +134,6 @@ typedef struct
  * FTS process interface
  */
 extern int ftsprobe_start(void);
-extern int arbiterprobe_start(void);
 
 /*
  * Interface for checking if FTS is active
@@ -140,5 +146,6 @@ extern bool FtsIsActive(void);
 extern void HandleFtsMessage(const char* query_string);
 extern void probeWalRepUpdateConfig(int16 dbid, int16 segindex, char role,
 									bool IsSegmentAlive, bool IsInSync);
-extern void probeWalRepUpdateArbiter(int16 dbid);
+extern void probeWalRepUpdateMasterProber(int16 dbid);
+extern bool amMasterProber();
 #endif   /* FTS_H */

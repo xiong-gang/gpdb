@@ -39,31 +39,27 @@ typedef struct FtsProbeInfo
 
 #define FTS_MAX_TRANSIENT_STATE 100
 
+typedef struct MasterProbeInfo
+{
+	char		preferredRole;
+	char		role;
+	int		dbid;
+	char		hostIP[50];
+	int		port;
+} MasterProbeInfo;
+
 typedef struct FtsControlBlock
 {
-	LWLockId	ControlLock;
-	FtsProbeInfo fts_probe_info;
+	LWLockId			ControlLock;
+	FtsProbeInfo		fts_probe_info;
+	MasterProbeInfo	masterInfo[2];
+	bool				startMasterProber;
+	bool				isStandbyInSync;
+	int				masterProberDBID;
 }	FtsControlBlock;
 
 extern volatile FtsProbeInfo *ftsProbeInfo;
-
-typedef struct MasterProbeInfo
-{
-	char hostIP[50];
-	int	port;
-} MasterProbeInfo;
-
-typedef struct ArbiterControlBlock 
-{
-	MasterProbeInfo masterInfo[2];
-	bool			startArbiter;
-	bool			isStandbyInSync;
-} ArbiterControlBlock;
-
-extern ArbiterControlBlock *shmArbiterControl;
-
-extern Size Arbiter_ShmemSize();
-extern void Arbiter_ShmemInit();
+extern FtsControlBlock *shmFtsControl;
 
 extern int	FtsShmemSize(void);
 extern void FtsShmemInit(void);
@@ -76,4 +72,5 @@ extern void ftsLock(void);
 extern void ftsUnlock(void);
 extern void FtsNotifyProber(void);
 extern uint8 getFtsVersion(void);
+extern bool shouldStartFts(void);
 #endif   /* CDBFTS_H */
