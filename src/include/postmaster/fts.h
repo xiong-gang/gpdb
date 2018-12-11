@@ -32,7 +32,7 @@
 #define FTS_MSG_NEW_MASTER_PROBER_FMT \
 	FTS_MSG_NEW_MASTER_PROBER":%d"
 #define FTS_MSG_START_MASTER_PROBER_FMT \
-	FTS_MSG_START_MASTER_PROBER";%d;%c;%s;%d;%d;%c;%s;%d"
+	FTS_MSG_START_MASTER_PROBER";%d;%c;%c;%s;%s;%d;%d;%c;%c;%s;%s;%d"
 
 #define Natts_fts_message_response 6
 #define Anum_fts_message_response_is_mirror_up 0
@@ -147,5 +147,6 @@ extern void HandleFtsMessage(const char* query_string);
 extern void probeWalRepUpdateConfig(int16 dbid, int16 segindex, char role,
 									bool IsSegmentAlive, bool IsInSync);
 extern void probeWalRepUpdateMasterProber(int16 dbid);
-extern bool amMasterProber();
+extern bool amMasterProber(void);
+extern bool shouldStartFts(void);
 #endif   /* FTS_H */

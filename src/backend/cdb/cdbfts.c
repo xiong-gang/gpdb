@@ -76,8 +76,6 @@ FtsShmemInit(void)
 		shmFtsControl->fts_probe_info.fts_statusVersion = 0;
 		shmFtsControl->isStandbyInSync = false;
 		shmFtsControl->startMasterProber = false;
-		shmFtsControl->masterInfo[0] = 'p';
-		shmFtsControl->masterInfo[1] = 'm';
 	}
 }
 
@@ -155,10 +153,4 @@ uint8
 getFtsVersion(void)
 {
 	return ftsProbeInfo->fts_statusVersion;
-}
-
-bool
-shouldStartFts(void)
-{
-	return (IS_QUERY_DISPATCHER() || shmFtsControl->startMasterProber);
 }

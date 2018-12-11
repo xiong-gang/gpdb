@@ -59,6 +59,8 @@
 #include "catalog/gp_configuration_history.h"
 #include "catalog/gp_segment_config.h"
 
+#include "replication/walsender.h"
+#include "replication/walsender_private.h"
 #include "storage/backendid.h"
 #include "storage/bufmgr.h"
 #include "executor/spi.h"
@@ -554,7 +556,7 @@ probeWalRepUpdateMasterProber(int16 dbid)
 	CurrentResourceOwner = save;
 }
 
-bool amMasterProber()
+bool amMasterProber(void)
 {
 	return !IS_QUERY_DISPATCHER();
 }
@@ -563,6 +565,8 @@ static
 bool standbyIsAlive()
 {
 	int walsndPid = 0;
+	int i;
+
 	LWLockAcquire(SyncRepLock, LW_SHARED);
 	for (i = 0; i < max_wal_senders; i++)
 	{
@@ -597,7 +601,7 @@ bool notifyStandbyNewMasterProber(CdbComponentDatabases *cdbs, int dbid)
 	if (standby == NULL)
 		return false;
 
-	if (!standbyIsAlive(standby))
+	if (!standbyIsAlive())
 	{
 		elog(LOG, "FTS: cannot start new master prober when "
 				"standby is not reachable");
@@ -611,7 +615,7 @@ bool notifyStandbyNewMasterProber(CdbComponentDatabases *cdbs, int dbid)
 static
 bool startMasterProber(CdbComponentDatabases *cdbs)
 {
-	char message[200];
+	char message[500];
 	CdbComponentDatabaseInfo *master = NULL;
 	CdbComponentDatabaseInfo *standby = NULL;
 	int i;
@@ -629,13 +633,15 @@ bool startMasterProber(CdbComponentDatabases *cdbs)
 		return false;
 
 	/*
-	 * "START_MASTER_PROBER;<master_dbid>;<master_role>;<master_hostip>;<master_port>;
-	 * <standby_dbid>;<standby_role>;<standby_hostip>;<standby_port>"
+	 *  START_MASTER_PROBER;<dbid>;<preferred_role>;<role>;<hostname>;<address>;
+	 * <port>;<dbid>;<preferred_role>;<role>;<hostname>;<address>;<port>
 	 */
-	snprintf(message, 200,
+	snprintf(message, sizeof(message),
 			FTS_MSG_START_MASTER_PROBER_FMT,
-			master->dbid, master->role, master->hostip, master->port,
-			standby->dbid, standby->role, standby->hostip, standby->port);
+			master->dbid, master->preferred_role, master->role,
+			master->hostname, master->address, master->port,
+			standby->dbid, standby->preferred_role, standby->role,
+			standby->hostname, standby->address, standby->port);
 	return FtsWalRepMessageOneSegment(cdbs->master_prober_info, message);
 }
 
@@ -675,49 +681,10 @@ bool appointNewMasterProber(CdbComponentDatabases *cdbs)
 		return false;
 	}
 
+	//todo: update config before start prober?
+	shmFtsControl->masterProberDBID = masterProber->dbid;
 	probeWalRepUpdateMasterProber(masterProber->dbid);
 	return true;
-}
-
-static
-CdbComponentDatabases *initMasterProberTargets()
-{
-	CdbComponentDatabaseInfo		*master;
-	CdbComponentDatabaseInfo		*standby;
-	CdbComponentDatabases		*cdbs;
-
-	cdbs = palloc0(sizeof(CdbComponentDatabases));
-	cdbs->total_entry_dbs = 2;
-	cdbs->entry_db_info =
-		(CdbComponentDatabaseInfo *) palloc0(sizeof(CdbComponentDatabaseInfo) * 2);
-
-	master = &cdbs->entry_db_info[0];
-
-
-	master->dbid = shmFtsControl->masterInfo[0].dbid;
-	master->role = shmFtsControl->masterInfo[0].role;
-	master->preferred_role = shmFtsControl->masterInfo[0].preferredRole;
-	master->port = shmFtsControl->masterInfo[0].port;
-	master->hostip = shmFtsControl->masterInfo[0].hostIP;
-	master->segindex = -1;
-	master->mode = 's';
-	master->status = 'u';
-	master->hostname = "";
-	master->address = "";
-
-	standby = &cdbs->entry_db_info[1];
-	standby->dbid = shmFtsControl->masterInfo[1].dbid;
-	standby->role = shmFtsControl->masterInfo[1].role;
-	standby->preferred_role = shmFtsControl->masterInfo[1].preferredRole;
-	standby->port = shmFtsControl->masterInfo[1].port;
-	standby->hostip = shmFtsControl->masterInfo[1].hostIP;
-	standby->segindex = -1;
-	standby->mode = 's';
-	standby->status = 'u';
-	standby->hostname = "";
-	standby->address = "";
-
-	return cdbs;
 }
 
 static
@@ -728,7 +695,6 @@ void FtsLoop()
 	time_t elapsed,	probe_start_time;
 	CdbComponentDatabases *cdbs = NULL;
 	bool		masterProberStarted = false;
-	bool		has_mirrors = false;
 
 	probeContext = AllocSetContextCreate(TopMemoryContext,
 										 "FtsProbeMemCtxt",
@@ -736,14 +702,10 @@ void FtsLoop()
 										 ALLOCSET_DEFAULT_INITSIZE,
 										 ALLOCSET_DEFAULT_MAXSIZE);
 
-	if (amMasterProber())
-	{
-		cdbs = initMasterProberTargets();
-		has_mirrors = true;
-	}
-
 	while (!shutdown_requested)
 	{
+		bool		has_mirrors = false;
+
 		/* no need to live on if postmaster has died */
 		if (!PostmasterIsAlive())
 			exit(1);
@@ -756,18 +718,15 @@ void FtsLoop()
 
 		probe_start_time = time(NULL);
 
-		if (!amMasterProber())
-		{
-			/* Need a transaction to access the catalogs */
-			StartTransactionCommand();
-			cdbs = readCdbComponentInfoAndUpdateStatus(probeContext);
+		/* Need a transaction to access the catalogs */
+		StartTransactionCommand();
+		cdbs = readCdbComponentInfoAndUpdateStatus(probeContext);
 
-			/* Check here gp_segment_configuration if has mirror's */
-			has_mirrors = gp_segment_config_has_mirrors();
+		/* Check here gp_segment_configuration if has mirror's */
+		has_mirrors = gp_segment_config_has_mirrors();
 
-			/* close the transaction we started above */
-			CommitTransactionCommand();
-		}
+		/* close the transaction we started above */
+		CommitTransactionCommand();
 
 		/* Reset this as we are performing the probe */
 		probe_requested = false;
@@ -810,7 +769,7 @@ void FtsLoop()
 				ftsProbeInfo->fts_statusVersion++;
 		}
 
-		if (amMasterProber() && cdbs->master_prober_info)
+		if (!amMasterProber() && cdbs->master_prober_info)
 		{
 			/* master prober is down, appoint a new one */
 			if (FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdbs->master_prober_info->dbid]))
@@ -856,4 +815,10 @@ bool
 FtsIsActive(void)
 {
 	return (!skipFtsProbe && !shutdown_requested);
+}
+
+bool
+shouldStartFts(void)
+{
+	return (IS_QUERY_DISPATCHER() || shmFtsControl->startMasterProber);
 }

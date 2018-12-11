@@ -1027,7 +1027,7 @@ processResponse(fts_context *context)
 				{
 					if (!ftsInfo->result.retryRequested)
 					{
-						if (!am_ftsprobe) 
+						if (amMasterProber())
 						{
 							shmFtsControl->isStandbyInSync = false;
 						}
@@ -1237,17 +1237,16 @@ static void
 FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context)
 {
 	int array_size = 0;
-	if (am_ftsprobe)
+	if (amMasterProber())
 	{
-		array_size = cdbs->total_segment_dbs;
-		context->num_pairs = cdbs->total_segments;
-	}
-	else
-	{
-		/* master standby */
 		Assert(cdbs->total_entry_dbs >= 1);
 		array_size = cdbs->total_entry_dbs;
 		context->num_pairs = 1;
+	}
+	else
+	{
+		array_size = cdbs->total_segment_dbs;
+		context->num_pairs = cdbs->total_segments;
 	}
 
 	context->perSegInfos = (fts_segment_info *) palloc0(

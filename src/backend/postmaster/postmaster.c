@@ -136,7 +136,6 @@
 #include "utils/timeout.h"
 
 #include "cdb/cdbgang.h"                /* cdbgang_parse_gpqeid_params */
-#include "cdb/cdbfts.h"
 #include "cdb/cdbtm.h"
 #include "cdb/cdbvars.h"
 

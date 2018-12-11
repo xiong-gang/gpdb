@@ -39,20 +39,10 @@ typedef struct FtsProbeInfo
 
 #define FTS_MAX_TRANSIENT_STATE 100
 
-typedef struct MasterProbeInfo
-{
-	char		preferredRole;
-	char		role;
-	int		dbid;
-	char		hostIP[50];
-	int		port;
-} MasterProbeInfo;
-
 typedef struct FtsControlBlock
 {
 	LWLockId			ControlLock;
 	FtsProbeInfo		fts_probe_info;
-	MasterProbeInfo	masterInfo[2];
 	bool				startMasterProber;
 	bool				isStandbyInSync;
 	int				masterProberDBID;
@@ -72,5 +62,4 @@ extern void ftsLock(void);
 extern void ftsUnlock(void);
 extern void FtsNotifyProber(void);
 extern uint8 getFtsVersion(void);
-extern bool shouldStartFts(void);
 #endif   /* CDBFTS_H */
