@@ -74,7 +74,6 @@ FtsShmemInit(void)
 		ftsControlLock = shmFtsControl->ControlLock;
 
 		shmFtsControl->fts_probe_info.fts_statusVersion = 0;
-		shmFtsControl->isStandbyInSync = false;
 		shmFtsControl->startMasterProber = false;
 	}
 }

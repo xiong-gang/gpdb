@@ -226,9 +226,9 @@ SendFtsResponse(FtsResponse *response, const char *messagetype)
 	pq_sendint(&buf, -1, 4);		/* typmod */
 	pq_sendint(&buf, 0, 2);		/* format code */
 
-	pq_sendstring(&buf, "is_master_prober");
+	pq_sendstring(&buf, "master_prober_started");
 	pq_sendint(&buf, 0, 4);		/* table oid */
-	pq_sendint(&buf, Anum_fts_message_response_is_master_prober, 2);		/* attnum */
+	pq_sendint(&buf, Anum_fts_message_response_master_prober_started, 2);		/* attnum */
 	pq_sendint(&buf, BOOLOID, 4);		/* type oid */
 	pq_sendint(&buf, 1, 2);	/* typlen */
 	pq_sendint(&buf, -1, 4);		/* typmod */
@@ -256,7 +256,7 @@ SendFtsResponse(FtsResponse *response, const char *messagetype)
 	pq_sendint(&buf, response->RequestRetry, 1);
 
 	pq_sendint(&buf, 1, 4); /* col6 len */
-	pq_sendint(&buf, response->IsMasterProber, 1);
+	pq_sendint(&buf, response->MasterProberStarted, 1);
 
 	pq_endmessage(&buf);
 	EndCommand(messagetype, DestRemote);
@@ -272,7 +272,7 @@ HandleFtsWalRepProbe(void)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
-		false, /* IsMasterProber */
+		false, /* MasterProberStarted */
 	};
 
 	if (am_mirror)
@@ -329,7 +329,7 @@ HandleFtsWalRepSyncRepOff(void)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
-		false, /* IsMasterProber */
+		false, /* MasterProberStarted */
 	};
 
 	ereport(LOG,
@@ -349,7 +349,7 @@ HandleFtsWalRepPromote(const char *query)
 		false, /* IsSyncRepEnabled */
 		am_mirror,  /* IsRoleMirror */
 		false, /* RequestRetry */
-		false, /* IsMasterProber */
+		false, /* MasterProberStarted */
 	};
 	int dbid;
 
@@ -394,7 +394,7 @@ HandleFtsWalRepNewMasterProber(const char *query)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
-		false, /* IsMasterProber */
+		false, /* MasterProberStarted */
 	};
 
 	sscanf(query, FTS_MSG_NEW_MASTER_PROBER_FMT, &shmFtsControl->masterProberDBID);
@@ -410,7 +410,7 @@ HandleFtsWalRepStartMasterProber(const char *query)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
-		false, /* IsMasterProber */
+		false, /* MasterProberStarted */
 	};
 
 	strncpy(shmFtsControl->masterProberMessage,

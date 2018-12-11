@@ -131,8 +131,7 @@ ftsprobe_start(void)
 			/* Close the postmaster's sockets */
 			ClosePostmasterPorts(false);
 
-			char *argv[] = {"segment"};
-			ftsMain(1, argv);
+			ftsMain(0, NULL);
 			break;
 #endif
 		default:
@@ -202,8 +201,7 @@ ftsMain(int argc, char *argv[])
 	char	   *fullpath;
 
 	IsUnderPostmaster = true;
-	if (argc == 1 && strcmp(argv[0], "segment") == 0)
-		am_ftsprobe = true;
+	am_ftsprobe = true;
 
 	/* Stay away from PMChildSlot */
 	MyPMChildSlot = -1;
@@ -835,11 +833,11 @@ void FtsLoop()
 										 ALLOCSET_DEFAULT_MAXSIZE);
 
 	if (amMasterProber())
-		masterProberInitCatalog();	
+		masterProberInitCatalog();
 
 	while (!shutdown_requested)
 	{
-		bool		has_mirrors = false;
+		bool		has_mirrors;
 
 		/* no need to live on if postmaster has died */
 		if (!PostmasterIsAlive())

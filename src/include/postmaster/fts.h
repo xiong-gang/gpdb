@@ -40,7 +40,7 @@
 #define Anum_fts_message_response_is_syncrep_enabled 2
 #define Anum_fts_message_response_is_role_mirror 3
 #define Anum_fts_message_response_request_retry 4
-#define Anum_fts_message_response_is_master_prober 5
+#define Anum_fts_message_response_master_prober_started 5
 
 #define FTS_MESSAGE_RESPONSE_NTUPLES 1
 
@@ -51,7 +51,7 @@ typedef struct FtsResponse
 	bool IsSyncRepEnabled;
 	bool IsRoleMirror;
 	bool RequestRetry;
-	bool IsMasterProber;
+	bool MasterProberStarted;
 } FtsResponse;
 
 extern bool am_ftsprobe;

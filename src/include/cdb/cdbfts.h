@@ -44,7 +44,6 @@ typedef struct FtsControlBlock
 	LWLockId			ControlLock;
 	FtsProbeInfo		fts_probe_info;
 	bool				startMasterProber;
-	bool				isStandbyInSync;
 	int				masterProberDBID;
 	char			masterProberMessage[500];
 }	FtsControlBlock;

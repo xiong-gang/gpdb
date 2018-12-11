@@ -39,12 +39,11 @@ FtsGetPeerSegment(CdbComponentDatabases *cdbs,
 				  int content, int dbid)
 {
 	int i;
-	CdbComponentDatabaseInfo *segInfo = NULL;
-	int array_size = cdbs->total_segment_dbs;
 
-	for (i=0; i < array_size; i++)
+	for (i=0; i < cdbs->total_segment_dbs; i++)
 	{
-		segInfo = &cdbs->segment_db_info[i];
+		CdbComponentDatabaseInfo *segInfo = &cdbs->segment_db_info[i];
+
 		if (segInfo->segindex == content && segInfo->dbid != dbid)
 		{
 			/* found it */
@@ -516,6 +515,7 @@ ftsSend(fts_context *context)
 {
 	fts_segment_info *ftsInfo;
 	const char *message;
+	char probeStr[30];
 	int i;
 
 	for (i = 0; i < context->num_pairs; i++)
@@ -547,9 +547,8 @@ ftsSend(fts_context *context)
 					message = FTS_MSG_SYNCREP_OFF;
 				else
 				{
-					char tmpStr[30];
-					snprintf(tmpStr, sizeof(tmpStr), FTS_MSG_PROMOTE_FMT, GpIdentity.dbid);
-					message = tmpStr;
+					snprintf(probeStr, sizeof(probeStr), FTS_MSG_PROMOTE_FMT, GpIdentity.dbid);
+					message = probeStr;
 				}
 
 				if (PQsendQuery(ftsInfo->conn, message))
@@ -619,15 +618,15 @@ probeRecordResponse(fts_segment_info *ftsInfo, PGresult *result)
 	Assert (retryRequested);
 	ftsInfo->result.retryRequested = *retryRequested;
 
-	int *isMasterProber = (int *) PQgetvalue(result, 0,
-										   Anum_fts_message_response_is_master_prober);
-	Assert (isMasterProber);
-	ftsInfo->result.isMasterProber = *isMasterProber;
+	int *masterProberStarted = (int *) PQgetvalue(result, 0,
+										   	   Anum_fts_message_response_master_prober_started);
+	Assert (masterProberStarted);
+	ftsInfo->result.masterProberStarted = *masterProberStarted;
 
 	elogif(gp_log_fts >= GPVARS_VERBOSITY_TERSE, LOG,
 		   "FTS: segment (content=%d, dbid=%d, role=%c) reported "
 		   "isMirrorUp %d, isInSync %d, isSyncRepEnabled %d, "
-		   "isRoleMirror %d, retryRequested %d and isMasterProber %d  to the prober.",
+		   "isRoleMirror %d, retryRequested %d and masterProberStarted %d  to the prober.",
 		   ftsInfo->primary_cdbinfo->segindex,
 		   ftsInfo->primary_cdbinfo->dbid,
 		   ftsInfo->primary_cdbinfo->role,
@@ -636,7 +635,7 @@ probeRecordResponse(fts_segment_info *ftsInfo, PGresult *result)
 		   ftsInfo->result.isSyncRepEnabled,
 		   ftsInfo->result.isRoleMirror,
 		   ftsInfo->result.retryRequested,
-		   ftsInfo->result.isMasterProber);
+		   ftsInfo->result.masterProberStarted);
 }
 
 /*
@@ -1015,18 +1014,16 @@ processResponse(fts_context *context)
 						 * commits until FTS update the mirror status as down.
 						 */
 						is_updated |= updateConfiguration(
-								primary, mirror,
-								GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY,
-								GP_SEGMENT_CONFIGURATION_ROLE_MIRROR,
-								IsInSync, IsPrimaryAlive, IsMirrorAlive);
+							primary, mirror,
+							GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY,
+							GP_SEGMENT_CONFIGURATION_ROLE_MIRROR,
+							IsInSync, IsPrimaryAlive, IsMirrorAlive);
 						/*
 						 * If mirror was marked up in configuration, it must have
 						 * been marked down by updateConfiguration().
 						 */
 						AssertImply(SEGMENT_IS_ALIVE(mirror), is_updated);
 
-						if (amMasterProber())
-							shmFtsControl->isStandbyInSync = false;
 						/*
 						 * Now that the configuration is updated, FTS must notify
 						 * the primaries to unblock commits by sending syncrep off
@@ -1076,9 +1073,6 @@ processResponse(fts_context *context)
 						GP_SEGMENT_CONFIGURATION_ROLE_MIRROR,
 						IsInSync, IsPrimaryAlive, IsMirrorAlive);
 					ftsInfo->state = FTS_RESPONSE_PROCESSED;
-
-					if (amMasterProber())
-						shmFtsControl->isStandbyInSync = IsInSync;
 				}
 				break;
 			case FTS_PROBE_FAILED:
@@ -1115,10 +1109,10 @@ processResponse(fts_context *context)
 					 * primary.
 					 */
 					is_updated |= updateConfiguration(
-							primary, mirror,
-							GP_SEGMENT_CONFIGURATION_ROLE_MIRROR, /* newPrimaryRole */
-							GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY, /* newMirrorRole */
-							IsInSync, IsPrimaryAlive, IsMirrorAlive);
+						primary, mirror,
+						GP_SEGMENT_CONFIGURATION_ROLE_MIRROR, /* newPrimaryRole */
+						GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY, /* newMirrorRole */
+						IsInSync, IsPrimaryAlive, IsMirrorAlive);
 					Assert(is_updated);
 
 					/*
@@ -1130,12 +1124,9 @@ processResponse(fts_context *context)
 						   "FTS promoting mirror (content=%d, dbid=%d) "
 						   "to be the new primary",
 						   mirror->segindex, mirror->dbid);
-					if (amMasterProber() || shmFtsControl->isStandbyInSync)
-					{
-						ftsInfo->state = FTS_PROMOTE_SEGMENT;
-						ftsInfo->primary_cdbinfo = mirror;
-						ftsInfo->mirror_cdbinfo = primary;
-					}
+					ftsInfo->state = FTS_PROMOTE_SEGMENT;
+					ftsInfo->primary_cdbinfo = mirror;
+					ftsInfo->mirror_cdbinfo = primary;
 				}
 				else
 				{
@@ -1275,7 +1266,7 @@ FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context)
 		ftsInfo->result.isSyncRepEnabled = false;
 		ftsInfo->result.retryRequested = false;
 		ftsInfo->result.isRoleMirror = false;
-		ftsInfo->result.isMasterProber = false;
+		ftsInfo->result.masterProberStarted = false;
 		ftsInfo->result.dbid = primary->dbid;
 		ftsInfo->state = FTS_PROBE_SEGMENT;
 		ftsInfo->recovery_making_progress = false;
@@ -1329,7 +1320,7 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs, bool *masterProberStarted)
 		}
 
 		if (masterProberRes)
-			*masterProberStarted = masterProberRes->isMasterProber;
+			*masterProberStarted = masterProberRes->masterProberStarted;
 	}
 
 	int i;
