@@ -46,6 +46,7 @@ typedef struct FtsControlBlock
 	bool				startMasterProber;
 	bool				isStandbyInSync;
 	int				masterProberDBID;
+	char			masterProberMessage[500];
 }	FtsControlBlock;
 
 extern volatile FtsProbeInfo *ftsProbeInfo;

@@ -687,6 +687,138 @@ bool appointNewMasterProber(CdbComponentDatabases *cdbs)
 	return true;
 }
 
+static bool
+ftsMessageNextParam(char **cpp, char **npp)
+{
+	*cpp = *npp;
+	if (!*cpp)
+		return false;
+
+	*npp = strchr(*npp, ';');
+	if (*npp)
+	{
+		**npp = '\0';
+		++*npp;
+	}
+	return true;
+}
+
+static void
+insertConfig(Relation configrel, char **query)
+{
+	HeapTuple	configtuple;
+	Datum		values[Natts_gp_segment_configuration];
+	bool			isnull[Natts_gp_segment_configuration] = { false };
+	char			role;
+	char			preferredRole;
+	int16		dbid;
+	const char	*hostname;
+	const char	*address;
+	int32		port;
+	char			*cp;
+
+	/*
+	 *  START_MASTER_PROBER;<dbid>;<preferred_role>;<role>;<hostname>;<address>;
+	 * <port>;<dbid>;<preferred_role>;<role>;<hostname>;<address>;<port>
+	 */
+	if (ftsMessageNextParam(&cp, query))
+		dbid = (int16)strtol(cp, NULL, 10);
+	else
+		goto fail;
+
+	if (ftsMessageNextParam(&cp, query))
+		role = *cp;
+	else
+		goto fail;
+
+
+	if (ftsMessageNextParam(&cp, query))
+		preferredRole = *cp;
+	else
+		goto fail;
+
+
+	if (ftsMessageNextParam(&cp, query))
+		hostname = cp;
+	else
+		goto fail;
+
+
+	if (ftsMessageNextParam(&cp, query))
+		address = cp;
+	else
+		goto fail;
+
+	if (ftsMessageNextParam(&cp, query))
+		port = (int32)strtol(cp, NULL, 10);
+	else
+		goto fail;
+
+
+	values[Anum_gp_segment_configuration_content - 1] = Int16GetDatum(-1);
+	values[Anum_gp_segment_configuration_mode - 1] = CharGetDatum('s');
+	values[Anum_gp_segment_configuration_status - 1] = CharGetDatum('u');
+	values[Anum_gp_segment_configuration_master_prober - 1] = BoolGetDatum(false);
+	values[Anum_gp_segment_configuration_datadir - 1] = CStringGetTextDatum("");
+
+	values[Anum_gp_segment_configuration_preferred_role - 1] = CharGetDatum(preferredRole);
+	values[Anum_gp_segment_configuration_dbid - 1] = Int16GetDatum(dbid);
+	values[Anum_gp_segment_configuration_role - 1] = CharGetDatum(role);
+	values[Anum_gp_segment_configuration_port - 1] = Int32GetDatum(port);
+	values[Anum_gp_segment_configuration_hostname - 1] = CStringGetTextDatum(hostname);
+	values[Anum_gp_segment_configuration_address - 1] = CStringGetTextDatum(address);
+
+	configtuple = heap_form_tuple(RelationGetDescr(configrel), values, isnull);
+	simple_heap_insert(configrel, configtuple);
+	CatalogUpdateIndexes(configrel, configtuple);
+	return;
+
+fail:
+	elog(ERROR, "internal error");
+}
+
+static
+void deleteConfig(Relation configrel)
+{
+	HeapTuple	tup;
+	SysScanDesc scan;
+
+	scan = systable_beginscan(configrel, InvalidOid, false, NULL, 0, NULL);
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+		simple_heap_delete(configrel, &tup->t_self);
+
+	systable_endscan(scan);
+}
+
+static
+void masterProberInitCatalog()
+{
+	Relation configrel;
+	ResourceOwner save;
+
+	char	   *message = pstrdup(shmFtsControl->masterProberMessage);
+	char	   *cp;
+
+	if (ftsMessageNextParam(&cp, &message) &&
+		strncmp(cp, FTS_MSG_START_MASTER_PROBER, strlen(FTS_MSG_START_MASTER_PROBER)) != 0)
+		elog(ERROR, "Unexpected message");
+
+	save = CurrentResourceOwner;
+	StartTransactionCommand();
+	GetTransactionSnapshot();
+
+	configrel = heap_open(GpSegmentConfigRelationId, RowExclusiveLock);
+
+	deleteConfig(configrel);
+	insertConfig(configrel, &message);
+	insertConfig(configrel, &message);
+
+	heap_close(configrel, RowExclusiveLock);
+
+	CommitTransactionCommand();
+	CurrentResourceOwner = save;
+}
+
 static
 void FtsLoop()
 {
@@ -701,6 +833,9 @@ void FtsLoop()
 										 ALLOCSET_DEFAULT_INITSIZE,	/* always have some memory */
 										 ALLOCSET_DEFAULT_INITSIZE,
 										 ALLOCSET_DEFAULT_MAXSIZE);
+
+	if (amMasterProber())
+		masterProberInitCatalog();	
 
 	while (!shutdown_requested)
 	{

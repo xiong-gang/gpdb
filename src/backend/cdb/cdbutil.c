@@ -341,7 +341,7 @@ getCdbComponentInfo(bool DNSLookupAsError)
 	 * Validate that there exists at least one entry and one segment database
 	 * in the configuration
 	 */
-	if (component_databases->total_segment_dbs == 0)
+	if (component_databases->total_segment_dbs == 0 && IS_QUERY_DISPATCHER())
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_CARDINALITY_VIOLATION),
@@ -390,7 +390,7 @@ getCdbComponentInfo(bool DNSLookupAsError)
 			break;
 		}
 	}
-	if (i == component_databases->total_entry_dbs)
+	if (i == component_databases->total_entry_dbs && IS_QUERY_DISPATCHER())
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_EXCEPTION),

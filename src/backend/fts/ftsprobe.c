@@ -38,27 +38,13 @@ static CdbComponentDatabaseInfo *
 FtsGetPeerSegment(CdbComponentDatabases *cdbs,
 				  int content, int dbid)
 {
-	int array_size = 0;
-	if (am_ftsprobe)
-	{
-		array_size = cdbs->total_segment_dbs;
-	}
-	else
-	{
-		/* master standby */
-		Assert(cdbs->total_entry_dbs >= 1);
-		array_size = cdbs->total_entry_dbs;
-	}
 	int i;
 	CdbComponentDatabaseInfo *segInfo = NULL;
+	int array_size = cdbs->total_segment_dbs;
 
 	for (i=0; i < array_size; i++)
 	{
-		if (am_ftsprobe)
-			segInfo = &cdbs->segment_db_info[i];
-		else
-			segInfo = &cdbs->entry_db_info[i];
-
+		segInfo = &cdbs->segment_db_info[i];
 		if (segInfo->segindex == content && segInfo->dbid != dbid)
 		{
 			/* found it */
@@ -902,9 +888,6 @@ updateConfiguration(CdbComponentDatabaseInfo *primary,
 					char newPrimaryRole, char newMirrorRole,
 					bool IsInSync, bool IsPrimaryAlive, bool IsMirrorAlive)
 {
-	if (!am_ftsprobe)
-		return false;
-
 	bool UpdatePrimary = (IsPrimaryAlive != SEGMENT_IS_ALIVE(primary));
 	bool UpdateMirror = (IsMirrorAlive != SEGMENT_IS_ALIVE(mirror));
 
@@ -1027,27 +1010,23 @@ processResponse(fts_context *context)
 				{
 					if (!ftsInfo->result.retryRequested)
 					{
+						/*
+						 * Primaries that have syncrep enabled continue to block
+						 * commits until FTS update the mirror status as down.
+						 */
+						is_updated |= updateConfiguration(
+								primary, mirror,
+								GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY,
+								GP_SEGMENT_CONFIGURATION_ROLE_MIRROR,
+								IsInSync, IsPrimaryAlive, IsMirrorAlive);
+						/*
+						 * If mirror was marked up in configuration, it must have
+						 * been marked down by updateConfiguration().
+						 */
+						AssertImply(SEGMENT_IS_ALIVE(mirror), is_updated);
+
 						if (amMasterProber())
-						{
 							shmFtsControl->isStandbyInSync = false;
-						}
-						else
-						{
-							/*
-							 * Primaries that have syncrep enabled continue to block
-							 * commits until FTS update the mirror status as down.
-							 */
-							is_updated |= updateConfiguration(
-									primary, mirror,
-									GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY,
-									GP_SEGMENT_CONFIGURATION_ROLE_MIRROR,
-									IsInSync, IsPrimaryAlive, IsMirrorAlive);
-							/*
-							 * If mirror was marked up in configuration, it must have
-							 * been marked down by updateConfiguration().
-							 */
-							AssertImply(SEGMENT_IS_ALIVE(mirror), is_updated);
-						}
 						/*
 						 * Now that the configuration is updated, FTS must notify
 						 * the primaries to unblock commits by sending syncrep off
@@ -1098,7 +1077,7 @@ processResponse(fts_context *context)
 						IsInSync, IsPrimaryAlive, IsMirrorAlive);
 					ftsInfo->state = FTS_RESPONSE_PROCESSED;
 
-					if (!am_ftsprobe)
+					if (amMasterProber())
 						shmFtsControl->isStandbyInSync = IsInSync;
 				}
 				break;
@@ -1135,15 +1114,12 @@ processResponse(fts_context *context)
 					 * for gang creation, FTS should no longer probe the failed
 					 * primary.
 					 */
-					if (am_ftsprobe)
-					{
-						is_updated |= updateConfiguration(
-								primary, mirror,
-								GP_SEGMENT_CONFIGURATION_ROLE_MIRROR, /* newPrimaryRole */
-								GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY, /* newMirrorRole */
-								IsInSync, IsPrimaryAlive, IsMirrorAlive);
-						Assert(is_updated);
-					}
+					is_updated |= updateConfiguration(
+							primary, mirror,
+							GP_SEGMENT_CONFIGURATION_ROLE_MIRROR, /* newPrimaryRole */
+							GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY, /* newMirrorRole */
+							IsInSync, IsPrimaryAlive, IsMirrorAlive);
+					Assert(is_updated);
 
 					/*
 					 * Swap the primary and mirror references so that the
@@ -1154,7 +1130,7 @@ processResponse(fts_context *context)
 						   "FTS promoting mirror (content=%d, dbid=%d) "
 						   "to be the new primary",
 						   mirror->segindex, mirror->dbid);
-					if (am_ftsprobe || shmFtsControl->isStandbyInSync)
+					if (amMasterProber() || shmFtsControl->isStandbyInSync)
 					{
 						ftsInfo->state = FTS_PROMOTE_SEGMENT;
 						ftsInfo->primary_cdbinfo = mirror;
@@ -1239,7 +1215,7 @@ FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context)
 	int array_size = 0;
 	if (amMasterProber())
 	{
-		Assert(cdbs->total_entry_dbs >= 1);
+		Assert(cdbs->total_entry_dbs == 2);
 		array_size = cdbs->total_entry_dbs;
 		context->num_pairs = 1;
 	}
@@ -1257,16 +1233,23 @@ FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context)
 	for(; cdb_index < array_size; cdb_index++)
 	{
 		CdbComponentDatabaseInfo *primary = NULL;
-		if (am_ftsprobe)
-			primary = &(cdbs->segment_db_info[cdb_index]);
+		CdbComponentDatabaseInfo *mirror = NULL;
+		if (amMasterProber())
+		{
+			/* entry_db_info is sorted by isprimary */
+			primary = &(cdbs->entry_db_info[0]);
+			mirror = &(cdbs->entry_db_info[1]);
+			if (cdb_index > 0)
+				continue;
+		}
 		else
-			primary = &(cdbs->entry_db_info[cdb_index]);
+		{
+			primary = &(cdbs->segment_db_info[cdb_index]);
 
-		if (!SEGMENT_IS_ACTIVE_PRIMARY(primary))
-			continue;
-		CdbComponentDatabaseInfo *mirror = FtsGetPeerSegment(cdbs,
-															 primary->segindex,
-															 primary->dbid);
+			if (!SEGMENT_IS_ACTIVE_PRIMARY(primary))
+				continue;
+			mirror = FtsGetPeerSegment(cdbs, primary->segindex, primary->dbid);
+		}
 		/*
 		 * If there is no mirror under this primary, no need to probe.
 		 */

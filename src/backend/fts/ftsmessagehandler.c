@@ -358,7 +358,9 @@ HandleFtsWalRepPromote(const char *query)
 
 	sscanf(query, FTS_MSG_PROMOTE_FMT, &dbid);
 
-	if (IS_QUERY_DISPATCHER() && dbid != shmFtsControl->masterProberDBID)
+	if (IS_QUERY_DISPATCHER() &&
+		shmFtsControl->masterProberDBID != 0 &&
+		dbid != shmFtsControl->masterProberDBID)
 	{
 		elog(LOG, "ignoring promote request from deprecated master prober %d,"
 			 " current master prober %d", dbid, shmFtsControl->masterProberDBID);
@@ -383,22 +385,6 @@ HandleFtsWalRepPromote(const char *query)
 	SendFtsResponse(&response, FTS_MSG_PROMOTE);
 }
 
-static bool
-ftsMessageNextParam(char **cpp, char **npp)
-{
-	*cpp = *npp;
-	if (!*cpp)
-		return false;
-
-	*npp = strchr(*npp, ';');
-	if (*npp)
-	{
-		**npp = '\0';
-		++*npp;
-	}
-	return true;
-}
-
 static void
 HandleFtsWalRepNewMasterProber(const char *query)
 {
@@ -416,79 +402,6 @@ HandleFtsWalRepNewMasterProber(const char *query)
 }
 
 static void
-insertConfig(Relation configrel, char **query)
-{
-	HeapTuple	configtuple;
-	Datum		values[Natts_gp_segment_configuration];
-	bool			isnull[Natts_gp_segment_configuration] = { false };
-	char			role;
-	char			preferredRole;
-	int16		dbid;
-	const char	*hostname;
-	const char	*address;
-	int32		port;
-	char			*cp;
-
-	/*
-	 *  START_MASTER_PROBER;<dbid>;<preferred_role>;<role>;<hostname>;<address>;
-	 * <port>;<dbid>;<preferred_role>;<role>;<hostname>;<address>;<port>
-	 */
-	if (ftsMessageNextParam(&cp, query))
-		dbid = (int16)strtol(cp, NULL, 10);
-	else
-		goto fail;
-
-	if (ftsMessageNextParam(&cp, query))
-		role = *cp;
-	else
-		goto fail;
-
-
-	if (ftsMessageNextParam(&cp, query))
-		preferredRole = *cp;
-	else
-		goto fail;
-
-
-	if (ftsMessageNextParam(&cp, query))
-		hostname = cp;
-	else
-		goto fail;
-
-
-	if (ftsMessageNextParam(&cp, query))
-		address = cp;
-	else
-		goto fail;
-
-
-	if (ftsMessageNextParam(&cp, query))
-		port = (int32)strtol(cp, NULL, 10);
-	else
-		goto fail;
-
-
-	values[Anum_gp_segment_configuration_content - 1] = Int16GetDatum(-1);
-	values[Anum_gp_segment_configuration_mode - 1] = CharGetDatum('s');
-	values[Anum_gp_segment_configuration_status - 1] = CharGetDatum('u');
-	values[Anum_gp_segment_configuration_master_prober - 1] = BoolGetDatum(false);
-	values[Anum_gp_segment_configuration_datadir - 1] = CStringGetDatum("");
-
-	values[Anum_gp_segment_configuration_preferred_role - 1] = CharGetDatum(preferredRole);
-	values[Anum_gp_segment_configuration_dbid - 1] = Int16GetDatum(dbid);
-	values[Anum_gp_segment_configuration_role - 1] = CharGetDatum(role);
-	values[Anum_gp_segment_configuration_hostname - 1] = CStringGetDatum(hostname);
-	values[Anum_gp_segment_configuration_address - 1] = CStringGetDatum(address);
-
-	configtuple = heap_form_tuple(RelationGetDescr(configrel), values, isnull);
-	simple_heap_insert(configrel, configtuple);
-	CatalogUpdateIndexes(configrel, configtuple);
-
-fail:
-	elog(ERROR, "internal error");
-}
-
-static void
 HandleFtsWalRepStartMasterProber(const char *query)
 {
 	FtsResponse response = {
@@ -499,31 +412,10 @@ HandleFtsWalRepStartMasterProber(const char *query)
 		false, /* RequestRetry */
 		false, /* IsMasterProber */
 	};
-	Relation configrel;
-	ResourceOwner save;
 
-	char	   *message = pstrdup(query);
-	char	   *cp;
-	char	   *np = message;
-
-	if (ftsMessageNextParam(&cp, &np) &&
-		strncmp(cp, FTS_MSG_START_MASTER_PROBER, strlen(FTS_MSG_START_MASTER_PROBER)) != 0)
-		elog(ERROR, "Unexpected message");
-
-	save = CurrentResourceOwner;
-	StartTransactionCommand();
-	GetTransactionSnapshot();
-
-	configrel = heap_open(GpSegmentConfigRelationId, RowExclusiveLock);
-
-	insertConfig(configrel, &np);
-	insertConfig(configrel, &np);
-
-	heap_close(configrel, RowExclusiveLock);
-
-	CommitTransactionCommand();
-	CurrentResourceOwner = save;
-
+	strncpy(shmFtsControl->masterProberMessage,
+			query,
+			sizeof(shmFtsControl->masterProberMessage));
 	shmFtsControl->startMasterProber = true;
 	SendPostmasterSignal(PMSIGNAL_START_MASTER_PROBER);
 	SendFtsResponse(&response, FTS_MSG_START_MASTER_PROBER);
