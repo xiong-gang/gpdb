@@ -487,6 +487,8 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid, bool lockHeld)
 
 		Assert(pgxact->nxids == 0);
 		Assert(pgxact->overflowed == false);
+
+		proc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
 	}
 }
 
