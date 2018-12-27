@@ -296,6 +296,13 @@ getCdbComponentInfo(bool DNSLookupAsError)
 		Assert(!isNull);
 		pRow->port = DatumGetInt32(attr);
 
+		/*
+		 * is master prober
+		 */
+		attr = heap_getattr(gp_seg_config_tuple, Anum_gp_segment_configuration_master_prober, RelationGetDescr(gp_seg_config_rel), &isNull);
+		Assert(!isNull);
+		pRow->isMasterProber = DatumGetBool(attr);
+
 		pRow->hostip = NULL;
 		getAddressesForDBid(pRow, DNSLookupAsError ? ERROR : LOG);
 
@@ -334,7 +341,7 @@ getCdbComponentInfo(bool DNSLookupAsError)
 	 * Validate that there exists at least one entry and one segment database
 	 * in the configuration
 	 */
-	if (component_databases->total_segment_dbs == 0)
+	if (component_databases->total_segment_dbs == 0 && IS_QUERY_DISPATCHER())
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_CARDINALITY_VIOLATION),
@@ -383,7 +390,7 @@ getCdbComponentInfo(bool DNSLookupAsError)
 			break;
 		}
 	}
-	if (i == component_databases->total_entry_dbs)
+	if (i == component_databases->total_entry_dbs && IS_QUERY_DISPATCHER())
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_EXCEPTION),
@@ -428,6 +435,11 @@ getCdbComponentInfo(bool DNSLookupAsError)
 	for (i = 0; i < component_databases->total_segment_dbs; i++)
 	{
 		cdbInfo = &component_databases->segment_db_info[i];
+		if (cdbInfo->isMasterProber)
+		{
+			Assert(component_databases->master_prober_info == NULL);
+			component_databases->master_prober_info = cdbInfo;
+		}
 
 		if (cdbInfo->role != GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY || cdbInfo->hostip == NULL)
 			continue;
@@ -1396,6 +1408,14 @@ dbid_get_dbinfo(int16 dbid)
 							RelationGetDescr(rel), &isNull);
 		Assert(!isNull);
 		i->port = DatumGetInt32(attr);
+
+		/*
+		 * is master prober
+		 */
+		attr = heap_getattr(tuple, Anum_gp_segment_configuration_master_prober,
+							RelationGetDescr(rel), &isNull);
+		Assert(!isNull);
+		i->isMasterProber = DatumGetBool(attr);
 
 		Assert(systable_getnext(scan) == NULL); /* should be only 1 */
 	}
