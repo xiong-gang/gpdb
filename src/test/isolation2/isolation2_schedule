@@ -139,6 +139,13 @@ test: segwalrep/cancel_commit_pending_replication
 test: segwalrep/twophase_tolerance_with_mirror_promotion
 test: segwalrep/pg_basebackup
 
+# Tests for master prober
+test: segwalrep/master_prober_test_setup
+test: segwalrep/fts_unblock_master
+test: segwalrep/standby_promotion
+test: segwalrep/master_prober_selection
+test: segwalrep/master_prober_test_terminate
+
 # Tests for crash recovery
 test: crash_recovery
 test: crash_recovery_redundant_dtx

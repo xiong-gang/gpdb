@@ -10,14 +10,14 @@ CREATE
 select content, role, preferred_role, mode, status from gp_segment_configuration;
  content | role | preferred_role | mode | status 
 ---------+------+----------------+------+--------
- -1      | p    | p              | n    | u      
+ 2       | m    | m              | s    | u      
+ -1      | p    | p              | s    | u      
  -1      | m    | m              | s    | u      
  2       | p    | p              | s    | u      
- 2       | m    | m              | s    | u      
- 1       | p    | p              | s    | u      
- 1       | m    | m              | s    | u      
  0       | p    | p              | s    | u      
  0       | m    | m              | s    | u      
+ 1       | p    | p              | s    | u      
+ 1       | m    | m              | s    | u      
 (8 rows)
 
 -- print synchronous_standby_names should be set to '*' at start of test
@@ -35,14 +35,14 @@ INSERT 1
 
 -- skip FTS probes always
 select gp_inject_fault('fts_probe', 'reset', dbid) from gp_segment_configuration where content = -1 and role = 'p';
-gp_inject_fault
----------------
-t              
+ gp_inject_fault 
+-----------------
+ t               
 (1 row)
 select gp_inject_fault_infinite('fts_probe', 'skip', dbid) from gp_segment_configuration where content = -1 and role = 'p';
-gp_inject_fault_infinite
-------------------------
-t                       
+ gp_inject_fault_infinite 
+--------------------------
+ t                        
 (1 row)
 -- force scan to trigger the fault
 select gp_request_fts_probe_scan();
@@ -120,9 +120,9 @@ COMMIT
 
 -- resume FTS probes
 select gp_inject_fault('fts_probe', 'reset', dbid) from gp_segment_configuration where content = -1 and role = 'p';
-gp_inject_fault
----------------
-t              
+ gp_inject_fault 
+-----------------
+ t               
 (1 row)
 
 -- everything should be back to normal
@@ -178,6 +178,17 @@ DETAIL:
 	before or while processing the request.
 -- end_ignore
 
+select gp_inject_fault('fts_probe', 'reset', dbid) from gp_segment_configuration where master_prober = true;
+ gp_inject_fault 
+-----------------
+ t               
+(1 row)
+select gp_inject_fault_infinite('fts_probe', 'skip', dbid) from gp_segment_configuration where master_prober = true;
+ gp_inject_fault_infinite 
+--------------------------
+ t                        
+(1 row)
+
 -- create table and show commits are not blocked
 create table standbywalrep_commit_blocking (a int) distributed by (a);
 CREATE
@@ -186,11 +197,11 @@ INSERT 1
 
 -- stop standby and show commit will block
 select pg_ctl((select datadir from gp_segment_configuration c where c.role='m' and c.content=-1), 'stop');
-pg_ctl                                              
-----------------------------------------------------
-waiting for server to shut down done
+ pg_ctl                                               
+------------------------------------------------------
+ waiting for server to shut down done
 server stopped
-
+ 
 (1 row)
 
 -- this should block since standby is not up and sync replication is on
@@ -230,10 +241,10 @@ COMMIT
 
 -- bring the standby back up
 select pg_ctl_start(datadir, port, content, dbid) from gp_segment_configuration where role='m' and content=-1;
-pg_ctl_start    
-----------------
-server starting
-
+ pg_ctl_start     
+------------------
+ server starting
+ 
 (1 row)
 
 -- set synchronous_standby_names to '*'
@@ -258,20 +269,20 @@ ALTER
 insert into standbywalrep_commit_blocking select i from generate_series(1,10)i;
 INSERT 10
 select * from standbywalrep_commit_blocking order by a;
-a 
---
-1 
-1 
-2 
-2 
-3 
-4 
-5 
-6 
-7 
-8 
-9 
-10
+ a  
+----
+ 1  
+ 1  
+ 2  
+ 2  
+ 3  
+ 4  
+ 5  
+ 6  
+ 7  
+ 8  
+ 9  
+ 10 
 (12 rows)
 
 -- set synchronous_standby_names to default value
@@ -291,3 +302,10 @@ ALTER
 
 -- end_ignore
 (exited with code 0)
+
+-- resume FTS probes
+select gp_inject_fault('fts_probe', 'reset', dbid) from gp_segment_configuration where master_prober = true;
+ gp_inject_fault 
+-----------------
+ t               
+(1 row)

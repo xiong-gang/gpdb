@@ -36,7 +36,7 @@ create or replace function pg_ctl_start(datadir text, port int, contentid int, d
 returns text as $$
     import subprocess
     cmd = 'pg_ctl -l postmaster.log -D %s ' % datadir
-    opts = '-p %d -\-gp_dbid=%d -i -\-gp_contentid=%d' % (port, dbid, contentid)
+    opts = '-p %d -\-gp_dbid=%d -i -\-gp_contentid=%d %s' % (port, dbid, contentid, ('-E' if contentid==-1 else '-c gp_role=utility'))
     cmd = cmd + '-o "%s" start' % opts
     return subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).replace('.', '')
 $$ language plpythonu;

@@ -81,6 +81,13 @@ alter system set synchronous_standby_names to '*';
 begin;end;
 -- end_ignore
 
+select gp_inject_fault('fts_probe', 'reset', dbid)
+    from gp_segment_configuration
+    where master_prober = true;
+select gp_inject_fault_infinite('fts_probe', 'skip', dbid)
+    from gp_segment_configuration
+    where master_prober = true;
+
 -- create table and show commits are not blocked
 create table standbywalrep_commit_blocking (a int) distributed by (a);
 insert into standbywalrep_commit_blocking values (1);
@@ -120,3 +127,8 @@ alter system set synchronous_standby_names to default;
 
 -- reload to make synchronous_standby_names effective
 !\retcode gpstop -u;
+
+-- resume FTS probes
+select gp_inject_fault('fts_probe', 'reset', dbid)
+    from gp_segment_configuration
+    where master_prober = true;
