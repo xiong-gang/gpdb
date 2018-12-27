@@ -17,6 +17,11 @@
 #include <unistd.h>
 
 #include "access/xlog.h"
+
+#include "libpq-fe.h"
+#include "libpq-int.h"
+#include "cdb/cdbvars.h"
+#include "cdb/cdbfts.h"
 #include "libpq/pqformat.h"
 #include "libpq/libpq.h"
 #include "postmaster/fts.h"
@@ -25,6 +30,8 @@
 #include "utils/guc.h"
 #include "replication/gp_replication.h"
 #include "storage/fd.h"
+#include "storage/pmsignal.h"
+
 
 #define FTS_PROBE_FILE_NAME "fts_probe_file.bak"
 #define FTS_PROBE_MAGIC_STRING "FtS PrObEr MaGiC StRiNg, pRoBiNg cHeCk......."
@@ -217,6 +224,14 @@ SendFtsResponse(FtsResponse *response, const char *messagetype)
 	pq_sendint(&buf, -1, 4);		/* typmod */
 	pq_sendint(&buf, 0, 2);		/* format code */
 
+	pq_sendstring(&buf, "master_prober_started");
+	pq_sendint(&buf, 0, 4);		/* table oid */
+	pq_sendint(&buf, Anum_fts_message_response_master_prober_started, 2);		/* attnum */
+	pq_sendint(&buf, BOOLOID, 4);		/* type oid */
+	pq_sendint(&buf, 1, 2);	/* typlen */
+	pq_sendint(&buf, -1, 4);		/* typmod */
+	pq_sendint(&buf, 0, 2);		/* format code */
+
 	pq_endmessage(&buf);
 
 	/* Send a DataRow message */
@@ -238,6 +253,9 @@ SendFtsResponse(FtsResponse *response, const char *messagetype)
 	pq_sendint(&buf, 1, 4); /* col5 len */
 	pq_sendint(&buf, response->RequestRetry, 1);
 
+	pq_sendint(&buf, 1, 4); /* col6 len */
+	pq_sendint(&buf, response->MasterProberStarted, 1);
+
 	pq_endmessage(&buf);
 	EndCommand(messagetype, DestRemote);
 	pq_flush();
@@ -252,6 +270,7 @@ HandleFtsWalRepProbe(void)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
+		(!IS_QUERY_DISPATCHER() && shmFtsControl->ftsPid != 0), /* MasterProberStarted */
 	};
 
 	if (am_mirror)
@@ -308,13 +327,14 @@ HandleFtsWalRepSyncRepOff(void)
 		false, /* IsSyncRepEnabled */
 		false, /* IsRoleMirror */
 		false, /* RequestRetry */
+		false, /* MasterProberStarted */
 	};
 
 	ereport(LOG,
 			(errmsg("turning off synchronous wal replication due to FTS request")));
 	UnsetSyncStandbysDefined();
-	GetMirrorStatus(&response);
 
+	GetMirrorStatus(&response);
 	SendFtsResponse(&response, FTS_MSG_SYNCREP_OFF);
 }
 
@@ -327,6 +347,7 @@ HandleFtsWalRepPromote(void)
 		false, /* IsSyncRepEnabled */
 		am_mirror,  /* IsRoleMirror */
 		false, /* RequestRetry */
+		false, /* MasterProberStarted */
 	};
 
 	ereport(LOG,
@@ -360,6 +381,68 @@ HandleFtsWalRepPromote(void)
 	SendFtsResponse(&response, FTS_MSG_PROMOTE);
 }
 
+static void
+HandleFtsWalRepNewMasterProber(const char *query)
+{
+	FtsResponse response = {
+		false, /* IsMirrorUp */
+		false, /* IsInSync */
+		false, /* IsSyncRepEnabled */
+		false, /* IsRoleMirror */
+		false, /* RequestRetry */
+		false, /* MasterProberStarted */
+	};
+
+	sscanf(query, FTS_MSG_NEW_MASTER_PROBER_FMT, &shmFtsControl->masterProberDBID);
+	elog(LOG, "master prober process is on segment %d", shmFtsControl->masterProberDBID);
+
+	SendFtsResponse(&response, FTS_MSG_NEW_MASTER_PROBER);
+}
+
+static void
+HandleFtsWalRepStartMasterProber(const char *query)
+{
+	int restart;
+	int ftsPid;
+	FtsResponse response = {
+		false, /* IsMirrorUp */
+		false, /* IsInSync */
+		false, /* IsSyncRepEnabled */
+		false, /* IsRoleMirror */
+		false, /* RequestRetry */
+		false, /* MasterProberStarted */
+	};
+
+	sscanf(query, FTS_MSG_START_MASTER_PROBER_SCAN_FMT, &restart);
+	ftsPid = shmFtsControl->ftsPid;
+
+	/* terminate the exsisting master prober process */
+	if (restart == 1 && ftsPid != 0)
+	{
+		kill(ftsPid, SIGTERM);
+		elog(LOG, "terminating master prober process: %d", ftsPid);
+		for(;;)
+		{
+			if (kill(ftsPid, 0) == -1 &&
+				errno == ESRCH)
+				break;
+			pg_usleep(100000L); /* 100ms */
+		}
+		elog(LOG, "master prober process terminated");
+		ftsPid = 0;
+	}
+
+	strncpy(shmFtsControl->masterProberMessage,
+			query,
+			sizeof(shmFtsControl->masterProberMessage));
+
+	elog(LOG, "start master prober process");
+	/* start master prober */
+	shmFtsControl->startMasterProber = true;
+	SendPostmasterSignal(PMSIGNAL_START_MASTER_PROBER);
+	SendFtsResponse(&response, FTS_MSG_START_MASTER_PROBER);
+}
+
 void
 HandleFtsMessage(const char* query_string)
 {
@@ -374,6 +457,12 @@ HandleFtsMessage(const char* query_string)
 	else if (strncmp(query_string, FTS_MSG_PROMOTE,
 					 strlen(FTS_MSG_PROMOTE)) == 0)
 		HandleFtsWalRepPromote();
+	else if (strncmp(query_string, FTS_MSG_NEW_MASTER_PROBER,
+					 strlen(FTS_MSG_NEW_MASTER_PROBER)) == 0)
+		HandleFtsWalRepNewMasterProber(query_string);
+	else if (strncmp(query_string, FTS_MSG_START_MASTER_PROBER,
+					 strlen(FTS_MSG_START_MASTER_PROBER)) == 0)
+		HandleFtsWalRepStartMasterProber(query_string);
 	else
 		ereport(ERROR,
 				(errmsg("received unknown FTS query: %s", query_string)));
