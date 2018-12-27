@@ -149,7 +149,6 @@ ftsprobe_start(void)
 	return 0;
 }
 
-
 /*=========================================================================
  * HELPER FUNCTIONS
  */
@@ -936,6 +935,7 @@ void FtsLoop()
 	MemoryContext probeContext = NULL, oldContext = NULL;
 	time_t elapsed,	probe_start_time;
 	CdbComponentDatabases *cdbs = NULL;
+	bool	standbyInSync;
 	bool	masterInfoChanged = true;
 	bool	am_masterprober = !IS_QUERY_DISPATCHER();
 	MasterInfo	*masterInfos = palloc0(sizeof(MasterInfo) * MAX_ENTRYDB_COUNT);
@@ -1024,6 +1024,28 @@ void FtsLoop()
 			/* Bump the version if configuration was updated. */
 			if (updated_probe_state)
 				ftsProbeInfo->fts_statusVersion++;
+		}
+
+		standbyInSync = (cdbs->entry_db_info[0].mode == GP_SEGMENT_CONFIGURATION_MODE_INSYNC);
+		if (!am_masterprober && cdbs->total_entry_dbs == 2 && standbyInSync != standbyIsInSync())
+		{
+			ResourceOwner save = CurrentResourceOwner;
+
+			standbyInSync = !standbyInSync;
+			StartTransactionCommand();
+			GetTransactionSnapshot();
+			if (standbyInSync)
+			{
+				probeWalRepUpdateConfig(cdbs->entry_db_info[0].dbid, -1, 'p', true, true);
+				probeWalRepUpdateConfig(cdbs->entry_db_info[1].dbid, -1, 'm', true, true);
+			}
+			else
+			{
+				probeWalRepUpdateConfig(cdbs->entry_db_info[0].dbid, -1, 'p', true, false);
+				probeWalRepUpdateConfig(cdbs->entry_db_info[1].dbid, -1, 'm', false, false);
+			}
+			CommitTransactionCommand();
+			CurrentResourceOwner = save;
 		}
 
 		/* Start the master prober if it's not started or the master and standby information has changed */
