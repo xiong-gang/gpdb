@@ -394,7 +394,7 @@ CreateReplicationSlotOnPromote(const char *name)
 }
 
 static void
-HandleFtsWalRepPromote(void)
+HandleFtsWalRepPromote(const char *query)
 {
 	FtsResponse response = {
 		false, /* IsMirrorUp */
@@ -404,36 +404,49 @@ HandleFtsWalRepPromote(void)
 		false, /* RequestRetry */
 		false, /* MasterProberStarted */
 	};
+	int dbid;
 
 	ereport(LOG,
 			(errmsg("promoting mirror to primary due to FTS request")));
 
-	/*
-	 * FTS sends promote message to a mirror.  The mirror may be undergoing
-	 * promotion.  Promote messages should therefore be handled in an
-	 * idempotent way.
-	 */
-	DBState state = GetCurrentDBState();
-	if (state == DB_IN_STANDBY_MODE)
+	sscanf(query, FTS_MSG_PROMOTE_FMT, &dbid);
+
+	if (IS_QUERY_DISPATCHER() &&
+		shmFtsControl->masterProberDBID != 0 &&
+		dbid != shmFtsControl->masterProberDBID)
 	{
-		/*
-		 * Reset sync_standby_names on promotion. This is to avoid commits
-		 * hanging/waiting for replication till next FTS probe. Next FTS probe
-		 * will detect this node to be not in sync and reset the same which
-		 * can take a min. Since we know on mirror promotion its marked as not
-		 * in sync in gp_segment_configuration, best to right away clean the
-		 * sync_standby_names.
-		 */
-		UnsetSyncStandbysDefined();
-
-		CreateReplicationSlotOnPromote(INTERNAL_WAL_REPLICATION_SLOT_NAME);
-
-		SignalPromote();
+		elog(LOG, "ignoring promote request from deprecated master prober %d,"
+			 " current master prober %d", dbid, shmFtsControl->masterProberDBID);
 	}
 	else
 	{
-		elog(LOG, "ignoring promote request, walreceiver not running,"
-			 " DBState = %d", state);
+		/*
+		 * FTS sends promote message to a mirror.  The mirror may be undergoing
+		 * promotion.  Promote messages should therefore be handled in an
+		 * idempotent way.
+		 */
+		DBState state = GetCurrentDBState();
+		if (state == DB_IN_STANDBY_MODE)
+		{
+			/*
+			 * Reset sync_standby_names on promotion. This is to avoid commits
+			 * hanging/waiting for replication till next FTS probe. Next FTS probe
+			 * will detect this node to be not in sync and reset the same which
+			 * can take a min. Since we know on mirror promotion its marked as not
+			 * in sync in gp_segment_configuration, best to right away clean the
+			 * sync_standby_names.
+			 */
+			UnsetSyncStandbysDefined();
+
+			CreateReplicationSlotOnPromote(INTERNAL_WAL_REPLICATION_SLOT_NAME);
+
+			SignalPromote();
+		}
+		else
+		{
+			elog(LOG, "ignoring promote request, walreceiver not running,"
+				 " DBState = %d", state);
+		}
 	}
 
 	SendFtsResponse(&response, FTS_MSG_PROMOTE);
@@ -514,7 +527,7 @@ HandleFtsMessage(const char* query_string)
 		HandleFtsWalRepSyncRepOff();
 	else if (strncmp(query_string, FTS_MSG_PROMOTE,
 					 strlen(FTS_MSG_PROMOTE)) == 0)
-		HandleFtsWalRepPromote();
+		HandleFtsWalRepPromote(query_string);
 	else if (strncmp(query_string, FTS_MSG_NEW_MASTER_PROBER,
 					 strlen(FTS_MSG_NEW_MASTER_PROBER)) == 0)
 		HandleFtsWalRepNewMasterProber(query_string);

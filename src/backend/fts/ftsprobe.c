@@ -516,6 +516,7 @@ ftsSend(fts_context *context)
 {
 	fts_segment_info *ftsInfo;
 	const char *message;
+	char probeStr[30];
 	int i;
 
 	for (i = 0; i < context->num_pairs; i++)
@@ -546,7 +547,11 @@ ftsSend(fts_context *context)
 				else if (ftsInfo->state == FTS_SYNCREP_OFF_SEGMENT)
 					message = FTS_MSG_SYNCREP_OFF;
 				else
-					message = FTS_MSG_PROMOTE;
+				{
+					snprintf(probeStr, sizeof(probeStr), FTS_MSG_PROMOTE_FMT, GpIdentity.dbid);
+					message = probeStr;
+				}
+
 				if (PQsendQuery(ftsInfo->conn, message))
 				{
 					/*
