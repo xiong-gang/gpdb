@@ -68,6 +68,7 @@
 bool am_ftsprobe = false;
 bool am_ftshandler = false;
 
+extern bool gp_enable_master_autofailover;
 
 /*
  * STATIC VARIABLES
