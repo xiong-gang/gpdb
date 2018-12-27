@@ -1196,22 +1196,46 @@ FtsIsSegmentAlive(CdbComponentDatabaseInfo *segInfo)
  * cdbs.
  */
 static void
-FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context)
+FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context, bool masterProber)
 {
-	context->num_pairs = cdbs->total_segments;
+	int array_size = 0;
+	if (masterProber)
+	{
+		Assert(cdbs->total_entry_dbs == 2);
+		array_size = cdbs->total_entry_dbs;
+		context->num_pairs = 1;
+	}
+	else
+	{
+		array_size = cdbs->total_segment_dbs;
+		context->num_pairs = cdbs->total_segments;
+	}
+
 	context->perSegInfos = (fts_segment_info *) palloc0(
 		context->num_pairs * sizeof(fts_segment_info));
 
 	int fts_index = 0;
 	int cdb_index = 0;
-	for(; cdb_index < cdbs->total_segment_dbs; cdb_index++)
+	for(; cdb_index < array_size; cdb_index++)
 	{
-		CdbComponentDatabaseInfo *primary = &(cdbs->segment_db_info[cdb_index]);
-		if (!SEGMENT_IS_ACTIVE_PRIMARY(primary))
-			continue;
-		CdbComponentDatabaseInfo *mirror = FtsGetPeerSegment(cdbs,
-															 primary->segindex,
-															 primary->dbid);
+		CdbComponentDatabaseInfo *primary = NULL;
+		CdbComponentDatabaseInfo *mirror = NULL;
+		if (masterProber)
+		{
+			/* entry_db_info is sorted by isprimary */
+			primary = &(cdbs->entry_db_info[0]);
+			mirror = &(cdbs->entry_db_info[1]);
+			if (cdb_index > 0)
+				continue;
+		}
+		else
+		{
+			primary = &(cdbs->segment_db_info[cdb_index]);
+
+			if (!SEGMENT_IS_ACTIVE_PRIMARY(primary))
+				continue;
+			mirror = FtsGetPeerSegment(cdbs, primary->segindex, primary->dbid);
+		}
 		/*
 		 * If there is no mirror under this primary, no need to probe.
 		 */
@@ -1265,8 +1289,8 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs,
 	bool is_updated = false;
 	fts_context context;
 
-	FtsWalRepInitProbeContext(cdbs, &context);
-	InitPollFds(cdbs->total_segments);
+	FtsWalRepInitProbeContext(cdbs, &context, amMasterProber);
+	InitPollFds(context.num_pairs);
 
 	while (!allDone(&context) && FtsIsActive())
 	{

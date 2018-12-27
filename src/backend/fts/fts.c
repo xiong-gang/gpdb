@@ -968,11 +968,13 @@ void FtsLoop()
 
 		/* Need a transaction to access the catalogs */
 		StartTransactionCommand();
-
 		cdbs = readCdbComponentInfoAndUpdateStatus(probeContext);
 
 		/* Check here gp_segment_configuration if has mirror's */
-		has_mirrors = gp_segment_config_has_mirrors();
+		if (am_masterprober)
+			has_mirrors = gp_segment_config_has_standby();
+		else
+			has_mirrors = gp_segment_config_has_mirrors();
 
 		/* close the transaction we started above */
 		CommitTransactionCommand();

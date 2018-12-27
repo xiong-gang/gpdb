@@ -89,6 +89,8 @@ typedef FormData_gp_segment_configuration *Form_gp_segment_configuration;
 #define Anum_gp_segment_configuration_address			10
 #define Anum_gp_segment_configuration_datadir			11
 
+
 extern bool gp_segment_config_has_mirrors(void);
+extern bool gp_segment_config_has_standby(void);
 
 #endif /*_GP_SEGMENT_CONFIG_H_*/

@@ -308,6 +308,10 @@ HandleFtsWalRepProbe(void)
 		}
 	}
 
+	/* Trigger master prober */
+	if (shmFtsControl->startMasterProber && shmFtsControl->ftsPid != 0)
+		SendPostmasterSignal(PMSIGNAL_WAKEN_FTS);
+
 	/*
 	 * Perform basic sanity check for disk IO on segment. Without this check
 	 * in many situations FTS didn't detect the problem and hence didn't
