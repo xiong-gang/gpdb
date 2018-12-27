@@ -790,14 +790,17 @@ gp_activate_standby(void)
 Datum
 gp_request_fts_probe_scan(PG_FUNCTION_ARGS)
 {
-	if (Gp_role != GP_ROLE_DISPATCH)
+	if (Gp_role == GP_ROLE_DISPATCH ||
+		(Gp_role == GP_ROLE_UTILITY && !IS_QUERY_DISPATCHER() && shmFtsControl->ftsPid != 0))
 	{
-		ereport(ERROR,
-				(errmsg("this function can only be called by master (without utility mode)")));
+		FtsNotifyProber();
+
+		PG_RETURN_BOOL(true);
+	}
+	else
+	{
+		ereport(ERROR, (errmsg("This function can only be called by master (without utility mode) "
+							   "or master prober segment.")));
 		PG_RETURN_BOOL(false);
 	}
-
-	FtsNotifyProber();
-
-	PG_RETURN_BOOL(true);
 }
