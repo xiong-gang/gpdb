@@ -614,10 +614,15 @@ probeRecordResponse(fts_segment_info *ftsInfo, PGresult *result)
 	Assert (retryRequested);
 	ftsInfo->result.retryRequested = *retryRequested;
 
+	int *masterProberStarted = (int *) PQgetvalue(result, 0,
+											Anum_fts_message_response_master_prober_started);
+	Assert (masterProberStarted);
+	ftsInfo->result.masterProberStarted = *masterProberStarted;
+
 	elogif(gp_log_fts >= GPVARS_VERBOSITY_TERSE, LOG,
 		   "FTS: segment (content=%d, dbid=%d, role=%c) reported "
 		   "isMirrorUp %d, isInSync %d, isSyncRepEnabled %d, "
-		   "isRoleMirror %d, and retryRequested %d to the prober.",
+		   "isRoleMirror %d, retryRequested %d and masterProberStarted %d  to the prober.",
 		   ftsInfo->primary_cdbinfo->segindex,
 		   ftsInfo->primary_cdbinfo->dbid,
 		   ftsInfo->primary_cdbinfo->role,
@@ -625,7 +630,8 @@ probeRecordResponse(fts_segment_info *ftsInfo, PGresult *result)
 		   ftsInfo->result.isInSync,
 		   ftsInfo->result.isSyncRepEnabled,
 		   ftsInfo->result.isRoleMirror,
-		   ftsInfo->result.retryRequested);
+		   ftsInfo->result.retryRequested,
+		   ftsInfo->result.masterProberStarted);
 }
 
 /*
@@ -1013,6 +1019,7 @@ processResponse(fts_context *context)
 						 * been marked down by updateConfiguration().
 						 */
 						AssertImply(SEGMENT_IS_ALIVE(mirror), is_updated);
+
 						/*
 						 * Now that the configuration is updated, FTS must notify
 						 * the primaries to unblock commits by sending syncrep off
@@ -1161,7 +1168,6 @@ processResponse(fts_context *context)
 				break;
 		}
 		/* Close connection and reset result for next message, if any. */
-		memset(&ftsInfo->result, 0, sizeof(fts_result));
 		PQfinish(ftsInfo->conn);
 		ftsInfo->conn = NULL;
 		ftsInfo->poll_events = ftsInfo->poll_revents = 0;
@@ -1231,6 +1237,7 @@ FtsWalRepInitProbeContext(CdbComponentDatabases *cdbs, fts_context *context)
 		ftsInfo->result.isSyncRepEnabled = false;
 		ftsInfo->result.retryRequested = false;
 		ftsInfo->result.isRoleMirror = false;
+		ftsInfo->result.masterProberStarted = false;
 		ftsInfo->result.dbid = primary->dbid;
 		ftsInfo->state = FTS_PROBE_SEGMENT;
 		ftsInfo->recovery_making_progress = false;
@@ -1251,7 +1258,9 @@ InitPollFds(size_t size)
 }
 
 bool
-FtsWalRepMessageSegments(CdbComponentDatabases *cdbs)
+FtsWalRepMessageSegments(CdbComponentDatabases *cdbs,
+						 bool amMasterProber,
+						 bool *masterProberStarted)
 {
 	bool is_updated = false;
 	fts_context context;
@@ -1268,6 +1277,21 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs)
 		processRetry(&context);
 		is_updated |= processResponse(&context);
 	}
+
+	if (!amMasterProber && cdbs->master_prober_info)
+	{
+		int i;
+		for (i = 0; i < context.num_pairs; i++)
+		{
+			fts_result *result = &context.perSegInfos[i].result;
+			if (result->dbid == cdbs->master_prober_info->dbid)
+			{
+				*masterProberStarted = result->masterProberStarted;
+				break;
+			}
+		}
+	}
+
 	int i;
 	if (!FtsIsActive())
 	{
@@ -1301,6 +1325,43 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs)
 	pfree(context.perSegInfos);
 	pfree(PollFds);
 	return is_updated;
+}
+
+bool
+FtsWalRepMessageOneSegment(CdbComponentDatabaseInfo *cdb, const char *message)
+{
+	PGconn *conn;
+	PGresult *res;
+	char conninfo[1024];
+	int ntuples;
+	int nfields;
+
+	snprintf(conninfo, 1024, "host=%s port=%d gpconntype=%s",
+			 cdb->hostip, cdb->port, GPCONN_TYPE_FTS);
+	conn = PQconnectdb(conninfo);
+	if (PQstatus(conn) != CONNECTION_OK)
+		return false;
+
+	res = PQexec(conn, message);
+	if (!res || PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		PQfinish(conn);
+		return false;
+	}
+
+	ntuples = PQntuples(res);
+	nfields = PQnfields(res);
+	if (nfields != Natts_fts_message_response ||
+		ntuples != FTS_MESSAGE_RESPONSE_NTUPLES)
+	{
+		PQclear(res);
+		PQfinish(conn);
+		return false;
+	}
+
+	PQfinish(conn);
+	PQclear(res);
+	return true;
 }
 
 /* EOF */

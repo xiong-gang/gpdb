@@ -59,6 +59,8 @@
 #include "catalog/gp_configuration_history.h"
 #include "catalog/gp_segment_config.h"
 
+#include "replication/walsender.h"
+#include "replication/walsender_private.h"
 #include "storage/backendid.h"
 #include "storage/bufmgr.h"
 #include "executor/spi.h"
@@ -69,6 +71,20 @@ bool am_ftsprobe = false;
 bool am_ftshandler = false;
 
 extern bool gp_enable_master_autofailover;
+
+#define MAX_ENTRYDB_COUNT 2
+
+/*
+ * STRUCTURES
+ */
+
+typedef struct MasterInfo
+{
+	int16 port;
+	char *hostname;
+	char *address;
+	char *datadir;
+} MasterInfo;
 
 /*
  * STATIC VARIABLES
@@ -91,6 +107,7 @@ NON_EXEC_STATIC void ftsMain(int argc, char *argv[]);
 static void FtsLoop(void);
 
 static CdbComponentDatabases *readCdbComponentInfoAndUpdateStatus(MemoryContext);
+static void updateMasterProberSegment(int16 dbid);
 
 /*
  * Main entry point for ftsprobe process.
@@ -117,6 +134,7 @@ ftsprobe_start(void)
 		case 0:
 			/* in postmaster child ... */
 			/* Close the postmaster's sockets */
+			shmFtsControl->ftsPid = getpid();
 			ClosePostmasterPorts(false);
 
 			ftsMain(0, NULL);
@@ -473,6 +491,444 @@ probeWalRepUpdateConfig(int16 dbid, int16 segindex, char role,
 	}
 }
 
+/*
+ * We say the standby is alive when one of the wal-sender processes is alive.
+ */
+static
+bool standbyIsInSync()
+{
+	bool inSync = false;
+	int i;
+
+	LWLockAcquire(SyncRepLock, LW_SHARED);
+	for (i = 0; i < max_wal_senders; i++)
+	{
+		if (WalSndCtl->walsnds[i].pid != 0)
+		{
+			inSync = (WalSndCtl->walsnds[i].state == WALSNDSTATE_STREAMING);
+			break;
+		}
+	}
+	LWLockRelease(SyncRepLock);
+
+	return inSync;
+}
+
+/*
+ * Master should notify standby before start master prober
+ */
+static
+bool notifyStandbyMasterProberDbid(CdbComponentDatabases *cdbs, int dbid)
+{
+	CdbComponentDatabaseInfo *standby = NULL;
+	char		message[50];
+	int		i;
+
+	for (i = 0; i < cdbs->total_entry_dbs; i++)
+	{
+		CdbComponentDatabaseInfo *cdb = &cdbs->entry_db_info[i];
+		if (cdb->role != GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+		{
+			standby = cdb;
+			break;
+		}
+	}
+
+	if (standby == NULL || !standbyIsInSync())
+		return false;
+
+	snprintf(message, sizeof(message), FTS_MSG_NEW_MASTER_PROBER_FMT, dbid);
+	return FtsWalRepMessageOneSegment(standby, message);
+}
+
+/*
+ * Send master and standby information to segment to start master prober
+ */
+static
+bool notifySegmentStartMasterProber(CdbComponentDatabases *cdbs, bool restart)
+{
+	char message[MASTER_PROBER_MESSAGE_MAXLEN];
+	CdbComponentDatabaseInfo *master = NULL;
+	CdbComponentDatabaseInfo *standby = NULL;
+	int i;
+
+	for (i = 0; i < cdbs->total_entry_dbs; i++)
+	{
+		CdbComponentDatabaseInfo *cdb = &cdbs->entry_db_info[i];
+		if (cdb->preferred_role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+			master = cdb;
+		else
+			standby = cdb;
+	}
+
+	if (!standby || !master)
+		return false;
+
+	/*
+	 * START_MASTER_PROBER;<is_restart>;<dbid>;<preferred_role>;<role>;<hostname>;<address>;
+	 * <port>;<dbid>;<preferred_role>;<role>;<hostname>;<address>;<port>
+	 */
+	snprintf(message, sizeof(message),
+			FTS_MSG_START_MASTER_PROBER_FMT,
+			restart,
+			master->dbid, master->preferred_role, master->role,
+			master->hostname, master->address, master->port,
+			standby->dbid, standby->preferred_role, standby->role,
+			standby->hostname, standby->address, standby->port);
+	return FtsWalRepMessageOneSegment(cdbs->master_prober_info, message);
+}
+
+/*
+ * Start master prober
+ */
+static
+bool startMasterProber(CdbComponentDatabases *cdbs, bool restart)
+{
+	int masterProberDbid;
+
+	if (cdbs->master_prober_info == NULL ||
+		cdbs->master_prober_info->role == GP_SEGMENT_CONFIGURATION_ROLE_MIRROR ||
+		FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdbs->master_prober_info->dbid]))
+	{
+		CdbComponentDatabaseInfo *masterProber = NULL;
+		int i;
+
+		for (i = 0; i < cdbs->total_segment_dbs; i++)
+		{
+
+			CdbComponentDatabaseInfo *cdb = &cdbs->segment_db_info[i];
+			if (!FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdb->dbid]) &&
+				cdb->role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
+			{
+				masterProber = cdb;
+				break;
+			}
+		}
+
+		if (masterProber == NULL)
+		{
+			elog(LOG, "FTS: No primary segment can start master prober");
+			return false;
+		}
+		cdbs->master_prober_info = masterProber;
+	}
+
+	masterProberDbid = cdbs->master_prober_info->dbid;
+
+	if (shmFtsControl->masterProberDBID != masterProberDbid)
+	{
+		if (!notifyStandbyMasterProberDbid(cdbs, masterProberDbid))
+		{
+			elog(LOG, "FTS: failed to notify standby the master prober");
+			return false;
+		}
+
+		updateMasterProberSegment(masterProberDbid);
+		shmFtsControl->masterProberDBID = masterProberDbid;
+	}
+
+	if (!notifySegmentStartMasterProber(cdbs, restart))
+	{
+		elog(LOG, "FTS: failed to start master prober");
+		return false;
+	}
+
+	elog(LOG, "FTS: start master prober on segment %d, is restart: %d", masterProberDbid, restart);
+	return true;
+}
+
+/*
+ * Update 'master_prober' in gp_segment_configuration
+ * when appoint the new master prober.
+ */
+static
+void updateMasterProberSegment(int16 dbid)
+{
+	Datum oldMasterProber = 0;
+	ResourceOwner save = CurrentResourceOwner;
+
+	StartTransactionCommand();
+	GetTransactionSnapshot();
+
+	/*
+	 * Find and update gp_segment_configuration tuple.
+	 */
+	{
+		Relation configrel;
+		HeapTuple configtuple;
+		HeapTuple newtuple;
+		Datum configvals[Natts_gp_segment_configuration];
+		bool confignulls[Natts_gp_segment_configuration] = { false };
+		bool repls[Natts_gp_segment_configuration] = { false };
+		ScanKeyData scankey;
+		SysScanDesc sscan;
+		bool isNull;
+
+		configrel = heap_open(GpSegmentConfigRelationId,
+							  RowExclusiveLock);
+
+		/* update the old master prober segment */
+		ScanKeyInit(&scankey,
+					Anum_gp_segment_configuration_master_prober,
+					BTEqualStrategyNumber, F_BOOLEQ,
+					BoolGetDatum(true));
+		sscan = systable_beginscan(configrel, InvalidOid, false, NULL, 1, &scankey);
+
+		configtuple = systable_getnext(sscan);
+		if (HeapTupleIsValid(configtuple))
+		{
+			oldMasterProber = heap_getattr(configtuple, Anum_gp_segment_configuration_dbid,
+					RelationGetDescr(configrel), &isNull);
+			Assert(!isNull);
+			if (DatumGetInt16(oldMasterProber) == dbid)
+			{
+				systable_endscan(sscan);
+				heap_close(configrel, RowExclusiveLock);
+				CommitTransactionCommand();
+				CurrentResourceOwner = save;
+				return;
+			}
+
+			configvals[Anum_gp_segment_configuration_master_prober-1] = BoolGetDatum(false);
+			repls[Anum_gp_segment_configuration_master_prober-1] = true;
+			newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
+					configvals, confignulls, repls);
+			simple_heap_update(configrel, &configtuple->t_self, newtuple);
+			systable_endscan(sscan);
+		}
+
+
+		/* update the new master prober segment */
+		ScanKeyInit(&scankey,
+					Anum_gp_segment_configuration_dbid,
+					BTEqualStrategyNumber, F_INT2EQ,
+					Int16GetDatum(dbid));
+		sscan = systable_beginscan(configrel, GpSegmentConfigDbidIndexId,
+								   true, NULL, 1, &scankey);
+
+		configtuple = systable_getnext(sscan);
+		if (!HeapTupleIsValid(configtuple))
+		{
+			elog(ERROR, "FTS cannot find dbid=%d in %s", dbid,
+				 RelationGetRelationName(configrel));
+		}
+
+		configvals[Anum_gp_segment_configuration_master_prober-1] = BoolGetDatum(true);
+		repls[Anum_gp_segment_configuration_master_prober-1] = true;
+		newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
+									 configvals, confignulls, repls);
+		simple_heap_update(configrel, &configtuple->t_self, newtuple);
+		CatalogUpdateIndexes(configrel, newtuple);
+		systable_endscan(sscan);
+
+		pfree(newtuple);
+		heap_close(configrel, RowExclusiveLock);
+	}
+
+	/*
+	 * Insert new tuple into gp_configuration_history catalog.
+	 */
+	{
+		Relation histrel;
+		HeapTuple histtuple;
+		Datum histvals[Natts_gp_configuration_history];
+		bool histnulls[Natts_gp_configuration_history] = { false };
+		char desc[SQL_CMD_BUF_SIZE];
+
+		histrel = heap_open(GpConfigHistoryRelationId,
+							RowExclusiveLock);
+
+		histvals[Anum_gp_configuration_history_time-1] =
+				TimestampTzGetDatum(GetCurrentTimestamp());
+		histvals[Anum_gp_configuration_history_dbid-1] =
+				Int16GetDatum(dbid);
+		snprintf(desc, sizeof(desc),
+				 "FTS: update master_prober from dbid %d to dbid %d",
+				 DatumGetInt16(oldMasterProber), dbid);
+		histvals[Anum_gp_configuration_history_desc-1] =
+				CStringGetTextDatum(desc);
+		histtuple = heap_form_tuple(RelationGetDescr(histrel), histvals, histnulls);
+		simple_heap_insert(histrel, histtuple);
+		CatalogUpdateIndexes(histrel, histtuple);
+		heap_close(histrel, RowExclusiveLock);
+	}
+
+	CommitTransactionCommand();
+	CurrentResourceOwner = save;
+}
+
+static bool
+ftsMessageNextParam(char **cpp, char **npp)
+{
+	*cpp = *npp;
+	if (!*cpp)
+		return false;
+
+	*npp = strchr(*npp, ';');
+	if (*npp)
+	{
+		**npp = '\0';
+		++*npp;
+	}
+	return true;
+}
+
+/*
+ * Parse start message and insert into gp_segment_configuration
+ */
+static void
+masterProberConfigInsert(Relation configrel, char **query)
+{
+	HeapTuple	configtuple;
+	Datum		values[Natts_gp_segment_configuration];
+	bool			isnull[Natts_gp_segment_configuration] = { false };
+	char			role;
+	char			preferredRole;
+	int16		dbid;
+	const char	*hostname;
+	const char	*address;
+	int32		port;
+	char			*cp;
+	bool			ret;
+
+	/*
+	 * START_MASTER_PROBER;<dbid>;<preferred_role>;<role>;<hostname>;<address>;
+	 * <port>;<dbid>;<preferred_role>;<role>;<hostname>;<address>;<port>
+	 */
+	ret = ftsMessageNextParam(&cp, query);
+	Assert(ret);
+	dbid = (int16)strtol(cp, NULL, 10);
+
+	ret = ftsMessageNextParam(&cp, query);
+	Assert(ret);
+	preferredRole = *cp;
+
+	ret = ftsMessageNextParam(&cp, query);
+	Assert(ret);
+	role = *cp;
+
+	ret = ftsMessageNextParam(&cp, query);
+	Assert(ret);
+	hostname = cp;
+
+	ret = ftsMessageNextParam(&cp, query);
+	Assert(ret);
+	address = cp;
+
+	ret = ftsMessageNextParam(&cp, query);
+	Assert(ret);
+	port = (int32)strtol(cp, NULL, 10);
+
+	values[Anum_gp_segment_configuration_content - 1] = Int16GetDatum(-1);
+	values[Anum_gp_segment_configuration_mode - 1] = CharGetDatum('s');
+	values[Anum_gp_segment_configuration_status - 1] = CharGetDatum('u');
+	values[Anum_gp_segment_configuration_master_prober - 1] = BoolGetDatum(false);
+	values[Anum_gp_segment_configuration_datadir - 1] = CStringGetTextDatum("");
+
+	values[Anum_gp_segment_configuration_preferred_role - 1] = CharGetDatum(preferredRole);
+	values[Anum_gp_segment_configuration_dbid - 1] = Int16GetDatum(dbid);
+	values[Anum_gp_segment_configuration_role - 1] = CharGetDatum(role);
+	values[Anum_gp_segment_configuration_port - 1] = Int32GetDatum(port);
+	values[Anum_gp_segment_configuration_hostname - 1] = CStringGetTextDatum(hostname);
+	values[Anum_gp_segment_configuration_address - 1] = CStringGetTextDatum(address);
+
+	configtuple = heap_form_tuple(RelationGetDescr(configrel), values, isnull);
+	simple_heap_insert(configrel, configtuple);
+	CatalogUpdateIndexes(configrel, configtuple);
+	return;
+}
+
+/*
+ * Clear gp_segment_configuration
+ */
+static
+void masterProberConfigClear(Relation configrel)
+{
+	HeapTuple	tup;
+	SysScanDesc scan;
+
+	scan = systable_beginscan(configrel, InvalidOid, false, NULL, 0, NULL);
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+		simple_heap_delete(configrel, &tup->t_self);
+
+	systable_endscan(scan);
+}
+
+/*
+ * Insert master and standby information into gp_segment_configuration
+ */
+static
+void masterProberConfigInit()
+{
+	Relation configrel;
+	ResourceOwner save;
+
+	char	   *message = pstrdup(shmFtsControl->masterProberMessage);
+	char	   *cp;
+
+	ftsMessageNextParam(&cp, &message);
+	Assert(strncmp(cp, FTS_MSG_START_MASTER_PROBER,
+				   strlen(FTS_MSG_START_MASTER_PROBER)) == 0);
+	ftsMessageNextParam(&cp, &message);
+
+	save = CurrentResourceOwner;
+	StartTransactionCommand();
+	GetTransactionSnapshot();
+
+	configrel = heap_open(GpSegmentConfigRelationId, RowExclusiveLock);
+	masterProberConfigClear(configrel);
+	masterProberConfigInsert(configrel, &message);
+	masterProberConfigInsert(configrel, &message);
+	heap_close(configrel, RowExclusiveLock);
+
+	CommitTransactionCommand();
+	CurrentResourceOwner = save;
+}
+
+/*
+ * Check if master and standby information changed
+ */
+static
+bool updateMasterInfomationForMasterProber(CdbComponentDatabases *cdbs, MasterInfo *masters)
+{
+	bool	masterInfoChanged = false;
+	int		i;
+
+	Assert(cdbs->total_entry_dbs == MAX_ENTRYDB_COUNT);
+
+	for (i = 0; i < MAX_ENTRYDB_COUNT; i++)
+	{
+		if (masters[i].hostname == NULL ||
+			strcmp(masters[i].hostname, cdbs->entry_db_info[i].hostname) != 0)
+		{
+			masters[i].hostname = pstrdup(cdbs->entry_db_info[i].hostname);
+			masterInfoChanged = true;
+		}
+
+		if (masters[i].address == NULL ||
+			strcmp(masters[i].address, cdbs->entry_db_info[i].address) != 0)
+		{
+			masters[i].address = pstrdup(cdbs->entry_db_info[i].address);
+			masterInfoChanged = true;
+		}
+
+		if (masters[i].datadir == NULL ||
+			strcmp(masters[i].datadir, cdbs->entry_db_info[i].datadir) != 0)
+		{
+			masters[i].datadir = pstrdup(cdbs->entry_db_info[i].datadir);
+			masterInfoChanged = true;
+		}
+
+		if (masters[i].port !=  cdbs->entry_db_info[i].port)
+		{
+			masters[i].port = cdbs->entry_db_info[i].port;
+			masterInfoChanged = true;
+		}
+	}
+
+	return masterInfoChanged;
+}
+
 static
 void FtsLoop()
 {
@@ -480,15 +936,23 @@ void FtsLoop()
 	MemoryContext probeContext = NULL, oldContext = NULL;
 	time_t elapsed,	probe_start_time;
 	CdbComponentDatabases *cdbs = NULL;
+	bool	masterInfoChanged = true;
+	bool	am_masterprober = !IS_QUERY_DISPATCHER();
+	MasterInfo	*masterInfos = palloc0(sizeof(MasterInfo) * MAX_ENTRYDB_COUNT);
 
 	probeContext = AllocSetContextCreate(TopMemoryContext,
 										 "FtsProbeMemCtxt",
 										 ALLOCSET_DEFAULT_INITSIZE,	/* always have some memory */
 										 ALLOCSET_DEFAULT_INITSIZE,
 										 ALLOCSET_DEFAULT_MAXSIZE);
+
+	if (am_masterprober)
+		masterProberConfigInit();
+
 	while (!shutdown_requested)
 	{
 		bool		has_mirrors;
+		bool		masterProberStarted = false;
 
 		/* no need to live on if postmaster has died */
 		if (!PostmasterIsAlive())
@@ -512,6 +976,12 @@ void FtsLoop()
 
 		/* close the transaction we started above */
 		CommitTransactionCommand();
+
+		/* is master or standby changed? */
+		if (gp_enable_master_autofailover &&
+			!am_masterprober &&
+			cdbs->total_entry_dbs == MAX_ENTRYDB_COUNT)
+			masterInfoChanged = updateMasterInfomationForMasterProber(cdbs, masterInfos);
 
 		/* Reset this as we are performing the probe */
 		probe_requested = false;
@@ -542,7 +1012,7 @@ void FtsLoop()
 			 */
 			oldContext = MemoryContextSwitchTo(probeContext);
 
-			updated_probe_state = FtsWalRepMessageSegments(cdbs);
+			updated_probe_state = FtsWalRepMessageSegments(cdbs, am_masterprober, &masterProberStarted);
 
 			MemoryContextSwitchTo(oldContext);
 
@@ -552,6 +1022,15 @@ void FtsLoop()
 			/* Bump the version if configuration was updated. */
 			if (updated_probe_state)
 				ftsProbeInfo->fts_statusVersion++;
+		}
+
+		/* Start the master prober if it's not started or the master and standby information has changed */
+		if (gp_enable_master_autofailover &&
+			!am_masterprober &&
+			cdbs->total_entry_dbs == MAX_ENTRYDB_COUNT &&
+			(!masterProberStarted || masterInfoChanged))
+		{
+			startMasterProber(cdbs, masterInfoChanged);
 		}
 
 		/* free current components info and free ip addr caches */	
@@ -581,4 +1060,13 @@ bool
 FtsIsActive(void)
 {
 	return (!skipFtsProbe && !shutdown_requested);
+}
+
+/*
+ * Start master prober when 'startMasterProber' is set.
+ */
+bool
+shouldStartMasterProber(void)
+{
+	return shmFtsControl->startMasterProber;
 }

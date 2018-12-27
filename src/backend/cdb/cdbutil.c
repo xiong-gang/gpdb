@@ -290,6 +290,13 @@ getCdbComponentInfo(bool DNSLookupAsError)
 		pRow->address = TextDatumGetCString(attr);
 
 		/*
+		 * datadir
+		 */
+		attr = heap_getattr(gp_seg_config_tuple, Anum_gp_segment_configuration_datadir, RelationGetDescr(gp_seg_config_rel), &isNull);
+		Assert(!isNull);
+		pRow->datadir = TextDatumGetCString(attr);
+
+		/*
 		 * port
 		 */
 		attr = heap_getattr(gp_seg_config_tuple, Anum_gp_segment_configuration_port, RelationGetDescr(gp_seg_config_rel), &isNull);
