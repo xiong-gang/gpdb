@@ -227,7 +227,7 @@
 
  CREATE FUNCTION gp_remove_segment_mirror(int2) RETURNS bool LANGUAGE internal VOLATILE AS 'gp_remove_segment_mirror' WITH (OID=5049, DESCRIPTION="Remove a segment mirror from the system catalog");
 
- CREATE FUNCTION gp_add_segment(int2, int2, "char", "char", "char", "char", int4, text, text, text) RETURNS int2 LANGUAGE internal VOLATILE AS 'gp_add_segment' WITH (OID=5050, DESCRIPTION="Perform the catalog operations necessary for adding a new segment");
+ CREATE FUNCTION gp_add_segment(int2, int2, "char", "char", "char", "char", int4, bool, text, text, text) RETURNS int2 LANGUAGE internal VOLATILE AS 'gp_add_segment' WITH (OID=5050, DESCRIPTION="Perform the catalog operations necessary for adding a new segment");
 
  CREATE FUNCTION gp_expand_lock_catalog() RETURNS void LANGUAGE internal VOLATILE AS 'gp_expand_lock_catalog' WITH (OID=5080, DESCRIPTION="Lock catalog changes for gpexpand");
 
