@@ -137,7 +137,6 @@ ftsprobe_start(void)
 	return 0;
 }
 
-
 /*=========================================================================
  * HELPER FUNCTIONS
  */
@@ -882,6 +881,7 @@ void FtsLoop()
 	CdbComponentDatabases *cdbs = NULL;
 	int		entryDBCount = 0;
 	bool	am_masterprober = !IS_QUERY_DISPATCHER();
+	bool	standbyInSync;
 
 	probeContext = AllocSetContextCreate(TopMemoryContext,
 										 "FtsProbeMemCtxt",
@@ -961,6 +961,28 @@ void FtsLoop()
 			/* Bump the version if configuration was updated. */
 			if (updated_probe_state)
 				ftsProbeInfo->fts_statusVersion++;
+		}
+
+		standbyInSync = (cdbs->entry_db_info[0].mode == GP_SEGMENT_CONFIGURATION_MODE_INSYNC);
+		if (!am_masterprober && cdbs->total_entry_dbs == 2 && standbyInSync != standbyIsInSync())
+		{
+			ResourceOwner save = CurrentResourceOwner;
+
+			standbyInSync = !standbyInSync;
+			StartTransactionCommand();
+			GetTransactionSnapshot();
+			if (standbyInSync)
+			{
+				probeWalRepUpdateConfig(cdbs->entry_db_info[0].dbid, -1, 'p', true, true);
+				probeWalRepUpdateConfig(cdbs->entry_db_info[1].dbid, -1, 'm', true, true);
+			}
+			else
+			{
+				probeWalRepUpdateConfig(cdbs->entry_db_info[0].dbid, -1, 'p', true, false);
+				probeWalRepUpdateConfig(cdbs->entry_db_info[1].dbid, -1, 'm', false, false);
+			}
+			CommitTransactionCommand();
+			CurrentResourceOwner = save;
 		}
 
 		if (gp_enable_master_autofailover && !am_masterprober && cdbs->total_entry_dbs == 2)

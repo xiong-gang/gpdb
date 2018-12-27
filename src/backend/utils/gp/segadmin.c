@@ -732,68 +732,6 @@ gp_remove_master_standby(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(true);
 }
 
-static void
-segment_config_activate_standby(int16 standbydbid, int16 newdbid)
-{
-	/* we use AccessExclusiveLock to prevent races */
-	Relation	rel = heap_open(GpSegmentConfigRelationId, AccessExclusiveLock);
-	HeapTuple	tuple;
-	ScanKeyData scankey;
-	SysScanDesc sscan;
-	int			numDel = 0;
-
-	/* first, delete the old master */
-	ScanKeyInit(&scankey,
-				Anum_gp_segment_configuration_dbid,
-				BTEqualStrategyNumber, F_INT2EQ,
-				Int16GetDatum(newdbid));
-	sscan = systable_beginscan(rel, GpSegmentConfigDbidIndexId, true,
-							   NULL, 1, &scankey);
-	while ((tuple = systable_getnext(sscan)) != NULL)
-	{
-		simple_heap_delete(rel, &tuple->t_self);
-		numDel++;
-	}
-	systable_endscan(sscan);
-
-	if (0 == numDel)
-		elog(ERROR, "cannot find old master, dbid %i", newdbid);
-
-	/* now, set out old dbid to the new dbid */
-	ScanKeyInit(&scankey,
-				Anum_gp_segment_configuration_dbid,
-				BTEqualStrategyNumber, F_INT2EQ,
-				Int16GetDatum(standbydbid));
-	sscan = systable_beginscan(rel, GpSegmentConfigDbidIndexId, true,
-							   NULL, 1, &scankey);
-
-	tuple = systable_getnext(sscan);
-
-	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "cannot find standby, dbid %i", standbydbid);
-
-	tuple = heap_copytuple(tuple);
-	((Form_gp_segment_configuration) GETSTRUCT(tuple))->role = GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY;
-	((Form_gp_segment_configuration) GETSTRUCT(tuple))->preferred_role = GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY;
-
-	simple_heap_update(rel, &tuple->t_self, tuple);
-	CatalogUpdateIndexes(rel, tuple);
-
-	systable_endscan(sscan);
-
-	heap_close(rel, NoLock);
-}
-
-/*
- * Update gp_segment_configuration to activate a standby.
- * This means deleting references to the old standby.
- */
-static void
-catalog_activate_standby(int16 standbydbid, int16 olddbid)
-{
-	segment_config_activate_standby(standbydbid, olddbid);
-}
-
 /*
  * Activate a standby. To do this, we need to change
  *
@@ -815,10 +753,12 @@ catalog_activate_standby(int16 standbydbid, int16 olddbid)
 bool
 gp_activate_standby(void)
 {
-	int16		olddbid = GpIdentity.dbid;
-	int16		newdbid;
+	int16		masterdbid;
+	int16		standbydbid;
+	int16		mydbid = GpIdentity.dbid;
 
-	newdbid = contentid_get_dbid(MASTER_CONTENT_ID, GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY, true);
+	masterdbid = contentid_get_dbid(MASTER_CONTENT_ID, GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY, false);
+	standbydbid = contentid_get_dbid(MASTER_CONTENT_ID, GP_SEGMENT_CONFIGURATION_ROLE_MIRROR, false);
 
 	/*
 	 * This call comes from Startup process post checking state in pg_control
@@ -828,7 +768,7 @@ gp_activate_standby(void)
 	 * for StartUp Process, to cover for case of crash after updating the
 	 * catalogs during promote.
 	 */
-	if (am_startup && (newdbid == olddbid))
+	if (am_startup && (masterdbid == mydbid))
 	{
 		/*
 		 * Job is already done, nothing needs to be done. We mostly crashed
@@ -840,7 +780,8 @@ gp_activate_standby(void)
 	mirroring_sanity_check(SUPERUSER | UTILITY_MODE | STANDBY_ONLY,
 						   PG_FUNCNAME_MACRO);
 
-	catalog_activate_standby(olddbid, newdbid);
+	probeWalRepUpdateConfig(standbydbid, -1, 'p', true, false);
+	probeWalRepUpdateConfig(masterdbid, -1, 'm', false, false);
 
 	/* done */
 	return true;
