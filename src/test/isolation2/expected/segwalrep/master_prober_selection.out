@@ -1,0 +1,147 @@
+-- Tests master prober selection
+--
+-- When the master prober segment is down, master will
+-- start another master prober on another segment if
+-- master and standby are in-sync.
+--
+
+include: helpers/server_helpers.sql;
+CREATE
+
+create extension if not exists gp_inject_fault;
+CREATE
+
+select dbid, content from gp_segment_configuration where master_prober='t';
+dbid|content
+----+-------
+2   |0      
+(1 row)
+
+-- stop standby
+select pg_ctl(datadir, 'stop') from gp_segment_configuration where content=-1 and role='m';
+pg_ctl                                              
+----------------------------------------------------
+waiting for server to shut down done
+server stopped
+
+(1 row)
+-- trigger master prober
+0U: select gp_request_fts_probe_scan();
+gp_request_fts_probe_scan
+-------------------------
+t                        
+(1 row)
+-- wait master get unblocked by master prober
+begin;end;
+BEGIN;END
+-- stop master prober segment
+select pg_ctl(datadir, 'stop') from gp_segment_configuration where master_prober='t';
+pg_ctl                                              
+----------------------------------------------------
+waiting for server to shut down done
+server stopped
+
+(1 row)
+-- trigger manual probe
+select gp_request_fts_probe_scan();
+gp_request_fts_probe_scan
+-------------------------
+t                        
+(1 row)
+-- we will see the master prober is not changed
+select dbid, content from gp_segment_configuration where master_prober='t';
+dbid|content
+----+-------
+2   |0      
+(1 row)
+-- start standby
+select pg_ctl_start(datadir, port, content, dbid) from gp_segment_configuration where content=-1 and role='m';
+pg_ctl_start    
+----------------
+server starting
+
+(1 row)
+-- wait standby is in-sync
+do $$ begin /* in func */ for i in 1..120 loop /* in func */ if (select sync_state='sync' from pg_stat_replication) then /* in func */ return; /* in func */ end if; /* in func */ perform gp_request_fts_probe_scan(); /* in func */ end loop; /* in func */ end; /* in func */ $$;
+DO
+-- and trigger manual probe
+select gp_request_fts_probe_scan();
+gp_request_fts_probe_scan
+-------------------------
+t                        
+(1 row)
+-- there's a new master prober
+select dbid, content from gp_segment_configuration where master_prober='t';
+dbid|content
+----+-------
+6   |0      
+(1 row)
+
+-- fully recover the failed primary as new mirror
+!\retcode gprecoverseg -aF;
+-- start_ignore
+20181213:21:36:27:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Starting gprecoverseg with args: -aF
+20181213:21:36:27:015183 gprecoverseg:sdw:gpadmin-[INFO]:-local Greenplum Version: 'postgres (Greenplum Database) 6.0.0-alpha.0+dev.13200.g595ab27d5e build dev-oss'
+20181213:21:36:27:015183 gprecoverseg:sdw:gpadmin-[INFO]:-master Greenplum Version: 'PostgreSQL 9.4beta1 (Greenplum Database 6.0.0-alpha.0+dev.13200.g595ab27d5e build dev-oss) on x86_64-unknown-linux-gnu, compiled by gcc (GCC) 4.8.5 20150623 (Red Hat 4.8.5-28), 64-bit compiled on Dec 13 2018 09:11:02 (with assert checking)'
+20181213:21:36:27:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Obtaining Segment details from master...
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Heap checksum setting is consistent between master and the segments that are candidates for recoverseg
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Greenplum instance recovery parameters
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:----------------------------------------------------------
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Recovery type              = Standard
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:----------------------------------------------------------
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Recovery 1 of 1
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:----------------------------------------------------------
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Synchronization mode                 = Full
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Failed instance host                 = sdw
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Failed instance address              = sdw
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Failed instance directory            = /home/gpadmin/workspace/gpdb/gpAux/gpdemo/datadirs/dbfast1/demoDataDir0
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Failed instance port                 = 25432
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Recovery Source instance host        = sdw
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Recovery Source instance address     = sdw
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Recovery Source instance directory   = /home/gpadmin/workspace/gpdb/gpAux/gpdemo/datadirs/dbfast_mirror1/demoDataDir0
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Recovery Source instance port        = 25435
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-   Recovery Target                      = in-place
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:----------------------------------------------------------
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-1 segment(s) to recover
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Ensuring 1 failed segment(s) are stopped
+ 
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Ensuring that shared memory is cleaned up for stopped segments
+20181213:21:36:28:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Validating remote directories
+. 
+20181213:21:36:29:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Configuring new segments
+.... 
+20181213:21:36:34:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Updating mirrors
+. 
+20181213:21:36:35:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Starting mirrors
+20181213:21:36:35:015183 gprecoverseg:sdw:gpadmin-[INFO]:-era is 0d05ff8304e09d75_181213162403
+20181213:21:36:35:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Commencing parallel segment instance startup, please wait...
+. 
+20181213:21:36:36:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Process results...
+20181213:21:36:36:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Triggering FTS probe
+20181213:21:36:36:015183 gprecoverseg:sdw:gpadmin-[INFO]:-******************************************************************
+20181213:21:36:36:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Updating segments for streaming is completed.
+20181213:21:36:36:015183 gprecoverseg:sdw:gpadmin-[INFO]:-For segments updated successfully, streaming will continue in the background.
+20181213:21:36:36:015183 gprecoverseg:sdw:gpadmin-[INFO]:-Use  gpstate -s  to check the streaming progress.
+20181213:21:36:36:015183 gprecoverseg:sdw:gpadmin-[INFO]:-******************************************************************
+
+-- end_ignore
+(exited with code 0)
+-- trigger failover
+select gp_request_fts_probe_scan();
+gp_request_fts_probe_scan
+-------------------------
+t                        
+(1 row)
+-- expect: to see roles flipped and in sync
+select content, preferred_role, role, status, mode, master_prober from gp_segment_configuration;
+content|preferred_role|role|status|mode|master_prober
+-------+--------------+----+------+----+-------------
+-1     |p             |p   |u     |n   |f            
+-1     |m             |m   |u     |s   |f            
+1      |p             |p   |u     |s   |f            
+1      |m             |m   |u     |s   |f            
+2      |p             |p   |u     |s   |f            
+2      |m             |m   |u     |s   |f            
+0      |m             |p   |u     |s   |t            
+0      |p             |m   |u     |s   |f            
+(8 rows)
