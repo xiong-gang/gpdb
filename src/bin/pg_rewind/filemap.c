@@ -87,7 +87,13 @@ process_source_file(const char *path, file_type_t type, size_t newsize,
 	 * Completely ignore some special files in source and destination.
 	 */
 	if (strcmp(path, "postmaster.pid") == 0 ||
-		strcmp(path, "postmaster.opts") == 0)
+		strcmp(path, "postmaster.opts") == 0 ||
+		/*
+		 * TODO: gp_dbid file is removed from segments but remains on
+		 * the master, we can completely remove it if we can make
+		 * master's dbid always equal 1.
+		 */
+		strcmp(path, "gp_dbid") == 0)
 		return;
 
 	/*

@@ -254,7 +254,7 @@ class GpRecoverSegmentProgram:
                                    self.__options.parallelDegree, forceoverwrite=True)
 
     def findAndValidatePeersForFailedSegments(self, gpArray, failedSegments):
-        dbIdToPeerMap = gpArray.getDbIdToPeerMap()
+        dbIdToPeerMap = gpArray.getDbIdToPeerMap(True)
         peersForFailedSegments = [dbIdToPeerMap.get(seg.getSegmentDbId()) for seg in failedSegments]
 
         for i in range(len(failedSegments)):
@@ -274,7 +274,7 @@ class GpRecoverSegmentProgram:
         returns: a tuple (segments in change tracking disabled mode which are unable to recover, GpMirrorListToBuild object
                  containing information of segments which are able to recover)
         """
-        segments = gpArray.getSegDbList()
+        segments = gpArray.getDbList()
 
         failedSegments = [seg for seg in segments if seg.isSegmentDown()]
         peersForFailedSegments = self.findAndValidatePeersForFailedSegments(gpArray, failedSegments)
