@@ -1138,12 +1138,13 @@ class GpArray:
         return hostList
 
 
-    def getDbIdToPeerMap(self):
+    def getDbIdToPeerMap(self, includeMasters=False):
         """
         Returns a map that maps a dbid to the peer segment for that dbid
         """
         contentIdToSegments = {}
-        for seg in self.getSegDbList():
+        instances = self.getDbList() if includeMasters else self.getSegDbList()
+        for seg in instances:
             arr = contentIdToSegments.get(seg.getSegmentContentId())
             if arr is None:
                 arr = []

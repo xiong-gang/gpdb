@@ -66,12 +66,9 @@ class GpMirrorToBuild:
         if failedSegment is None and failoverSegment is None:
             raise Exception("No mirror passed to GpMirrorToBuild")
 
-        if not liveSegment.isSegmentQE():
-            raise ExceptionNoStackTraceNeeded("Segment to recover from for content %s is not a correct segment "
-                                              "(it is a master or standby master)" % liveSegment.getSegmentContentId())
-        if not liveSegment.isSegmentPrimary(True):
+        if not liveSegment.isSegmentPrimary(True) and not liveSegment.isSegmentMaster(True):
             raise ExceptionNoStackTraceNeeded(
-                "Segment to recover from for content %s is not a primary" % liveSegment.getSegmentContentId())
+                "Segment to recover from for content %s is not a primary or master" % liveSegment.getSegmentContentId())
         if not liveSegment.isSegmentUp():
             raise ExceptionNoStackTraceNeeded(
                 "Primary segment is not up for content %s" % liveSegment.getSegmentContentId())
@@ -692,9 +689,30 @@ class GpMirrorListToBuild:
         self.__runWaitAndCheckWorkerPoolForErrorsAndClear(cmds, "writing updated gpid files")
 
     def __startAll(self, gpEnv, gpArray, segments):
-
         # the newly started segments should belong to the current era
         era = read_era(gpEnv.getMasterDataDir(), logger=self.__logger)
+
+        standby = None
+        for seg in segments:
+            if seg.isSegmentStandby(True):
+                standby = seg
+                segments.remove(seg)
+                break
+
+        start_standby_successfull = True
+        if standby is not None:
+            cmd = gp.GpStandbyStart.remote('start standby master',
+                                        standby.hostname,
+                                        standby.datadir,
+                                        standby.port,
+                                        gpArray.getNumSegmentContents(),
+                                        standby.dbid,
+                                        era=era)
+            logger.debug("Starting standby: %s" % cmd)
+            logger.debug("Starting standby master results: %s" % cmd.get_results())
+            start_standby_successfull = cmd.get_results().rc == 0
+            if not start_standby_successfull:
+                self.__logger.warn("Failed to start standby.  The fault prober will shortly mark it as down.")
 
         segmentStartResult = self.__createStartSegmentsOp(gpEnv).startSegments(gpArray, segments,
                                                                                startSegments.START_AS_MIRRORLESS,
@@ -707,7 +725,7 @@ class GpMirrorListToBuild:
                 "Failed to start segment.  The fault prober will shortly mark it as down. Segment: %s: REASON: %s" % (
                 failedSeg, failureReason))
 
-        return start_all_successfull
+        return start_all_successfull and start_standby_successfull
 
 class GpCleanupSegmentDirectoryDirective:
     def __init__(self, segment):
