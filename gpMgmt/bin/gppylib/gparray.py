@@ -129,7 +129,7 @@ class Segment:
 
     # --------------------------------------------------------------------
     def __init__(self, content, preferred_role, dbid, role, mode, status,
-                 hostname, address, port, datadir):
+                 hostname, address, port, master_prober, datadir):
 
         # Todo: replace all these fields with private alternatives:
         # e.g. '_content' instead of 'content'.
@@ -145,6 +145,7 @@ class Segment:
         self.hostname=hostname
         self.address=address
         self.port=port
+        self.master_prober = master_prober
         self.datadir=datadir
 
         # Todo: Remove old dead code
@@ -155,7 +156,7 @@ class Segment:
         """
         Construct a printable string representation of a Segment
         """
-        return "%s:%s:content=%s:dbid=%s:role=%s:preferred_role=%s:mode=%s:status=%s" % (
+        return "%s:%s:content=%s:dbid=%s:role=%s:preferred_role=%s:mode=%s:status=%s:is_master_prober=%s" % (
             self.hostname,
             self.datadir,
             self.content,
@@ -163,7 +164,8 @@ class Segment:
             self.role,
             self.preferred_role,
             self.mode,
-            self.status
+            self.status,
+            self.master_prober
             )
 
     #
@@ -260,6 +262,7 @@ class Segment:
                     hostname        = hostname,
                     address         = address,
                     port            = port,
+                    master_prober   = False,
                     datadir         = datadir)
 
         # Return the completed segment
@@ -331,6 +334,9 @@ class Segment:
         role = self.role if current_role else self.preferred_role
         return self.content >= 0 and role == ROLE_MIRROR
 
+    def isMasterProber(self):
+        return self.master_prober
+
     def isSegmentUp(self):
         return self.status == STATUS_UP
 
@@ -357,6 +363,9 @@ class Segment:
 
     def getSegmentRole(self):
         return checkNotNone("role", self.role)
+
+    def getIsMasterProber(self):
+        return checkNotNone("masterProber", self.master_prober)
 
     def getSegmentPreferredRole(self):
         return checkNotNone("preferredRole", self.preferred_role)
@@ -444,6 +453,10 @@ class Segment:
         checkNotNone("port", port)
         checkIsInt("port", port)
         self.port = port
+
+    def setMasterProber(self, master_prober):
+        checkNotNone("master_prober", master_prober)
+        self.master_prober = master_prober
 
     def setSegmentHostName(self, hostName):
         # None is allowed -- don't check
@@ -1024,7 +1037,7 @@ class GpArray:
 
         config_rows = dbconn.execSQL(conn, '''
         SELECT dbid, content, role, preferred_role, mode, status,
-        hostname, address, port, datadir
+        hostname, address, port, master_prober, datadir
         FROM pg_catalog.gp_segment_configuration
         ORDER BY content, preferred_role DESC
         ''')
@@ -1036,7 +1049,7 @@ class GpArray:
 
             # Extract fields from the row
             (dbid, content, role, preferred_role, mode, status, hostname,
-             address, port, datadir) = row
+             address, port, master_prober, datadir) = row
 
             # Check if segment mirrors exist
             if preferred_role == ROLE_MIRROR and content != -1:
@@ -1048,7 +1061,7 @@ class GpArray:
                     recoveredSegmentDbids.append(dbid)
 
             seg = Segment(content, preferred_role, dbid, role, mode, status,
-                              hostname, address, port, datadir)
+                              hostname, address, port, master_prober, datadir)
             segments.append(seg)
 
         origSegments = [seg.copy() for seg in segments]
@@ -1253,9 +1266,51 @@ class GpArray:
         return dbs
 
     # --------------------------------------------------------------------
+    def get_invalid_master(self):
+        dbs = []
+        if not self.master.valid:
+            dbs.append(self.master)
+        if self.standbyMaster and not self.standbyMaster.valid:
+            dbs.append(self.standbyMaster)
+        return dbs
+
+    # --------------------------------------------------------------------
+    def get_synchronized_master(self):
+        dbs = []
+        if self.master.mode == MODE_SYNCHRONIZED:
+            dbs.append(self.master)
+        if self.standbyMaster and self.standbyMaster.mode == MODE_SYNCHRONIZED:
+            dbs.append(self.standbyMaster)
+        return dbs
+
+    # --------------------------------------------------------------------
+    def get_unbalanced_master(self):
+        dbs=[]
+        if self.master.role != self.master.preferred_role:
+            dbs.append(self.master)
+        if self.standbyMaster and self.standbyMaster.role != self.standbyMaster.preferred_role:
+            dbs.append(self.standbyMaster)
+        return dbs
+
+    # --------------------------------------------------------------------
     def get_unbalanced_primary_segdbs(self):
         dbs = [seg for seg in self.get_unbalanced_segdbs() if seg.role == ROLE_PRIMARY]
         return dbs
+
+    # --------------------------------------------------------------------
+    def get_master_prober(self):
+        for db in self.getSegDbList(False):
+            if db.isMasterProber():
+                return db
+
+        return None
+
+    # --------------------------------------------------------------------
+    def is_master_prober_enabled(self):
+        dburl = dbconn.DbURL(hostname=self.master.getSegmentHostName(), port=self.master.getSegmentPort())
+        with dbconn.connect(dburl) as conn:
+            res = dbconn.execSQL(conn, "SHOW gp_enable_master_autofailover").fetchone()[0]
+            return res == 'on'
 
     # --------------------------------------------------------------------
     def get_valid_segdbs(self):

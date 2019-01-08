@@ -337,6 +337,15 @@ class GpMirrorListToBuild:
                 self.__logger.warning("Incremental recovery failed for dbid %s. You must use gprecoverseg -F to recover the segment." % targetSegment.getSegmentDbId())
                 rewindFailedSegments.append(targetSegment)
 
+            # postgresql.conf is overwritten, set the correct 'port'
+            cmd = gp.GpAddConfigScript('update config',
+                                       targetSegment.getSegmentDataDirectory(),
+                                       'port',
+                                       value=str(targetSegment.getSegmentPort()),
+                                       ctxt=gp.REMOTE,
+                                       remoteHost=targetSegment.getSegmentHostName())
+            cmd.run(validateAfter=True)
+
         return rewindFailedSegments
 
     def checkForPortAndDirectoryConflicts(self, gpArray):
