@@ -7,7 +7,7 @@ top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 REGRESS = setup
-REGRESS += replication_views_mirrored missing_xlog walreceiver generate_ao_xlog generate_aoco_xlog
+REGRESS += replication_views_mirrored missing_xlog walreceiver generate_ao_xlog generate_aoco_xlog gpinitstandby
 REGRESS_OPTS = --dbname="walrep_regression"
 
 NO_PGXS = 1
