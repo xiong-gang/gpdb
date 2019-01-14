@@ -1,6 +1,7 @@
 import os
 import signal
 import time
+import stat
 
 from gppylib.mainUtils import *
 
@@ -322,6 +323,11 @@ class GpMirrorListToBuild:
             conn = dbconn.connect(dburl, utility=True)
             dbconn.execSQL(conn, "CHECKPOINT")
 
+            # change gp_era mode to 0600
+            gp_era_file = os.path.join(targetSegment.getSegmentDataDirectory(), 'pg_log', 'gp_era')
+            if os.path.exists(gp_era_file):
+                os.chmod(gp_era_file, stat.S_IRUSR | stat.S_IWUSR)
+
             # Run pg_rewind to do incremental recovery.
             cmd = gp.SegmentRewind('segment rewind',
                                    targetSegment.getSegmentHostName(),
@@ -336,6 +342,10 @@ class GpMirrorListToBuild:
                 self.__logger.debug("pg_rewind failed for target directory %s." % targetSegment.getSegmentDataDirectory())
                 self.__logger.warning("Incremental recovery failed for dbid %s. You must use gprecoverseg -F to recover the segment." % targetSegment.getSegmentDbId())
                 rewindFailedSegments.append(targetSegment)
+
+            # restore gp_era mode to 0400
+            if os.path.exists(gp_era_file):
+                os.chmod(gp_era_file, stat.S_IRUSR)
 
             # postgresql.conf is overwritten, set the correct 'port'
             cmd = gp.GpAddConfigScript('update config',

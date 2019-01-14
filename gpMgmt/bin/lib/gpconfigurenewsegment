@@ -137,8 +137,17 @@ class ConfExpSegCmd(Command):
                         except Exception, e:
                             self.set_results(CommandResult(1,'',e,True,False))
                             raise
-
                         logger.info("ran pg_backbackup: %s" % cmd.cmdStr)
+
+                        logger.info("Updating %s/postgresql.conf" % self.datadir)
+                        modifyPostgresqlConfCmd = ModifyPostgresqlConfSetting('Updating %s/postgresql.conf' % self.datadir,
+                                                                              self.datadir + '/postgresql.conf',
+                                                                              'port', self.port, optType='number')
+                        try:
+                            modifyPostgresqlConfCmd.run(validateAfter=True)
+                        except:
+                            self.set_results(modifyPostgresqlConfCmd.get_results())
+                            raise
                         return
 
                     logger.info("Create or update data directories for new segment")
