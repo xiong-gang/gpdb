@@ -26,8 +26,6 @@ include: helpers/server_helpers.sql;
 
 -- make sure we are in-sync for the master we will be testing with
 select sync_state from pg_stat_replication;
--- the master prober is on segment 0, dbid is 2
-select dbid, content from gp_segment_configuration where master_prober = 't';
 -- gp_segment_configuration on segment 0 shows master/standby is in-sync
 0U: select content, role, preferred_role, mode, status from gp_segment_configuration;
 

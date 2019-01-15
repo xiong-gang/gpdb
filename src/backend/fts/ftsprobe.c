@@ -1293,6 +1293,7 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs,
 {
 	bool is_updated = false;
 	fts_context context;
+	int i;
 
 	FtsWalRepInitProbeContext(cdbs, &context, amMasterProber);
 	InitPollFds(context.num_pairs);
@@ -1307,21 +1308,9 @@ FtsWalRepMessageSegments(CdbComponentDatabases *cdbs,
 		is_updated |= processResponse(&context);
 	}
 
-	if (!amMasterProber && cdbs->master_prober_info)
-	{
-		int i;
-		for (i = 0; i < context.num_pairs; i++)
-		{
-			fts_result *result = &context.perSegInfos[i].result;
-			if (result->dbid == cdbs->master_prober_info->dbid)
-			{
-				*masterProberStarted = result->masterProberStarted;
-				break;
-			}
-		}
-	}
+	if (!amMasterProber && masterProberStarted)
+		*masterProberStarted = context.perSegInfos[0].result.masterProberStarted;
 
-	int i;
 	if (!FtsIsActive())
 	{
 		for (i = 0; i < context.num_pairs; i++)

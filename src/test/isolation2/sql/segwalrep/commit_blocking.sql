@@ -83,10 +83,10 @@ begin;end;
 
 select gp_inject_fault('fts_probe', 'reset', dbid)
     from gp_segment_configuration
-    where master_prober = true;
+    where content = 0 and role = 'p';
 select gp_inject_fault_infinite('fts_probe', 'skip', dbid)
     from gp_segment_configuration
-    where master_prober = true;
+    where content = 0 and role = 'p';
 
 -- create table and show commits are not blocked
 create table standbywalrep_commit_blocking (a int) distributed by (a);
@@ -131,4 +131,4 @@ alter system set synchronous_standby_names to default;
 -- resume FTS probes
 select gp_inject_fault('fts_probe', 'reset', dbid)
     from gp_segment_configuration
-    where master_prober = true;
+    where content = 0 and role = 'p';

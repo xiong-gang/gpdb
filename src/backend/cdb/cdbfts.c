@@ -98,7 +98,7 @@ void
 FtsNotifyProber(void)
 {
 	Assert (Gp_role == GP_ROLE_DISPATCH ||
-			(Gp_role == GP_ROLE_UTILITY && !IS_QUERY_DISPATCHER() && shmFtsControl->ftsPid != 0));
+			(!IS_QUERY_DISPATCHER() && shmFtsControl->ftsPid != 0));
 
 	uint8 probeTick = ftsProbeInfo->probeTick;
 

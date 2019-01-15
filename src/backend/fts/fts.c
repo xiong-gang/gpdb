@@ -106,8 +106,7 @@ static pid_t ftsprobe_forkexec(void);
 NON_EXEC_STATIC void ftsMain(int argc, char *argv[]);
 static void FtsLoop(void);
 
-static CdbComponentDatabases *readCdbComponentInfoAndUpdateStatus(MemoryContext);
-static void updateMasterProberSegment(int16 dbid);
+static CdbComponentDatabases *readCdbComponentInfoAndUpdateStatus();
 
 /*
  * Main entry point for ftsprobe process.
@@ -363,7 +362,7 @@ ftsMain(int argc, char *argv[])
  * context will be destroyed by CommitTransactionCommand().
  */
 static
-CdbComponentDatabases *readCdbComponentInfoAndUpdateStatus(MemoryContext probeContext)
+CdbComponentDatabases *readCdbComponentInfoAndUpdateStatus()
 {
 	int i;
 	CdbComponentDatabases *cdbs = cdbcomponent_getCdbComponents(false);
@@ -574,7 +573,7 @@ bool notifySegmentStartMasterProber(CdbComponentDatabases *cdbs, bool restart)
 			master->hostname, master->address, master->port,
 			standby->dbid, standby->preferred_role, standby->role,
 			standby->hostname, standby->address, standby->port);
-	return FtsWalRepMessageOneSegment(cdbs->master_prober_info, message);
+	return FtsWalRepMessageOneSegment(&cdbs->segment_db_info[0], message);
 }
 
 /*
@@ -583,36 +582,8 @@ bool notifySegmentStartMasterProber(CdbComponentDatabases *cdbs, bool restart)
 static
 bool startMasterProber(CdbComponentDatabases *cdbs, bool restart)
 {
-	int masterProberDbid;
-
-	if (cdbs->master_prober_info == NULL ||
-		cdbs->master_prober_info->role == GP_SEGMENT_CONFIGURATION_ROLE_MIRROR ||
-		FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdbs->master_prober_info->dbid]))
-	{
-		CdbComponentDatabaseInfo *masterProber = NULL;
-		int i;
-
-		for (i = 0; i < cdbs->total_segment_dbs; i++)
-		{
-
-			CdbComponentDatabaseInfo *cdb = &cdbs->segment_db_info[i];
-			if (!FTS_STATUS_IS_DOWN(ftsProbeInfo->fts_status[cdb->dbid]) &&
-				cdb->role == GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY)
-			{
-				masterProber = cdb;
-				break;
-			}
-		}
-
-		if (masterProber == NULL)
-		{
-			elog(LOG, "FTS: No primary segment can start master prober");
-			return false;
-		}
-		cdbs->master_prober_info = masterProber;
-	}
-
-	masterProberDbid = cdbs->master_prober_info->dbid;
+	/* start the master prober on the primary segment of content 0 */
+	int masterProberDbid = cdbs->segment_db_info[0].dbid;
 
 	if (shmFtsControl->masterProberDBID != masterProberDbid)
 	{
@@ -622,7 +593,6 @@ bool startMasterProber(CdbComponentDatabases *cdbs, bool restart)
 			return false;
 		}
 
-		updateMasterProberSegment(masterProberDbid);
 		shmFtsControl->masterProberDBID = masterProberDbid;
 	}
 
@@ -634,126 +604,6 @@ bool startMasterProber(CdbComponentDatabases *cdbs, bool restart)
 
 	elog(LOG, "FTS: start master prober on segment %d, is restart: %d", masterProberDbid, restart);
 	return true;
-}
-
-/*
- * Update 'master_prober' in gp_segment_configuration
- * when appoint the new master prober.
- */
-static
-void updateMasterProberSegment(int16 dbid)
-{
-	Datum oldMasterProber = 0;
-	ResourceOwner save = CurrentResourceOwner;
-
-	StartTransactionCommand();
-	GetTransactionSnapshot();
-
-	/*
-	 * Find and update gp_segment_configuration tuple.
-	 */
-	{
-		Relation configrel;
-		HeapTuple configtuple;
-		HeapTuple newtuple;
-		Datum configvals[Natts_gp_segment_configuration];
-		bool confignulls[Natts_gp_segment_configuration] = { false };
-		bool repls[Natts_gp_segment_configuration] = { false };
-		ScanKeyData scankey;
-		SysScanDesc sscan;
-		bool isNull;
-
-		configrel = heap_open(GpSegmentConfigRelationId,
-							  RowExclusiveLock);
-
-		/* update the old master prober segment */
-		ScanKeyInit(&scankey,
-					Anum_gp_segment_configuration_master_prober,
-					BTEqualStrategyNumber, F_BOOLEQ,
-					BoolGetDatum(true));
-		sscan = systable_beginscan(configrel, InvalidOid, false, NULL, 1, &scankey);
-
-		configtuple = systable_getnext(sscan);
-		if (HeapTupleIsValid(configtuple))
-		{
-			oldMasterProber = heap_getattr(configtuple, Anum_gp_segment_configuration_dbid,
-					RelationGetDescr(configrel), &isNull);
-			Assert(!isNull);
-			if (DatumGetInt16(oldMasterProber) == dbid)
-			{
-				systable_endscan(sscan);
-				heap_close(configrel, RowExclusiveLock);
-				CommitTransactionCommand();
-				CurrentResourceOwner = save;
-				return;
-			}
-
-			configvals[Anum_gp_segment_configuration_master_prober-1] = BoolGetDatum(false);
-			repls[Anum_gp_segment_configuration_master_prober-1] = true;
-			newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
-					configvals, confignulls, repls);
-			simple_heap_update(configrel, &configtuple->t_self, newtuple);
-			systable_endscan(sscan);
-		}
-
-
-		/* update the new master prober segment */
-		ScanKeyInit(&scankey,
-					Anum_gp_segment_configuration_dbid,
-					BTEqualStrategyNumber, F_INT2EQ,
-					Int16GetDatum(dbid));
-		sscan = systable_beginscan(configrel, GpSegmentConfigDbidIndexId,
-								   true, NULL, 1, &scankey);
-
-		configtuple = systable_getnext(sscan);
-		if (!HeapTupleIsValid(configtuple))
-		{
-			elog(ERROR, "FTS cannot find dbid=%d in %s", dbid,
-				 RelationGetRelationName(configrel));
-		}
-
-		configvals[Anum_gp_segment_configuration_master_prober-1] = BoolGetDatum(true);
-		repls[Anum_gp_segment_configuration_master_prober-1] = true;
-		newtuple = heap_modify_tuple(configtuple, RelationGetDescr(configrel),
-									 configvals, confignulls, repls);
-		simple_heap_update(configrel, &configtuple->t_self, newtuple);
-		CatalogUpdateIndexes(configrel, newtuple);
-		systable_endscan(sscan);
-
-		pfree(newtuple);
-		heap_close(configrel, RowExclusiveLock);
-	}
-
-	/*
-	 * Insert new tuple into gp_configuration_history catalog.
-	 */
-	{
-		Relation histrel;
-		HeapTuple histtuple;
-		Datum histvals[Natts_gp_configuration_history];
-		bool histnulls[Natts_gp_configuration_history] = { false };
-		char desc[SQL_CMD_BUF_SIZE];
-
-		histrel = heap_open(GpConfigHistoryRelationId,
-							RowExclusiveLock);
-
-		histvals[Anum_gp_configuration_history_time-1] =
-				TimestampTzGetDatum(GetCurrentTimestamp());
-		histvals[Anum_gp_configuration_history_dbid-1] =
-				Int16GetDatum(dbid);
-		snprintf(desc, sizeof(desc),
-				 "FTS: update master_prober from dbid %d to dbid %d",
-				 DatumGetInt16(oldMasterProber), dbid);
-		histvals[Anum_gp_configuration_history_desc-1] =
-				CStringGetTextDatum(desc);
-		histtuple = heap_form_tuple(RelationGetDescr(histrel), histvals, histnulls);
-		simple_heap_insert(histrel, histtuple);
-		CatalogUpdateIndexes(histrel, histtuple);
-		heap_close(histrel, RowExclusiveLock);
-	}
-
-	CommitTransactionCommand();
-	CurrentResourceOwner = save;
 }
 
 static bool
@@ -821,7 +671,6 @@ masterProberConfigInsert(Relation configrel, char **query)
 	values[Anum_gp_segment_configuration_content - 1] = Int16GetDatum(-1);
 	values[Anum_gp_segment_configuration_mode - 1] = CharGetDatum('s');
 	values[Anum_gp_segment_configuration_status - 1] = CharGetDatum('u');
-	values[Anum_gp_segment_configuration_master_prober - 1] = BoolGetDatum(false);
 	values[Anum_gp_segment_configuration_datadir - 1] = CStringGetTextDatum("");
 
 	values[Anum_gp_segment_configuration_preferred_role - 1] = CharGetDatum(preferredRole);
@@ -968,7 +817,7 @@ void FtsLoop()
 
 		/* Need a transaction to access the catalogs */
 		StartTransactionCommand();
-		cdbs = readCdbComponentInfoAndUpdateStatus(probeContext);
+		cdbs = readCdbComponentInfoAndUpdateStatus();
 
 		/* Check here gp_segment_configuration if has mirror's */
 		if (am_masterprober)
@@ -1054,6 +903,10 @@ void FtsLoop()
 			cdbs->total_entry_dbs == MAX_ENTRYDB_COUNT &&
 			(!masterProberStarted || masterInfoChanged))
 		{
+			/* The primary/mirror segment of content 0 may have changed, get the up-to-date information */
+			StartTransactionCommand();
+			cdbs = readCdbComponentInfoAndUpdateStatus();
+			CommitTransactionCommand();
 			startMasterProber(cdbs, masterInfoChanged);
 		}
 

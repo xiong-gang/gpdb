@@ -45,6 +45,7 @@
 #include "cdb/cdbconn.h"
 #include "cdb/cdbfts.h"
 #include "storage/ipc.h"
+#include "storage/proc.h"
 #include "postmaster/fts.h"
 #include "catalog/namespace.h"
 #include "utils/gpexpand.h"
@@ -303,13 +304,6 @@ getCdbComponentInfo(bool DNSLookupAsError)
 		Assert(!isNull);
 		pRow->port = DatumGetInt32(attr);
 
-		/*
-		 * is master prober
-		 */
-		attr = heap_getattr(gp_seg_config_tuple, Anum_gp_segment_configuration_master_prober, RelationGetDescr(gp_seg_config_rel), &isNull);
-		Assert(!isNull);
-		pRow->isMasterProber = DatumGetBool(attr);
-
 		pRow->hostip = NULL;
 		getAddressesForDBid(pRow, DNSLookupAsError ? ERROR : LOG);
 
@@ -442,11 +436,6 @@ getCdbComponentInfo(bool DNSLookupAsError)
 	for (i = 0; i < component_databases->total_segment_dbs; i++)
 	{
 		cdbInfo = &component_databases->segment_db_info[i];
-		if (cdbInfo->isMasterProber)
-		{
-			Assert(component_databases->master_prober_info == NULL);
-			component_databases->master_prober_info = cdbInfo;
-		}
 
 		if (cdbInfo->role != GP_SEGMENT_CONFIGURATION_ROLE_PRIMARY || cdbInfo->hostip == NULL)
 			continue;
@@ -621,7 +610,9 @@ cdbcomponent_getCdbComponents(bool DNSLookupAsError)
 	}
 	PG_CATCH();
 	{
-		FtsNotifyProber();
+		/* Trigger FTS if I'm not the FTS process */
+		if (shmFtsControl->ftsPid == MyProc->pid)
+			FtsNotifyProber();
 
 		PG_RE_THROW();
 	}
@@ -1415,14 +1406,6 @@ dbid_get_dbinfo(int16 dbid)
 							RelationGetDescr(rel), &isNull);
 		Assert(!isNull);
 		i->port = DatumGetInt32(attr);
-
-		/*
-		 * is master prober
-		 */
-		attr = heap_getattr(tuple, Anum_gp_segment_configuration_master_prober,
-							RelationGetDescr(rel), &isNull);
-		Assert(!isNull);
-		i->isMasterProber = DatumGetBool(attr);
 
 		Assert(systable_getnext(scan) == NULL); /* should be only 1 */
 	}

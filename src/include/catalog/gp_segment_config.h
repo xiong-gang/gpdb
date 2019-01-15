@@ -53,7 +53,6 @@ CATALOG(gp_segment_configuration,5036) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 	char		status;
 	int32		port;
 
-	bool		master_prober;
 #ifdef CATALOG_VARLEN
 	text		hostname;
 	text		address;
@@ -76,7 +75,7 @@ typedef FormData_gp_segment_configuration *Form_gp_segment_configuration;
  *		compiler constants for gp_segment_configuration
  * ----------------
  */
-#define Natts_gp_segment_configuration					11
+#define Natts_gp_segment_configuration					10
 #define Anum_gp_segment_configuration_dbid				1
 #define Anum_gp_segment_configuration_content			2
 #define Anum_gp_segment_configuration_role				3
@@ -84,10 +83,9 @@ typedef FormData_gp_segment_configuration *Form_gp_segment_configuration;
 #define Anum_gp_segment_configuration_mode				5
 #define Anum_gp_segment_configuration_status			6
 #define Anum_gp_segment_configuration_port				7
-#define Anum_gp_segment_configuration_master_prober		8
-#define Anum_gp_segment_configuration_hostname			9
-#define Anum_gp_segment_configuration_address			10
-#define Anum_gp_segment_configuration_datadir			11
+#define Anum_gp_segment_configuration_hostname			8
+#define Anum_gp_segment_configuration_address			9
+#define Anum_gp_segment_configuration_datadir			10
 
 
 extern bool gp_segment_config_has_mirrors(void);

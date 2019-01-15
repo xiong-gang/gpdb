@@ -57,7 +57,6 @@ struct CdbComponentDatabaseInfo
 
 	char	   *hostip;			/* cached lookup of name */
 	int32		port;			/* port that instance is listening on */
-	bool		isMasterProber;			/* is this the master prober */
 
 	char	   *hostaddrs[COMPONENT_DBS_MAX_ADDRS];	/* cached lookup of names */	
 	int16		hostSegs;		/* number of primary segments on the same hosts */
@@ -103,7 +102,6 @@ struct CdbComponentDatabases
 	int			numActiveQEs;
 	int			numIdleQEs;
 	int			qeCounter;
-	CdbComponentDatabaseInfo *master_prober_info;  /* pointer to the master prober */
 };
 
 //
