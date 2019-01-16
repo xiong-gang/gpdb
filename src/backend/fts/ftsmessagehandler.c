@@ -538,3 +538,9 @@ HandleFtsMessage(const char* query_string)
 		ereport(ERROR,
 				(errmsg("received unknown FTS query: %s", query_string)));
 }
+
+void
+CreateInternalReplicationSlot(void)
+{
+	CreateReplicationSlotOnPromote(INTERNAL_WAL_REPLICATION_SLOT_NAME);
+}

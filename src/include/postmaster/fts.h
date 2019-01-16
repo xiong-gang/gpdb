@@ -151,4 +151,5 @@ extern void HandleFtsMessage(const char* query_string);
 extern void probeWalRepUpdateConfig(int16 dbid, int16 segindex, char role,
 									bool IsSegmentAlive, bool IsInSync);
 extern bool shouldStartMasterProber(void);
+extern void CreateInternalReplicationSlot(void);
 #endif   /* FTS_H */
