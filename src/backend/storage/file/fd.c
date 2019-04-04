@@ -399,7 +399,10 @@ pg_fdatasync(int fd)
 #endif
 	}
 	else
-		return 0;
+	{
+		pg_usleep(*(double*)&mockfsync*1000000L);
+	}
+	return 0;
 }
 
 /*

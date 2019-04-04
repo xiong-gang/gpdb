@@ -111,6 +111,7 @@ int			DateOrder = DATEORDER_MDY;
 int			IntervalStyle = INTSTYLE_POSTGRES;
 
 bool		enableFsync = true;
+double      mockfsync = 0.0;
 bool		allowSystemTableMods = false;
 int			planner_work_mem = 32768;
 int			work_mem = 32768;

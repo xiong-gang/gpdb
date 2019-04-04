@@ -2750,6 +2750,16 @@ static struct config_real ConfigureNamesReal[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"mockfsync", PGC_SIGHUP, DEVELOPER_OPTIONS,
+			gettext_noop("Time spent flushing dirty buffers during checkpoint, as fraction of checkpoint interval."),
+			NULL
+		},
+		&mockfsync,
+		0.0, 0.0, 1000.0,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0.0, 0.0, 0.0, NULL, NULL, NULL
