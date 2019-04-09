@@ -28,6 +28,7 @@
 
 #include "libpq-fe.h"
 #include "libpq-int.h"
+//#include "access/xact.h"
 
 #include "mb/pg_wchar.h"
 
@@ -181,6 +182,16 @@ pqParseInput3(PGconn *conn)
 			if (pqGetInt64(&(conn->mop_high_watermark), conn))
 				return;
 		}
+		else if (id == 'x')
+        {
+		    char x = '\0';
+            if (pqGetc(&x, conn))
+                return;
+            if (x)
+                conn->xlog = true;
+            else
+                conn->xlog = false;
+        }
 #endif
 		else if (conn->asyncStatus != PGASYNC_BUSY)
 		{

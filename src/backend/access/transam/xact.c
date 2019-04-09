@@ -181,6 +181,7 @@ typedef struct TransactionStateData
 	bool		startedInRecovery;		/* did we start in recovery? */
 	bool		didLogXid;		/* has xid been included in WAL record? */
 	bool		executorSaysXactDoesWrites;	/* GP executor says xact does writes */
+	bool        qeDidLogXid;    /* QE has wrote xlog */
 	struct TransactionStateData *parent;		/* back link to parent */
 
 	struct TransactionStateData *fastLink;        /* back link to jump to parent for efficient search */
@@ -218,6 +219,7 @@ static TransactionStateData TopTransactionStateData = {
 	false,						/* startedInRecovery */
 	false,						/* didLogXid */
 	false,						/* executorSaysXactDoesWrites */
+    false,						/* qeDidLogXid */
 	NULL						/* link to parent state block */
 };
 
@@ -419,6 +421,20 @@ IsAbortedTransactionBlockState(void)
 	return false;
 }
 
+bool
+IsTransactionDidLogXid(void)
+{
+    TransactionState s = CurrentTransactionState;
+    return s->didLogXid;
+}
+
+bool
+IsTransactionQELog(void)
+{
+    TransactionState s = CurrentTransactionState;
+    return s->qeDidLogXid;
+}
+
 void
 GetAllTransactionXids(
 	DistributedTransactionId	*distribXid,
@@ -512,6 +528,12 @@ MarkCurrentTransactionIdLoggedIfAny(void)
 		CurrentTransactionState->didLogXid = true;
 }
 
+void
+MarkCurrentTransactionQELogged(void)
+{
+    //if (TransactionIdIsValid(CurrentTransactionState->transactionId))
+        CurrentTransactionState->qeDidLogXid = true;
+}
 
 /*
  *	GetStableLatestTransactionId
@@ -2183,6 +2205,7 @@ StartTransaction(void)
 	 */
 	s = &TopTransactionStateData;
 	CurrentTransactionState = s;
+	CurrentTransactionState->qeDidLogXid = false;
 
 	/*
 	 * check the current transaction state
