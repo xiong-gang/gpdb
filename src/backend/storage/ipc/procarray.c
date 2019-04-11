@@ -183,6 +183,7 @@ static TransactionId KnownAssignedXidsGetOldestXmin(void);
 static void KnownAssignedXidsDisplay(int trace_level);
 static void KnownAssignedXidsReset(void);
 
+LWDebugTag debug_tag;
 /*
  * Report shared-memory space needed by CreateSharedProcArray.
  */
@@ -286,7 +287,9 @@ ProcArrayAdd(PGPROC *proc)
 	ProcArrayStruct *arrayP = procArray;
 	int			index;
 
+	debug_tag = LWD_ProcAdd;
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	debug_tag = LWD_NULL;
 
 	SIMPLE_FAULT_INJECTOR(ProcArray_Add);
 
@@ -352,7 +355,9 @@ ProcArrayRemove(PGPROC *proc, TransactionId latestXid)
 		DisplayXidCache();
 #endif
 
+	debug_tag = LWD_ProcRemove;
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	debug_tag = LWD_NULL;
 
 	if (TransactionIdIsValid(latestXid))
 	{
@@ -478,7 +483,9 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid, bool isCommit)
 
 	if (TransactionIdIsValid(latestXid))
 	{
+		debug_tag = LWD_ProcEnd;
 		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+		debug_tag = LWD_NULL;
 		/*
 		 * We must lock ProcArrayLock while clearing our advertised XID, so
 		 * that we do not exit the set of "running" transactions while someone

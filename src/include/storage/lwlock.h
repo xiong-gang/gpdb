@@ -201,6 +201,20 @@ typedef enum LWLockMode
 								 * to be used as LWLockAcquire argument */
 } LWLockMode;
 
+typedef enum LWDebugTag
+{
+	LWD_NULL,
+	LWD_ProcAdd,
+	LWD_ProcRemove,
+	LWD_ProcEnd,
+	LWD_Wait,
+	LWD_Clear,
+	LWD_Reset,
+	LWD_Var
+
+}LWDebugTag;
+
+extern LWDebugTag debug_tag;
 
 #ifdef LOCK_DEBUG
 extern bool Trace_lwlocks;

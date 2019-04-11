@@ -595,7 +595,9 @@ clearTransactionState(void)
 	 * To fix this, transactions require two-phase commit should defer clear 
 	 * proc->xid here with ProcArryLock held.
 	 */
+	debug_tag = LWD_Clear;
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	debug_tag = LWD_NULL;
 	ClearTransactionFromPgProc_UnderLock(MyProc, true);
 	ProcArrayEndGxact();
 	LWLockRelease(ProcArrayLock);
@@ -2044,7 +2046,9 @@ clearAndResetGxact(void)
 {
 	Assert(currentGxact != NULL);
 
+	debug_tag = LWD_Reset;
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	debug_tag = LWD_NULL;
 	ProcArrayEndGxact();
 	LWLockRelease(ProcArrayLock);
 
