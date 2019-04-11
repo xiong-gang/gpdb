@@ -1309,6 +1309,7 @@ typedef struct Motion
 	Oid		   *sortOperators;	/* OIDs of operators to sort them by */
 	Oid		   *collations;		/* OIDs of collations */
 	bool	   *nullsFirst;		/* NULLS FIRST/LAST directions */
+	bool		dorescan;
 } Motion;
 
 /*

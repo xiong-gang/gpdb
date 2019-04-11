@@ -1187,6 +1187,8 @@ _outMotion(StringInfo str, const Motion *node)
 
 	WRITE_INT_FIELD(segidColIdx);
 
+	WRITE_BOOL_FIELD(dorescan);
+
 	_outPlanInfo(str, (Plan *) node);
 }
 #endif /* COMPILING_BINARY_FUNCS */

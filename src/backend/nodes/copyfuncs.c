@@ -1308,6 +1308,8 @@ _copyMotion(const Motion *from)
 
 	COPY_SCALAR_FIELD(segidColIdx);
 
+	COPY_SCALAR_FIELD(dorescan);
+
 	return newnode;
 }
 
