@@ -1693,9 +1693,7 @@ getAllDistributedXactStatus(TMGALLXACTSTATUS **allDistributedXactStatus)
 			TMGXACT *gxact = &allTmGxact[arrayP->pgprocnos[i]];
 
 			all->statusArray[i].gxid = gxact->gxid;
-			if (strlen(gxact->gid) >= TMGIDSIZE)
-				elog(PANIC, "Distribute transaction identifier too long (%d)",
-						(int) strlen(gxact->gid));
+			Assert(strlen(gxact->gid) < TMGIDSIZE);
 			memcpy(all->statusArray[i].gid, gxact->gid, TMGIDSIZE);
 			all->statusArray[i].state = gxact->state;
 			all->statusArray[i].sessionId = gxact->sessionId;
@@ -1932,7 +1930,7 @@ CreateDistributedSnapshot(DistributedSnapshot *ds, DtxContext distributedTransac
 	 * Copy the information we just captured under lock and then sorted into
 	 * the distributed snapshot.
 	 */
-	ds->distribTransactionTimeStamp = *shmDistribTimeStamp;
+	ds->distribTransactionTimeStamp = getDtxStartTime();
 	ds->xminAllDistributedSnapshots = globalXminDistributedSnapshots;
 	ds->distribSnapshotId = distribSnapshotId;
 	ds->xmin = xmin;
