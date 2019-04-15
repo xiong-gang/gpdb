@@ -107,13 +107,12 @@ DtxContextInfo_CreateOnMaster(DtxContextInfo *dtxContextInfo,
 			 getDistributedTransactionId());
 		elog((Debug_print_full_dtm ? LOG : DEBUG5),
 			 "DtxContextInfo_CreateOnMaster distributedXid = %u, "
-			 "distributedSnapshotHeader (xminAllDistributedSnapshots %u, xmin = %u, xmax = %u, count = %d, maxCount %d)",
+			 "distributedSnapshotHeader (xminAllDistributedSnapshots %u, xmin = %u, xmax = %u, count = %d)",
 			 dtxContextInfo->distributedXid,
 			 ds->xminAllDistributedSnapshots,
 			 ds->xmin,
 			 ds->xmax,
-			 ds->count,
-			 ds->maxCount);
+			 ds->count);
 
 		for (i = 0; i < ds->count; i++)
 		{
@@ -230,12 +229,11 @@ DtxContextInfo_Serialize(char *buffer, DtxContextInfo *dtxContextInfo)
 		if (dtxContextInfo->haveDistributedSnapshot)
 		{
 			elog((Debug_print_full_dtm ? LOG : DEBUG5),
-				 "distributedSnapshotHeader (xminAllDistributedSnapshots %u, xmin = %u, xmax = %u, count = %d, maxCount = %d)",
+				 "distributedSnapshotHeader (xminAllDistributedSnapshots %u, xmin = %u, xmax = %u, count = %d)",
 				 ds->xminAllDistributedSnapshots,
 				 ds->xmin,
 				 ds->xmax,
-				 ds->count,
-				 ds->maxCount);
+				 ds->count);
 			for (i = 0; i < ds->count; i++)
 			{
 				elog((Debug_print_full_dtm ? LOG : DEBUG5),
@@ -387,12 +385,11 @@ DtxContextInfo_Deserialize(const char *serializedDtxContextInfo,
 			if (dtxContextInfo->haveDistributedSnapshot)
 			{
 				elog((Debug_print_full_dtm ? LOG : DEBUG5),
-					 "distributedSnapshotHeader (xminAllDistributedSnapshots %u, xmin = %u, xmax = %u, count = %d, maxCount = %d)",
+					 "distributedSnapshotHeader (xminAllDistributedSnapshots %u, xmin = %u, xmax = %u, count = %d)",
 					 ds->xminAllDistributedSnapshots,
 					 ds->xmin,
 					 ds->xmax,
-					 ds->count,
-					 ds->maxCount);
+					 ds->count);
 
 				for (i = 0; i < ds->count; i++)
 				{
