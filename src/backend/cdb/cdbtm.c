@@ -93,7 +93,6 @@ int	max_tm_gxacts = 100;
 /*=========================================================================
  * FUNCTIONS PROTOTYPES
  */
-static DistributedTransactionId generateGID(void);
 static void clearAndResetGxact(void);
 static void resetCurrentGxact(void);
 static void doPrepareTransaction(void);
@@ -236,16 +235,17 @@ getDistributedTransactionIdentifier(char *id)
 {
 	if (isQDContext())
 	{
-		if (currentGxact != NULL)
+		DistributedTransactionId gxid = GetCurrentDistributedTransactionId();
+		if (gxid != InvalidDistributedTransactionId)
 		{
 			/*
 			 * The length check here requires the identifer have a trailing
 			 * NUL character.
 			 */
-			if (strlen(currentGxact->gid) >= TMGIDSIZE)
+			sprintf(id, "%u-%.10u", *shmDistribTimeStamp, gxid);
+			if (strlen(id) >= TMGIDSIZE)
 				elog(PANIC, "Distribute transaction identifier too long (%d)",
-					 (int) strlen(currentGxact->gid));
-			memcpy(id, currentGxact->gid, TMGIDSIZE);
+					 (int) strlen(id));
 			return true;
 		}
 	}
@@ -346,26 +346,18 @@ dtmPreCommand(const char *debugCaller, const char *debugDetail, PlannedStmt *stm
 	/**
 	 * If two-phase commit then begin transaction.
 	 */
-	if (needsTwoPhaseCommit)
-	{
-		if (currentGxact == NULL)
-		{
-			elog(ERROR, "DTM transaction is not active (%s, detail = '%s')", debugCaller, debugDetail);
-		}
-		else if (currentGxact->state == DTX_STATE_ACTIVE_NOT_DISTRIBUTED)
-		{
-			setCurrentGxactState(DTX_STATE_ACTIVE_DISTRIBUTED);
-		}
-		else if (currentGxact->state == DTX_STATE_ACTIVE_DISTRIBUTED)
-		{
-			/* already distributed, no need to change */
-		}
-		else
-		{
-			elog(ERROR, "DTM transaction is not active (state = %s, %s, detail = '%s')",
-				 DtxStateToString(currentGxact->state), debugCaller, debugDetail);
-		}
-	}
+	if (!needsTwoPhaseCommit)
+		return;
+
+	if (!IsTransactionState())
+		elog(ERROR, "DTM transaction is not active (%s, detail = '%s')", debugCaller, debugDetail);
+
+	if (currentGxact == NULL)
+		setCurrentGxact();
+
+	if (currentGxact->state != DTX_STATE_ACTIVE_DISTRIBUTED)
+		elog(ERROR, "DTM transaction is not active (state = %s, %s, detail = '%s')",
+				DtxStateToString(currentGxact->state), debugCaller, debugDetail);
 }
 
 
@@ -390,8 +382,10 @@ doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType)
 	}
 
 	if (cmdType == DTX_PROTOCOL_COMMAND_SUBTRANSACTION_BEGIN_INTERNAL &&
-		currentGxact->state == DTX_STATE_ACTIVE_NOT_DISTRIBUTED)
-		setCurrentGxactState(DTX_STATE_ACTIVE_DISTRIBUTED);
+		currentGxact ==  NULL)
+	{
+		setCurrentGxact();
+	}
 
 	serializedDtxContextInfo = qdSerializeDtxContextInfo(
 														 &serializedDtxContextInfoLen,
@@ -878,16 +872,6 @@ prepareDtxTransaction(void)
 		return;
 	}
 
-	if (currentGxact->state == DTX_STATE_ACTIVE_NOT_DISTRIBUTED)
-	{
-		/*
-		 * This transaction did not go distributed.
-		 */
-		clearAndResetGxact();
-		elog(DTM_DEBUG5, "prepareDtxTransaction ignoring not distributed gid = %s", currentGxact->gid);
-		return;
-	}
-
 	elog(DTM_DEBUG5,
 		 "prepareDtxTransaction called with state = %s",
 		 DtxStateToString(currentGxact->state));
@@ -924,14 +908,6 @@ rollbackDtxTransaction(void)
 
 	switch (currentGxact->state)
 	{
-		case DTX_STATE_ACTIVE_NOT_DISTRIBUTED:
-
-			/*
-			 * Let go of these...
-			 */
-			clearAndResetGxact();
-			return;
-
 		case DTX_STATE_ACTIVE_DISTRIBUTED:
 			setCurrentGxactState(DTX_STATE_NOTIFYING_ABORT_NO_PREPARED);
 			break;
@@ -1408,24 +1384,29 @@ getNextDistributedXactStatus(TMGALLXACTSTATUS *allDistributedXactStatus, TMGXACT
 void
 setCurrentGxact(void)
 {
-	DistributedTransactionId gxid = generateGID();
-	Assert(gxid != InvalidDistributedTransactionId);
-
+	DistributedTransactionId gxid;
 	currentGxact = MyTmGxact;
+
+	gxid = GetCurrentDistributedTransactionId();
+	if (gxid == InvalidDistributedTransactionId)
+	{
+		gxid = generateGID();
+		SetCurrentDistributedTransactionId(gxid);
+		Assert(gxid != InvalidDistributedTransactionId);
+	}
 
 	Assert(*shmDistribTimeStamp != 0);
 	sprintf(currentGxact->gid, "%u-%.10u", *shmDistribTimeStamp, gxid);
 	if (strlen(currentGxact->gid) >= TMGIDSIZE)
 		elog(PANIC, "Distribute transaction identifier too long (%d)",
 				(int) strlen(currentGxact->gid));
-
 	/*
 	 * Until we get our first distributed snapshot, we use our distributed
 	 * transaction identifier for the minimum.
 	 */
 	currentGxact->xminDistributedSnapshot = gxid;
 
-	setCurrentGxactState(DTX_STATE_ACTIVE_NOT_DISTRIBUTED);
+	setCurrentGxactState(DTX_STATE_ACTIVE_DISTRIBUTED);
 
 	currentGxact->gxid = gxid;
 }
@@ -1480,7 +1461,7 @@ insertedDistributedCommitted(void)
 }
 
 /* generate global transaction id */
-static DistributedTransactionId
+DistributedTransactionId
 generateGID(void)
 {
 	DistributedTransactionId gxid;
@@ -1961,10 +1942,7 @@ finishDistributedTransactionContext(char *debugCaller, bool aborted)
 static void
 rememberDtxExplicitBegin(void)
 {
-	if (currentGxact == NULL)
-	{
-		return;
-	}
+	Assert (currentGxact != NULL);
 
 	if (!currentGxact->explicitBeginRemembered)
 	{
@@ -1988,15 +1966,13 @@ sendDtxExplicitBegin(void)
 {
 	char		cmdbuf[100];
 
-	if (currentGxact == NULL)
-	{
+	if (Gp_role != GP_ROLE_DISPATCH)
 		return;
-	}
-
-	rememberDtxExplicitBegin();
 
 	dtmPreCommand("sendDtxExplicitBegin", "(none)", NULL,
 				   /* is two-phase */ true, /* withSnapshot */ true, /* inCursor */ false);
+
+	rememberDtxExplicitBegin();
 
 	/*
 	 * Be explicit about both the isolation level and the access mode since in

@@ -432,6 +432,17 @@ GetAllTransactionXids(
 	*subXid = s->subTransactionId;
 }
 
+DistributedTransactionId
+GetCurrentDistributedTransactionId(void)
+{
+	return currentDistribXid;
+}
+
+void
+SetCurrentDistributedTransactionId(DistributedTransactionId gxid)
+{
+	currentDistribXid = gxid;
+}
 /*
  *	GetTopTransactionId
  *
@@ -2268,14 +2279,13 @@ StartTransaction(void)
 		case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
 		{
 			/*
-			 * MPP: we're the dispatcher.
-			 *
-			 * Create distributed transaction which will map the
-			 * distributed transaction to a local transaction id for the
-			 * master database.
+			 * Generate the distributed transaction ID and save it.
+			 * it's not really needed by a select-only implicit transaction, but
+			 * currently gpfdist and pxf is using it.
+			 * We should probably replace xid with "session id + command id" in
+			 * identify a query in gpfdist and pxf.
 			 */
-			setCurrentGxact();
-			currentDistribXid = MyTmGxact->gxid;
+			currentDistribXid = generateGID();
 
 			if (SharedLocalSnapshotSlot != NULL)
 			{

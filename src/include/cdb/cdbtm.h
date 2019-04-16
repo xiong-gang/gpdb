@@ -31,12 +31,6 @@ typedef enum
 	DTX_STATE_NONE = 0,
 
 	/**
-	 * The distributed transaction is active but distributed coordination
-	 *   is not required (because it is auto-commit on the QEs).
-	 */
-	DTX_STATE_ACTIVE_NOT_DISTRIBUTED,
-
-	/**
 	 * The distributed transaction is active and requires distributed coordination
 	 *   (because it is explicit or an implicit writer transaction)
 	 */
@@ -362,5 +356,6 @@ extern bool currentGxactWriterGangLost(void);
 extern void addToGxactTwophaseSegments(struct Gang* gp);
 
 extern int dtx_recovery_start(void);
+extern DistributedTransactionId generateGID(void);
 
 #endif   /* CDBTM_H */
