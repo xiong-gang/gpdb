@@ -216,9 +216,7 @@ getDistributedTransactionId(void)
 {
 	if (isQDContext())
 	{
-		return currentGxact == NULL
-			? InvalidDistributedTransactionId
-			: currentGxact->gxid;
+		return GetCurrentDistributedTransactionId();
 	}
 	else if (isQEContext())
 	{
@@ -1667,8 +1665,7 @@ setupQEDtxContext(DtxContextInfo *dtxContextInfo)
 	needTwoPhase = isMppTxOptions_NeedTwoPhase(txnOptions);
 	explicitBegin = isMppTxOptions_ExplicitBegin(txnOptions);
 
-	haveDistributedSnapshot =
-		(dtxContextInfo->distributedXid != InvalidDistributedTransactionId);
+	haveDistributedSnapshot = dtxContextInfo->haveDistributedSnapshot;
 	isSharedLocalSnapshotSlotPresent = (SharedLocalSnapshotSlot != NULL);
 
 	if (DEBUG5 >= log_min_messages || Debug_print_full_dtm)

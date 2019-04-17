@@ -2309,8 +2309,8 @@ StartTransaction(void)
 			if (gp_enable_slow_writer_testmode)
 				pg_usleep(500000);
 
-			if (QEDtxContextInfo.distributedXid ==
-				InvalidDistributedTransactionId)
+			if (DistributedTransactionContext != DTX_CONTEXT_QE_AUTO_COMMIT_IMPLICIT &&
+				QEDtxContextInfo.distributedXid == InvalidDistributedTransactionId)
 			{
 				elog(ERROR,
 					 "distributed transaction id is invalid in context %s",
