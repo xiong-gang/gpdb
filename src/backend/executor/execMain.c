@@ -652,8 +652,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			 * work for this query.
 			 */
 			needDtxTwoPhase = ExecutorSaysTransactionDoesWrites();
-			dtmPreCommand("ExecutorStart", "(none)", queryDesc->plannedstmt,
-						  needDtxTwoPhase, true /* wantSnapshot */, queryDesc->extended_query );
+			setupTwoPhaseTransaction(needDtxTwoPhase);
 
 			if (queryDesc->ddesc != NULL)
 			{

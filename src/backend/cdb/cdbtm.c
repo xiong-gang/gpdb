@@ -335,27 +335,19 @@ notifyCommittedDtxTransaction(void)
  *       2 phase commit protocol.
  */
 void
-dtmPreCommand(const char *debugCaller, const char *debugDetail, PlannedStmt *stmt,
-			  bool needsTwoPhaseCommit, bool wantSnapshot, bool inCursor)
+setupTwoPhaseTransaction(bool needsTwoPhaseCommit)
 {
-	Assert(debugCaller != NULL);
-	Assert(debugDetail != NULL);
-
-	/**
-	 * If two-phase commit then begin transaction.
-	 */
 	if (!needsTwoPhaseCommit)
 		return;
 
 	if (!IsTransactionState())
-		elog(ERROR, "DTM transaction is not active (%s, detail = '%s')", debugCaller, debugDetail);
+		elog(ERROR, "DTM transaction is not active");
 
 	if (currentGxact == NULL)
 		setCurrentGxact();
 
 	if (currentGxact->state != DTX_STATE_ACTIVE_DISTRIBUTED)
-		elog(ERROR, "DTM transaction is not active (state = %s, %s, detail = '%s')",
-				DtxStateToString(currentGxact->state), debugCaller, debugDetail);
+		elog(ERROR, "DTM transaction state (%s) is invalid", DtxStateToString(currentGxact->state));
 }
 
 
@@ -875,6 +867,8 @@ prepareDtxTransaction(void)
 		 DtxStateToString(currentGxact->state));
 
 	Assert(currentGxact->state == DTX_STATE_ACTIVE_DISTRIBUTED);
+	Assert(currentGxact->gxid > FirstDistributedTransactionId);
+	Assert(strlen(currentGxact->gid) > 0);
 
 	/*
 	 * Broadcast PREPARE TRANSACTION to segments.
@@ -1966,8 +1960,7 @@ sendDtxExplicitBegin(void)
 	if (Gp_role != GP_ROLE_DISPATCH)
 		return;
 
-	dtmPreCommand("sendDtxExplicitBegin", "(none)", NULL,
-				   /* is two-phase */ true, /* withSnapshot */ true, /* inCursor */ false);
+	setupTwoPhaseTransaction(true);
 
 	rememberDtxExplicitBegin();
 

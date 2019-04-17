@@ -310,9 +310,7 @@ extern void redoDtxCheckPoint(TMGXACT_CHECKPOINT *gxact_checkpoint);
 extern void redoDistributedCommitRecord(TMGXACT_LOG *gxact_log);
 extern void redoDistributedForgetCommitRecord(TMGXACT_LOG *gxact_log);
 
-/* @param stmt used because some plans are annotated with dispatch details which the DTM needs. */
-extern void dtmPreCommand(const char *debugCaller, const char *debugDetail, PlannedStmt *stmt,
-							bool needsTwoPhaseCommit, bool dispatchToPrimaries, bool dispatchToMirrors );
+extern void setupTwoPhaseTransaction(bool needsTwoPhaseCommit);
 extern bool isCurrentDtxTwoPhase(void);
 extern DtxState getCurrentDtxState(void);
 
