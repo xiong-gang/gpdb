@@ -334,9 +334,9 @@ CdbDispatchCommandToSegments(const char *strCommand,
 {
 	DispatchCommandQueryParms *pQueryParms;
 	bool needTwoPhase = flags & DF_NEED_TWO_PHASE;
-	bool withSnapshot = flags & DF_WITH_SNAPSHOT;
 
-	setupTwoPhaseTransaction(needTwoPhase);
+	if (needTwoPhase)
+		setupTwoPhaseTransaction();
 
 	elogif((Debug_print_full_dtm || log_min_messages <= DEBUG5), LOG,
 		   "CdbDispatchCommand: %s (needTwoPhase = %s)",
@@ -372,9 +372,9 @@ CdbDispatchUtilityStatement(struct Node *stmt,
 {
 	DispatchCommandQueryParms *pQueryParms;
 	bool needTwoPhase = flags & DF_NEED_TWO_PHASE;
-	bool withSnapshot = flags & DF_WITH_SNAPSHOT;
 
-	setupTwoPhaseTransaction(needTwoPhase);
+	if (needTwoPhase)
+		setupTwoPhaseTransaction();
 
 	elogif((Debug_print_full_dtm || log_min_messages <= DEBUG5), LOG,
 		   "CdbDispatchUtilityStatement: %s (needTwoPhase = %s)",
@@ -1400,9 +1400,9 @@ CdbDispatchCopyStart(struct CdbCopy *cdbCopy, Node *stmt, int flags)
 	Gang *primaryGang;
 	ErrorData *error = NULL;
 	bool needTwoPhase = flags & DF_NEED_TWO_PHASE;
-	bool withSnapshot = flags & DF_WITH_SNAPSHOT;
 
-	setupTwoPhaseTransaction(needTwoPhase);
+	if (needTwoPhase)
+		setupTwoPhaseTransaction();
 
 	elogif((Debug_print_full_dtm || log_min_messages <= DEBUG5), LOG,
 		   "CdbDispatchCopyStart: %s (needTwoPhase = %s)",

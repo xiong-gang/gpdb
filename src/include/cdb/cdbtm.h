@@ -294,7 +294,7 @@ extern DistributedTransactionId getDistributedTransactionId(void);
 extern bool getDistributedTransactionIdentifier(char *id);
 
 extern void initGxact(TMGXACT *gxact);
-extern void setCurrentGxact(void);
+extern void activeCurrentGxact(void);
 extern void	prepareDtxTransaction(void);
 extern bool isPreparedDtxTransaction(void);
 extern void getDtxLogInfo(TMGXACT_LOG *gxact_log);
@@ -310,7 +310,7 @@ extern void redoDtxCheckPoint(TMGXACT_CHECKPOINT *gxact_checkpoint);
 extern void redoDistributedCommitRecord(TMGXACT_LOG *gxact_log);
 extern void redoDistributedForgetCommitRecord(TMGXACT_LOG *gxact_log);
 
-extern void setupTwoPhaseTransaction(bool needsTwoPhaseCommit);
+extern void setupTwoPhaseTransaction(void);
 extern bool isCurrentDtxTwoPhase(void);
 extern DtxState getCurrentDtxState(void);
 

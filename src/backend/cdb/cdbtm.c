@@ -242,7 +242,7 @@ getDistributedTransactionIdentifier(char *id)
 			 */
 			sprintf(id, "%u-%.10u", *shmDistribTimeStamp, gxid);
 			if (strlen(id) >= TMGIDSIZE)
-				elog(PANIC, "Distribute transaction identifier too long (%d)",
+				elog(PANIC, "distributed transaction identifier too long (%d)",
 					 (int) strlen(id));
 			return true;
 		}
@@ -252,7 +252,7 @@ getDistributedTransactionIdentifier(char *id)
 		if (QEDtxContextInfo.distributedXid != InvalidDistributedTransactionId)
 		{
 			if (strlen(QEDtxContextInfo.distributedId) >= TMGIDSIZE)
-				elog(PANIC, "Distribute transaction identifier too long (%d)",
+				elog(PANIC, "distributed transaction identifier too long (%d)",
 					 (int) strlen(QEDtxContextInfo.distributedId));
 			memcpy(id, QEDtxContextInfo.distributedId, TMGIDSIZE);
 			return true;
@@ -330,21 +330,14 @@ notifyCommittedDtxTransaction(void)
 	doNotifyingCommitPrepared();
 }
 
-/*
- * @param needsTwoPhaseCommit if true then marks the current Distributed Transaction as needing to use the
- *       2 phase commit protocol.
- */
 void
-setupTwoPhaseTransaction(bool needsTwoPhaseCommit)
+setupTwoPhaseTransaction(void)
 {
-	if (!needsTwoPhaseCommit)
-		return;
-
 	if (!IsTransactionState())
 		elog(ERROR, "DTM transaction is not active");
 
 	if (currentGxact == NULL)
-		setCurrentGxact();
+		activeCurrentGxact();
 
 	if (currentGxact->state != DTX_STATE_ACTIVE_DISTRIBUTED)
 		elog(ERROR, "DTM transaction state (%s) is invalid", DtxStateToString(currentGxact->state));
@@ -374,7 +367,7 @@ doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType)
 	if (cmdType == DTX_PROTOCOL_COMMAND_SUBTRANSACTION_BEGIN_INTERNAL &&
 		currentGxact ==  NULL)
 	{
-		setCurrentGxact();
+		activeCurrentGxact();
 	}
 
 	serializedDtxContextInfo = qdSerializeDtxContextInfo(
@@ -1374,7 +1367,7 @@ getNextDistributedXactStatus(TMGALLXACTSTATUS *allDistributedXactStatus, TMGXACT
 }
 
 void
-setCurrentGxact(void)
+activeCurrentGxact(void)
 {
 	DistributedTransactionId gxid;
 	currentGxact = MyTmGxact;
@@ -1955,7 +1948,7 @@ sendDtxExplicitBegin(void)
 	if (Gp_role != GP_ROLE_DISPATCH)
 		return;
 
-	setupTwoPhaseTransaction(true);
+	setupTwoPhaseTransaction();
 
 	rememberDtxExplicitBegin();
 
