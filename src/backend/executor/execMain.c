@@ -652,7 +652,8 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			 * work for this query.
 			 */
 			needDtxTwoPhase = ExecutorSaysTransactionDoesWrites();
-			setupTwoPhaseTransaction(needDtxTwoPhase);
+			if (needDtxTwoPhase)
+				setupTwoPhaseTransaction();
 
 			if (queryDesc->ddesc != NULL)
 			{
