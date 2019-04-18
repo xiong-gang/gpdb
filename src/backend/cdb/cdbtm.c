@@ -1392,11 +1392,6 @@ setCurrentGxact(void)
 	if (strlen(currentGxact->gid) >= TMGIDSIZE)
 		elog(PANIC, "Distribute transaction identifier too long (%d)",
 				(int) strlen(currentGxact->gid));
-	/*
-	 * Until we get our first distributed snapshot, we use our distributed
-	 * transaction identifier for the minimum.
-	 */
-	currentGxact->xminDistributedSnapshot = gxid;
 
 	setCurrentGxactState(DTX_STATE_ACTIVE_DISTRIBUTED);
 
