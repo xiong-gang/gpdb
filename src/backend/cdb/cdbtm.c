@@ -1957,6 +1957,7 @@ sendDtxExplicitBegin(void)
 	setupTwoPhaseTransaction();
 
 	rememberDtxExplicitBegin();
+	return;
 
 	/*
 	 * Be explicit about both the isolation level and the access mode since in
