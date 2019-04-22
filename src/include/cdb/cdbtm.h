@@ -293,7 +293,7 @@ extern void dtxCrackOpenGid(const char	*gid,
 extern DistributedTransactionId getDistributedTransactionId(void);
 extern bool getDistributedTransactionIdentifier(char *id);
 
-extern void initGxact(TMGXACT *gxact);
+extern void initGxact(TMGXACT *gxact, bool resetXid);
 extern void activeCurrentGxact(void);
 extern void	prepareDtxTransaction(void);
 extern bool isPreparedDtxTransaction(void);

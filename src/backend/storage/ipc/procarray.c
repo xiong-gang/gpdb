@@ -407,7 +407,7 @@ ProcArrayEndGxact(void)
 	if (InvalidDistributedTransactionId != gxid &&
 		TransactionIdPrecedes(ShmemVariableCache->latestCompletedDxid, gxid))
 		ShmemVariableCache->latestCompletedDxid = gxid;
-	initGxact(MyTmGxact);
+	initGxact(MyTmGxact, true);
 }
 
 /*

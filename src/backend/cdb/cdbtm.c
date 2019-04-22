@@ -852,6 +852,9 @@ prepareDtxTransaction(void)
 
 	if (currentGxact == NULL)
 	{
+		Assert(MyTmGxact->gxid == InvalidDistributedTransactionId);
+		Assert(MyTmGxact->state == DTX_STATE_NONE);
+		initGxact(MyTmGxact, false);
 		return;
 	}
 
@@ -1329,24 +1332,22 @@ dispatchDtxCommand(const char *cmd)
 
 /* initialize a global transaction context */
 void
-initGxact(TMGXACT *gxact)
+initGxact(TMGXACT *gxact, bool resetXid)
 {
-	MemSet(gxact->gid, 0, TMGIDSIZE);
-	gxact->gxid = InvalidDistributedTransactionId;
-	setGxactState(gxact, DTX_STATE_NONE);
+	if (resetXid)
+	{
+		MemSet(gxact->gid, 0, TMGIDSIZE);
+		gxact->gxid = InvalidDistributedTransactionId;
+		setGxactState(gxact, DTX_STATE_NONE);
+	}
 
 	/*
 	 * Memory only fields.
 	 */
-
 	gxact->sessionId = gp_session_id;
-
 	gxact->explicitBeginRemembered = false;
-
 	gxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
-
 	gxact->badPrepareGangs = false;
-
 	gxact->writerGangLost = false;
 	gxact->twophaseSegmentsMap = NULL;
 	gxact->twophaseSegments = NIL;
