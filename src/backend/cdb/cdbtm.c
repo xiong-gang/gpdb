@@ -2126,32 +2126,6 @@ performDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 
 	switch (dtxProtocolCommand)
 	{
-		case DTX_PROTOCOL_COMMAND_STAY_AT_OR_BECOME_IMPLIED_WRITER:
-			switch (DistributedTransactionContext)
-			{
-				case DTX_CONTEXT_LOCAL_ONLY:
-					/** convert to implicit_writer! */
-					setupQEDtxContext(contextInfo);
-					StartTransactionCommand();
-					break;
-				case DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER:
-					/** already the state we like */
-					break;
-				default:
-					if (isQEContext() || isQDContext())
-					{
-						elog(FATAL, "Unexpected segment distributed transaction context: '%s'",
-							 DtxContextToString(DistributedTransactionContext));
-					}
-					else
-					{
-						elog(PANIC, "Unexpected segment distributed transaction context value: %d",
-							 (int) DistributedTransactionContext);
-					}
-					break;
-			}
-			break;
-
 		case DTX_PROTOCOL_COMMAND_ABORT_NO_PREPARED:
 			elog(DTM_DEBUG5,
 				 "performDtxProtocolCommand going to call AbortOutOfAnyTransaction for distributed transaction %s", gid);
