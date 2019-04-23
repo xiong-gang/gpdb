@@ -94,6 +94,8 @@ typedef enum
 	DTX_PROTOCOL_COMMAND_PREPARE,
 	DTX_PROTOCOL_COMMAND_ABORT_SOME_PREPARED,
 	DTX_PROTOCOL_COMMAND_COMMIT_PREPARED,
+	/* for explicit transaction that doesn't write any xlog */
+	DTX_PROTOCOL_COMMAND_COMMIT_NOT_PREPARED,
 	DTX_PROTOCOL_COMMAND_ABORT_PREPARED,
 	DTX_PROTOCOL_COMMAND_RETRY_COMMIT_PREPARED,
 	DTX_PROTOCOL_COMMAND_RETRY_ABORT_PREPARED,
@@ -315,6 +317,7 @@ extern bool isCurrentDtxTwoPhase(void);
 extern DtxState getCurrentDtxState(void);
 
 extern void sendDtxExplicitBegin(void);
+extern bool isDtxExplicitBegin(void);
 
 extern bool dispatchDtxCommand(const char *cmd);
 
