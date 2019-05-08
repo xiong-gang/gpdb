@@ -275,8 +275,6 @@ execMotionSender(MotionState *node)
 		numsegments = motion->plan.flow->numsegments;
 	}
 
-
-
 #ifdef MEASURE_MOTION_TIME
 	struct timeval time1;
 	struct timeval time2;
