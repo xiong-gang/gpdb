@@ -27,6 +27,7 @@
 #include "cdb/cdbsrlz.h"
 #include "cdb/tupleremap.h"
 #include "nodes/execnodes.h"
+#include "storage/proc.h"
 #include "tcop/tcopprot.h"
 #include "utils/datum.h"
 #include "utils/guc.h"

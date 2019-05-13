@@ -15,7 +15,7 @@
 #define CDBDTXCONTEXTINFO_H
 #include "utils/tqual.h"
 
-#define DtxContextInfo_StaticInit {0,InvalidDistributedTransactionId,0,false,false,DistributedSnapshot_StaticInit,0,0}
+#define DtxContextInfo_StaticInit {0,InvalidDistributedTransactionId,0,false,false,DistributedSnapshot_StaticInit,0,0,false}
 
 typedef struct DtxContextInfo
 {
@@ -34,6 +34,7 @@ typedef struct DtxContextInfo
 
 	uint32							segmateSync;
 	uint32							nestingLevel;
+	bool							isFastIUD;
 } DtxContextInfo;
 
 extern DtxContextInfo QEDtxContextInfo;	

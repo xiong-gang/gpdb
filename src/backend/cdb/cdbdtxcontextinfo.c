@@ -152,6 +152,7 @@ DtxContextInfo_SerializeSize(DtxContextInfo *dtxContextInfo)
 	size += sizeof(uint32);		/* nestingLevel */
 	size += sizeof(bool);		/* haveDistributedSnapshot */
 	size += sizeof(bool);		/* cursorContext */
+	size += sizeof(bool);		/* isFastIUD */
 
 	if (dtxContextInfo->haveDistributedSnapshot)
 	{
@@ -200,6 +201,9 @@ DtxContextInfo_Serialize(char *buffer, DtxContextInfo *dtxContextInfo)
 
 	memcpy(p, &dtxContextInfo->nestingLevel, sizeof(uint32));
 	p += sizeof(uint32);
+
+	memcpy(p, &dtxContextInfo->isFastIUD, sizeof(bool));
+	p += sizeof(bool);
 
 	memcpy(p, &dtxContextInfo->haveDistributedSnapshot, sizeof(bool));
 	p += sizeof(bool);
@@ -261,6 +265,7 @@ DtxContextInfo_Reset(DtxContextInfo *dtxContextInfo)
 	dtxContextInfo->curcid = 0;
 	dtxContextInfo->segmateSync = 0;
 	dtxContextInfo->nestingLevel = 0;
+	dtxContextInfo->isFastIUD = false;
 
 	dtxContextInfo->haveDistributedSnapshot = false;
 
@@ -280,6 +285,7 @@ DtxContextInfo_Copy(
 	target->distributedXid = source->distributedXid;
 	target->segmateSync = source->segmateSync;
 	target->nestingLevel = source->nestingLevel;
+	target->isFastIUD = source->isFastIUD;
 
 	target->curcid = source->curcid;
 
@@ -350,6 +356,8 @@ DtxContextInfo_Deserialize(const char *serializedDtxContextInfo,
 		p += sizeof(uint32);
 		memcpy(&dtxContextInfo->nestingLevel, p, sizeof(uint32));
 		p += sizeof(uint32);
+		memcpy(&dtxContextInfo->isFastIUD, p, sizeof(bool));
+		p += sizeof(bool);
 		memcpy(&dtxContextInfo->haveDistributedSnapshot, p, sizeof(bool));
 		p += sizeof(bool);
 

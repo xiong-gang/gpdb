@@ -231,6 +231,7 @@ typedef struct TMGXACT
 
 	Bitmapset					*twophaseSegmentsMap;
 	List						*twophaseSegments;
+	bool						isFastIUD;
 }	TMGXACT;
 
 typedef struct TMGXACTSTATUS
@@ -315,6 +316,7 @@ extern void redoDistributedCommitRecord(TMGXACT_LOG *gxact_log);
 extern void redoDistributedForgetCommitRecord(TMGXACT_LOG *gxact_log);
 
 extern void setupTwoPhaseTransaction(void);
+extern bool isActiveGxact(void);
 extern bool isCurrentDtxTwoPhase(void);
 extern DtxState getCurrentDtxState(void);
 

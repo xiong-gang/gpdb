@@ -3424,7 +3424,8 @@ StartTransactionCommand(void)
 		case TBLOCK_DEFAULT:
 			StartTransaction();
 
-			if (DistributedTransactionContext == DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER)
+			if (DistributedTransactionContext == DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER &&
+				!QEDtxContextInfo.isFastIUD)
 			{
 				/*
 				 * Pretend we executed an explicit BEGIN.
@@ -5912,10 +5913,13 @@ EndLocalDistribXact(bool isCommit)
 		case DTX_CONTEXT_QE_TWO_PHASE_EXPLICIT_WRITER:
 		case DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER:
 		case DTX_CONTEXT_QE_AUTO_COMMIT_IMPLICIT:
-			LocalDistribXact_ChangeState(MyProc->pgprocno,
-										 isCommit ?
-										 LOCALDISTRIBXACT_STATE_COMMITTED :
-										 LOCALDISTRIBXACT_STATE_ABORTED);
+			if (QEDtxContextInfo.isFastIUD)
+				MyProc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
+			else
+				LocalDistribXact_ChangeState(MyProc->pgprocno,
+											 isCommit ?
+											 LOCALDISTRIBXACT_STATE_COMMITTED :
+											 LOCALDISTRIBXACT_STATE_ABORTED);
 			break;
 
 		case DTX_CONTEXT_QE_READER:

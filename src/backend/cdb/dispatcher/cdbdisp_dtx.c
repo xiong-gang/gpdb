@@ -28,6 +28,7 @@
 #include "cdb/cdbgang.h"
 
 #include "storage/procarray.h"	/* updateSharedLocalSnapshot */
+#include "storage/proc.h"
 #include "utils/snapmgr.h"
 
 /*
@@ -188,6 +189,7 @@ qdSerializeDtxContextInfo(int *size, bool wantSnapshot, bool inCursor,
 										  txnOptions, snapshot);
 
 			TempQDDtxContextInfo.cursorContext = inCursor;
+			TempQDDtxContextInfo.isFastIUD = MyTmGxact->isFastIUD;
 
 			if (DistributedTransactionContext ==
 				DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE && snapshot != NULL)

@@ -48,7 +48,7 @@ CREATE TABLE distributed_snapshot_test2 (a int);
 -- this sets latestCompletedXid
 2: INSERT INTO distributed_snapshot_test2 VALUES(1);
 -- here, take distributed snapshot
-1: SELECT 123 AS "establish snapshot";
+1: SELECT * FROM distributed_snapshot_test2;
 2: INSERT INTO distributed_snapshot_test2 VALUES(2);
 -- expected to see just VALUES(1)
 1: SELECT * FROM distributed_snapshot_test2;

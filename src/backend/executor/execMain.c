@@ -73,8 +73,10 @@
 #include "miscadmin.h"
 #include "optimizer/clauses.h"
 #include "parser/parsetree.h"
+#include "executor/spi.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
+#include "storage/proc.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h" /* dumpDynamicTableScanPidIndex() */
@@ -643,6 +645,19 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 		 */
 		if (shouldDispatch)
 		{
+			if ((queryDesc->operation == CMD_INSERT ||
+				 queryDesc->operation == CMD_UPDATE ||
+				 queryDesc->operation == CMD_DELETE) &&
+				!isActiveGxact() &&
+				!SPI_context() &&
+				list_length(estate->es_sliceTable->slices) == 1 &&
+				((Slice*)lfirst(list_head(estate->es_sliceTable->slices)))->gangSize == 1 &&
+				!MyTmGxact->explicitBeginRemembered &&
+				RelationIsHeap(estate->es_result_relations->ri_RelationDesc))
+			{
+				MyTmGxact->isFastIUD = true;
+			}
+
 			/*
 			 * MPP-2869: preprocess_initplans() may
 			 * dispatch. (interacted with MPP-2859, which caused an
@@ -652,7 +667,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			 * work for this query.
 			 */
 			needDtxTwoPhase = ExecutorSaysTransactionDoesWrites();
-			if (needDtxTwoPhase)
+			if (needDtxTwoPhase && !MyTmGxact->isFastIUD)
 				setupTwoPhaseTransaction();
 
 			if (queryDesc->ddesc != NULL)

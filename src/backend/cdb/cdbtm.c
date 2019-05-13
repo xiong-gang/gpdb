@@ -336,6 +336,11 @@ setupTwoPhaseTransaction(void)
 		elog(ERROR, "DTM transaction state (%s) is invalid", DtxStateToString(currentGxact->state));
 }
 
+bool
+isActiveGxact(void)
+{
+	return (currentGxact != NULL);
+}
 
 /*
  * Routine to dispatch internal sub-transaction calls from UDFs to segments.
@@ -922,6 +927,9 @@ rollbackDtxTransaction(void)
 	if (currentGxact == NULL)
 	{
 		elog(DTM_DEBUG5, "rollbackDtxTransaction nothing to do (currentGxact == NULL)");
+		Assert(MyTmGxact->gxid == InvalidDistributedTransactionId);
+		Assert(MyTmGxact->state == DTX_STATE_NONE);
+		initGxact(MyTmGxact, false);
 		return;
 	}
 
@@ -1389,6 +1397,7 @@ initGxact(TMGXACT *gxact, bool resetXid)
 	gxact->writerGangLost = false;
 	gxact->twophaseSegmentsMap = NULL;
 	gxact->twophaseSegments = NIL;
+	gxact->isFastIUD = false;
 }
 
 bool
