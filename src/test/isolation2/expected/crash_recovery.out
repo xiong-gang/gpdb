@@ -19,7 +19,7 @@ CREATE
 --------------------------
  t                        
 (1 row)
-2&:insert into crash_test_table values (1);  <waiting ...>
+2&:insert into crash_test_table select generate_series(1,10);  <waiting ...>
 3&:create table crash_test_ddl(c1 int);  <waiting ...>
 
 -- wait session 2 and session 3 hit inject point
@@ -32,7 +32,7 @@ CREATE
 CHECKPOINT
 
 -- transaction of session 4 inserted 'COMMIT' record after checkpoint
-4&:insert into crash_test_table values (2);  <waiting ...>
+4&:insert into crash_test_table select generate_series(1,10);  <waiting ...>
 
 -- wait session 4 hit inject point
 1:select gp_wait_until_triggered_fault('dtm_broadcast_commit_prepared', 3, 1);
@@ -47,7 +47,7 @@ CHECKPOINT
 --------------------------
  t                        
 (1 row)
-5&:INSERT INTO crash_test_table VALUES (3);  <waiting ...>
+5&:INSERT INTO crash_test_table select generate_series(1,10);  <waiting ...>
 
 -- wait session 5 hit inject point
 1:select gp_wait_until_triggered_fault('transaction_abort_after_distributed_prepared', 1, 1);
@@ -105,8 +105,26 @@ server closed the connection unexpectedly
  c1 
 ----
  1  
+ 1  
  2  
-(2 rows)
+ 2  
+ 3  
+ 3  
+ 4  
+ 4  
+ 5  
+ 5  
+ 6  
+ 6  
+ 7  
+ 7  
+ 8  
+ 8  
+ 9  
+ 9  
+ 10 
+ 10 
+(20 rows)
 6:select * from crash_test_ddl order by 1;
  c1 
 ----

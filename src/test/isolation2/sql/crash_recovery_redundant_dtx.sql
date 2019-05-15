@@ -10,7 +10,7 @@
 -- wait till checkpoint reaches intended point
 2:select gp_wait_until_triggered_fault('checkpoint_dtx_info', 1, 1);
 -- the 'COMMIT' record is logically after REDO pointer
-2&:insert into crash_test_redundant values (1);
+2&:insert into crash_test_redundant select generate_series(1,10);
 
 -- resume checkpoint
 3:select gp_inject_fault('checkpoint_dtx_info', 'reset', 1);
@@ -29,4 +29,4 @@
 2<:
 
 -- transaction of session 2 should be recovered properly
-4:select * from crash_test_redundant;
+4:select * from crash_test_redundant order by c1;

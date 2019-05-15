@@ -34,7 +34,7 @@ CREATE
  t                             
 (1 row)
 -- the 'COMMIT' record is logically after REDO pointer
-2&:insert into crash_test_redundant values (1);  <waiting ...>
+2&:insert into crash_test_redundant select generate_series(1,10);  <waiting ...>
 
 -- resume checkpoint
 3:select gp_inject_fault('checkpoint_dtx_info', 'reset', 1);
@@ -73,8 +73,17 @@ server closed the connection unexpectedly
 	before or while processing the request.
 
 -- transaction of session 2 should be recovered properly
-4:select * from crash_test_redundant;
+4:select * from crash_test_redundant order by c1;
  c1 
 ----
  1  
-(1 row)
+ 2  
+ 3  
+ 4  
+ 5  
+ 6  
+ 7  
+ 8  
+ 9  
+ 10 
+(10 rows)
