@@ -129,6 +129,9 @@ test__CreateDistributedSnapshot(void **state)
 
 	memset(ds->inProgressXidArray, 0, SIZE_OF_IN_PROGRESS_ARRAY);
 	CreateDistributedSnapshot(&distribSnapshotWithLocalMapping);
+	if (ds->count > 1)
+		qsort(ds->inProgressXidArray, ds->count,
+				sizeof(DistributedTransactionId), DistributedSnapshotMappedEntry_Compare);
 
 	/* perform all the validations */
 	assert_true(ds->xminAllDistributedSnapshots == 5);

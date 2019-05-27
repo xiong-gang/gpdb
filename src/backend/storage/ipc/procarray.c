@@ -1971,16 +1971,6 @@ CreateDistributedSnapshot(DistributedSnapshot *ds)
 		globalXminDistributedSnapshots = xmin;
 
 	/*
-	 * Sort the entry {distribXid} to support the QEs doing culls on their
-	 * DisribToLocalXact sorted lists.
-	 */
-	qsort(
-		  ds->inProgressXidArray,
-		  count,
-		  sizeof(DistributedTransactionId),
-		  DistributedSnapshotMappedEntry_Compare);
-
-	/*
 	 * Copy the information we just captured under lock and then sorted into
 	 * the distributed snapshot.
 	 */
@@ -2444,6 +2434,16 @@ GetSnapshotData(Snapshot snapshot, DtxContext distributedTransactionContext)
 	snapshot->active_count = 0;
 	snapshot->regd_count = 0;
 	snapshot->copied = false;
+
+	/*
+	 * Sort the entry {distribXid} to support the QEs doing culls on their
+	 * DisribToLocalXact sorted lists.
+	 */
+	if (distributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE &&
+		snapshot->haveDistribSnapshot &&
+		ds->count > 1)
+		qsort(ds->inProgressXidArray, ds->count,
+			  sizeof(DistributedTransactionId), DistributedSnapshotMappedEntry_Compare);
 
 	/*
 	 * MPP Addition. If we are the chief then we'll save our local snapshot
