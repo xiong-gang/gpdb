@@ -416,6 +416,7 @@ DistributedLog_CommittedCheck(
 	DistributedLogEntry *ptr;
 	TransactionId oldestXmin;
 
+	LWLockAcquire(DistributedLogTruncateLock, LW_SHARED);
 	LWLockAcquire(DistributedLogControlLock, LW_EXCLUSIVE);
 
 	oldestXmin = DistributedLogShared->oldestXmin;
@@ -425,6 +426,7 @@ DistributedLog_CommittedCheck(
 	if (TransactionIdPrecedes(localXid, oldestXmin))
 	{
 		LWLockRelease(DistributedLogControlLock);
+		LWLockRelease(DistributedLogTruncateLock);
 
 		*distribTimeStamp = 0;	// Set it to something.
 		*distribXid = 0;
@@ -438,6 +440,7 @@ DistributedLog_CommittedCheck(
 	*distribXid = ptr->distribXid;
 	ptr = NULL;
 	LWLockRelease(DistributedLogControlLock);
+	LWLockRelease(DistributedLogTruncateLock);
 
 	if (*distribTimeStamp != 0 && *distribXid != 0)
 	{
