@@ -1152,7 +1152,7 @@ ProcessUtilitySlow(Node *parsetree,
 							relOid = DefineRelation((CreateStmt *) stmt,
 													relKind,
 													((CreateStmt *) stmt)->ownerid,
-													relStorage, false, true, NULL);
+													relStorage, false, false, true, NULL);
 
 							/*
 							 * Let NewRelationCreateToastTable decide if this

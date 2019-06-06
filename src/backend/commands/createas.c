@@ -189,6 +189,7 @@ create_ctas_internal(List *attrList, IntoClause *into, QueryDesc *queryDesc, boo
 									InvalidOid,
 									relstorage,
 									dispatch,
+									false,
 									queryDesc->ddesc ? queryDesc->ddesc->useChangedAOOpts : true,
 									queryDesc->plannedstmt->intoPolicy);
 
@@ -222,7 +223,16 @@ create_ctas_internal(List *attrList, IntoClause *into, QueryDesc *queryDesc, boo
 		StoreViewQuery(intoRelationId, query, false);
 		CommandCounterIncrement();
 	}
-
+	/* Dispatch to segments */
+	if (dispatch)
+	{
+		CdbDispatchUtilityStatement((Node *) create,
+									DF_CANCEL_ON_ERROR|
+									DF_WITH_SNAPSHOT|
+									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(),
+									NULL);
+	}
 	return intoRelationId;
 }
 

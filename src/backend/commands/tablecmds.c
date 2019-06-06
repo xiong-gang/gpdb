@@ -539,7 +539,7 @@ static inline void SetSchema(TupleDesc tuple_desc, List **schema, AttrNumber **a
  * ----------------------------------------------------------------
  */
 Oid
-DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId, char relstorage, bool dispatch, bool useChangedOpts, GpPolicy *intoPolicy)
+DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId, char relstorage, bool dispatch, bool realDispatch, bool useChangedOpts, GpPolicy *intoPolicy)
 {
 	char		relname[NAMEDATALEN];
 	Oid			namespaceId;
@@ -1002,7 +1002,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId, char relstorage, boo
 	}
 
 	/* It is now safe to dispatch */
-	if (shouldDispatch)
+	if (realDispatch && shouldDispatch)
 	{
 		/*
 		 * Dispatch the statement tree to all primary and mirror segdbs.
