@@ -42,9 +42,9 @@ INFO:  Distributed transaction command 'Distributed Commit (one-phase)' to SINGL
 insert into dd_multicol_2 values(null, 1);
 INFO:  (slice 0) Dispatch command to SINGLE content
 INFO:  Distributed transaction command 'Distributed Commit (one-phase)' to SINGLE content
--- negative cases: composite distr key
-select * from dd_multicol_1 where a in (1,3) and b in (1,3);
-INFO:  (slice 1) Dispatch command to PARTIAL contents: 0 2
+-- composite distr key
+select * from dd_multicol_1 where a in (1,3) and b in (1,2);
+INFO:  (slice 1) Dispatch command to PARTIAL contents: 1 2
  a | b 
 ---+---
  1 | 1

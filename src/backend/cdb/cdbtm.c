@@ -97,7 +97,6 @@ static void clearAndResetGxact(void);
 static void resetCurrentGxact(void);
 static void doPrepareTransaction(void);
 static void doInsertForgetCommitted(void);
-static void clearTransactionState(void);
 static void doNotifyingOnePhaseCommit(void);
 static void doNotifyingCommitPrepared(void);
 static void doNotifyingCommitNotPrepared(void);
@@ -321,6 +320,8 @@ notifyCommittedDtxTransaction(void)
 	if (currentGxact->state == DTX_STATE_PREPARED ||
 		currentGxact->state == DTX_STATE_INSERTED_COMMITTED)
 		doNotifyingCommitPrepared();
+	else if (currentGxact->state == DTX_STATE_ONE_PHASE_COMMIT)
+		doNotifyingOnePhaseCommit();
 	else
 		doNotifyingCommitNotPrepared();
 }
@@ -604,9 +605,6 @@ doNotifyingOnePhaseCommit(void)
 		Assert(currentGxact->state == DTX_STATE_PERFORMING_ONE_PHASE_COMMIT);
 		elog(ERROR, "one phase commit failed");
 	}
-
-	clearTransactionState();
-	resetCurrentGxact();
 }
 
 static void
@@ -912,6 +910,9 @@ doNotifyingAbort(void)
 void
 prepareDtxTransaction(void)
 {
+	TransactionId xid = GetTopTransactionIdIfAny();
+	bool		markXidCommitted = TransactionIdIsValid(xid);
+
 	if (DistributedTransactionContext != DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE)
 	{
 		elog(DTM_DEBUG5, "prepareDtxTransaction nothing to do (DistributedTransactionContext = '%s')",
@@ -930,6 +931,18 @@ prepareDtxTransaction(void)
 	if (!ExecutorDidWriteXLog())
 		return;
 
+	/*
+	 * If only one segment was involved in the transaction, and no local XID
+	 * has been assigned on the QD either, we can perform one-phase commit
+	 * on that one segment. Otherwise, broadcast PREPARE TRANSACTION to the
+	 * segments.
+	 */
+	if (!markXidCommitted && list_length(currentGxact->twophaseSegments) < 2)
+	{
+		setCurrentGxactState(DTX_STATE_ONE_PHASE_COMMIT);
+		return;
+	}
+
 	elog(DTM_DEBUG5,
 		 "prepareDtxTransaction called with state = %s",
 		 DtxStateToString(currentGxact->state));
@@ -938,24 +951,7 @@ prepareDtxTransaction(void)
 	Assert(currentGxact->gxid > FirstDistributedTransactionId);
 	Assert(strlen(currentGxact->gid) > 0);
 
-	/*
-	 * If only one segment was involved in the transaction, and no local XID
-	 * has been assigned on the QD either, we can perform one-phase commit
-	 * on that one segment. Otherwise, broadcast PREPARE TRANSACTION to the
-	 * segments.
-	 */
-	TransactionId xid = GetTopTransactionIdIfAny();
-	bool		markXidCommitted = TransactionIdIsValid(xid);
-
-	if (!markXidCommitted && list_length(currentGxact->twophaseSegments) < 2)
-	{
-		setCurrentGxactState(DTX_STATE_ONE_PHASE_COMMIT);
-		doNotifyingOnePhaseCommit();
-	}
-	else
-	{
-		doPrepareTransaction();
-	}
+	doPrepareTransaction();
 }
 
 /*
@@ -2099,6 +2095,7 @@ performDtxProtocolCommitOnePhase(const char *gid)
 	CommitTransactionCommand();
 
 	finishDistributedTransactionContext("performDtxProtocolCommitOnePhase -- Commit onephase", false);
+	MyProc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
 }
 
 /**
