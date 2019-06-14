@@ -1556,6 +1556,15 @@ RecordTransactionCommit(void)
 												getDtxStartTime(),
 												getDistributedTransactionId(),
 												/* isRedo */ false);
+			else if (Gp_role == GP_ROLE_EXECUTE && MyTmGxact->isOnePhaseCommit)
+			{
+				DistributedTransactionTimeStamp distribTimeStamp;
+				DistributedTransactionId distribXid;
+				dtxCrackOpenGid(MyTmGxact->gid, &distribTimeStamp, &distribXid);
+				DistributedLog_SetCommittedTree(xid, nchildren, children,
+												distribTimeStamp, distribXid,
+												/* isRedo */ false);
+			}
 
 			TransactionIdCommitTree(xid, nchildren, children);
 		}

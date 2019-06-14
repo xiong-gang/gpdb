@@ -87,3 +87,62 @@ INSERT 1
 ---
  1 
 (1 row)
+1: COMMIT;
+COMMIT
+
+DROP TABLE distributed_snapshot_test2;
+DROP
+
+-- Scenario3: Test the one-phase commit transactions don't break repeatable read isolation.
+-- connection 40 inserts 100, 100 and 300 serially using one-phase commit protocol. Repeatable
+-- read transactions may read (100), (100,100) or (100,100,300), but not (100, 300).
+CREATE TABLE distributed_snapshot_test3 (a int);
+CREATE
+10: BEGIN ISOLATION LEVEL REPEATABLE READ;
+BEGIN
+20: BEGIN ISOLATION LEVEL REPEATABLE READ;
+BEGIN
+30: BEGIN ISOLATION LEVEL REPEATABLE READ;
+BEGIN
+40: INSERT INTO distributed_snapshot_test3 VALUES(100);
+INSERT 1
+10: SELECT * FROM distributed_snapshot_test3 where a = 100;
+ a   
+-----
+ 100 
+(1 row)
+40: INSERT INTO distributed_snapshot_test3 VALUES(100);
+INSERT 1
+30: SELECT 123 AS "establish snapshot";
+ establish snapshot 
+--------------------
+ 123                
+(1 row)
+40: INSERT INTO distributed_snapshot_test3 VALUES(300);
+INSERT 1
+10: SELECT * FROM distributed_snapshot_test3;
+ a   
+-----
+ 100 
+(1 row)
+20: SELECT * FROM distributed_snapshot_test3;
+ a   
+-----
+ 300 
+ 100 
+ 100 
+(3 rows)
+30: SELECT * FROM distributed_snapshot_test3;
+ a   
+-----
+ 100 
+ 100 
+(2 rows)
+10: COMMIT;
+COMMIT
+20: COMMIT;
+COMMIT
+30: COMMIT;
+COMMIT
+DROP TABLE distributed_snapshot_test3;
+DROP

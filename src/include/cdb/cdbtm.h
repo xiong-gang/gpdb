@@ -226,6 +226,9 @@ typedef struct TMGXACT
 	
 	bool						explicitBeginRemembered;
 
+	/* Used on QE, indicates the transaction applies one-phase commit protocol */
+	bool						isOnePhaseCommit;
+
 	/*
 	 * This is similar to xmin of PROC, stores lowest dxid on first snapshot
 	 * by process with this as currentGXact.

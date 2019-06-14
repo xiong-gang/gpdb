@@ -490,6 +490,10 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid, bool lockHeld)
 
 		proc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
 	}
+
+	/* Clear distributed transaction status for one-phase commit transaction */
+	if (Gp_role == GP_ROLE_EXECUTE && MyTmGxact->isOnePhaseCommit)
+		initGxact(MyTmGxact, false);
 }
 
 

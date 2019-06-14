@@ -1442,6 +1442,7 @@ initGxact(TMGXACT *gxact, bool resetXid)
 	gxact->writerGangLost = false;
 	gxact->twophaseSegmentsMap = NULL;
 	gxact->twophaseSegments = NIL;
+	gxact->isOnePhaseCommit = false;
 }
 
 bool
@@ -2077,21 +2078,21 @@ static void
 performDtxProtocolCommitOnePhase(const char *gid)
 {
 	elog(DTM_DEBUG5,
-		 "performDtxProtocolCommitPrepared going to call FinishPreparedTransaction for distributed transaction %s", gid);
+		 "performDtxProtocolCommitOnePhase going to call CommitTransaction for distributed transaction %s", gid);
+
+	/* MyTmGxact is now not used on QE for one-phase commit */
+	memcpy(MyTmGxact->gid, gid, TMGIDSIZE);
+	MyTmGxact->isOnePhaseCommit = true;
 
 	StartTransactionCommand();
 
-	elog(DTM_DEBUG5, "performDtxProtocolCommand going to call PrepareTransactionBlock for distributed transaction (id = '%s')", gid);
 	if (!EndTransactionBlock())
 	{
 		elog(ERROR, "One-phase Commit of distributed transaction %s failed", gid);
 		return;
 	}
 
-	/*
-	 * Calling CommitTransactionCommand will cause the actual COMMIT/PREPARE
-	 * work to be performed.
-	 */
+	/* Calling CommitTransactionCommand will cause the actual COMMIT work to be performed. */
 	CommitTransactionCommand();
 
 	finishDistributedTransactionContext("performDtxProtocolCommitOnePhase -- Commit onephase", false);
