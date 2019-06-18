@@ -131,7 +131,7 @@ typedef enum
 	 *    transaction.  Whether or not the transaction has been started on a QE
 	 *    is not a part of the QD state -- that is tracked by assigning one of the
 	 *    DTX_CONTEXT_QE* values on the QE process, and by updating the state field of the
-	 *    currentGxact.
+	 *    MyTmGxactLocal.
 	 */
 	DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE,
 
@@ -219,14 +219,9 @@ typedef struct TMGXACT
 
 	/*
 	 * This is similar to xmin of PROC, stores lowest dxid on first snapshot
-	 * by process with this as currentGXact.
+	 * by process with this as MyTmGxact.
 	 */
 	DistributedTransactionId	xminDistributedSnapshot;
-
-	/*
-	 * Memory only fields.
-	 */
- 	DtxState				state;
 }	TMGXACT;
 
 typedef struct TMGXACTLOCAL
@@ -315,8 +310,7 @@ extern void dtxFormGID(char *gid,
 extern DistributedTransactionId getDistributedTransactionId(void);
 extern bool getDistributedTransactionIdentifier(char *id);
 
-extern void initGxact(TMGXACT *gxact, bool resetXid);
-extern void activeCurrentGxact(void);
+extern void initGxact(bool resetXid);
 extern void	prepareDtxTransaction(void);
 extern bool isPreparedDtxTransaction(void);
 extern void getDtxLogInfo(TMGXACT_LOG *gxact_log);
@@ -335,6 +329,7 @@ extern void redoDistributedForgetCommitRecord(TMGXACT_LOG *gxact_log);
 extern void setupTwoPhaseTransaction(void);
 extern bool isCurrentDtxTwoPhase(void);
 extern DtxState getCurrentDtxState(void);
+extern bool isCurrentDtxTwoPhaseActivated(void);
 
 extern void sendDtxExplicitBegin(void);
 extern bool isDtxExplicitBegin(void);

@@ -509,7 +509,7 @@ InitProcess(void)
 	MyProc->queryCommandId = -1;
 
 	/* Init gxact */
-	initGxact(MyTmGxact, true);
+	initGxact(true);
 
 	/*
 	 * Arrange to clean up at backend exit.
