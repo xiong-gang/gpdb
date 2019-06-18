@@ -441,8 +441,8 @@ doPrepareTransaction(void)
 	Assert(currentGxact->twophaseSegments != NIL);
 	succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_PREPARE, /* flags */ 0,
 											 currentGxact->gid, currentGxact->gxid,
-											 &currentGxact->badPrepareGangs, /* raiseError */ true,
-											 currentGxact->twophaseSegments, NULL, 0);
+											 &MyTmGxactLocal->badPrepareGangs, /* raiseError */ true,
+											 MyTmGxactLocal->twophaseSegments, NULL, 0);
 
 	/*
 	 * Now we've cleaned up our dispatched statement, cancels are allowed
@@ -453,7 +453,7 @@ doPrepareTransaction(void)
 	if (!succeeded)
 	{
 		elog(DTM_DEBUG5, "doPrepareTransaction error finds badPrimaryGangs = %s",
-			 (currentGxact->badPrepareGangs ? "true" : "false"));
+			 (MyTmGxactLocal->badPrepareGangs ? "true" : "false"));
 		elog(ERROR, "The distributed transaction 'Prepare' broadcast failed to one or more segments for gid = %s.",
 			 currentGxact->gid);
 	}
@@ -538,7 +538,7 @@ doNotifyingCommitNotPrepared(void)
 	volatile int savedInterruptHoldoffCount;
 	MemoryContext oldcontext = CurrentMemoryContext;;
 
-	if (currentGxact->twophaseSegments == NULL)
+	if (MyTmGxactLocal->twophaseSegments == NULL)
 		return;
 
 	if (strlen(currentGxact->gid) >= TMGIDSIZE)
@@ -552,7 +552,7 @@ doNotifyingCommitNotPrepared(void)
 		succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_COMMIT_NOT_PREPARED, /* flags */ 0,
 				currentGxact->gid, currentGxact->gxid,
 				&badGangs, /* raiseError */ true,
-				currentGxact->twophaseSegments, NULL, 0);
+				MyTmGxactLocal->twophaseSegments, NULL, 0);
 	}
 	PG_CATCH();
 	{
@@ -581,7 +581,7 @@ doNotifyingOnePhaseCommit(void)
 	bool		badGangs;
 	volatile int savedInterruptHoldoffCount;
 
-	Assert(list_length(currentGxact->twophaseSegments) <= 1);
+	Assert(list_length(MyTmGxactLocal->twophaseSegments) <= 1);
 
 	if (strlen(currentGxact->gid) >= TMGIDSIZE)
 		elog(PANIC, "Distributed transaction identifier too long (%d)",
@@ -594,12 +594,12 @@ doNotifyingOnePhaseCommit(void)
 
 	savedInterruptHoldoffCount = InterruptHoldoffCount;
 
-	Assert(currentGxact->twophaseSegments != NIL);
+	Assert(MyTmGxactLocal->twophaseSegments != NIL);
 
 	succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_COMMIT_ONEPHASE, /* flags */ 0,
 											 currentGxact->gid, currentGxact->gxid,
 											 &badGangs, /* raiseError */ true,
-											 currentGxact->twophaseSegments, NULL, 0);
+											 MyTmGxactLocal->twophaseSegments, NULL, 0);
 	if (!succeeded)
 	{
 		Assert(currentGxact->state == DTX_STATE_PERFORMING_ONE_PHASE_COMMIT);
@@ -625,13 +625,13 @@ doNotifyingCommitPrepared(void)
 	SIMPLE_FAULT_INJECTOR("dtm_broadcast_commit_prepared");
 	savedInterruptHoldoffCount = InterruptHoldoffCount;
 
-	Assert(currentGxact->twophaseSegments != NIL);
+	Assert(MyTmGxactLocal->twophaseSegments != NIL);
 	PG_TRY();
 	{
 		succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_COMMIT_PREPARED, /* flags */ 0,
 												 currentGxact->gid, currentGxact->gxid,
 												 &badGangs, /* raiseError */ true,
-												 currentGxact->twophaseSegments, NULL, 0);
+												 MyTmGxactLocal->twophaseSegments, NULL, 0);
 	}
 	PG_CATCH();
 	{
@@ -688,7 +688,7 @@ doNotifyingCommitPrepared(void)
 													 DTX_PROTOCOL_COMMAND_RETRY_COMMIT_PREPARED, /* flags */ 0,
 													 currentGxact->gid, currentGxact->gxid,
 													 &badGangs, /* raiseError */ true,
-													 currentGxact->twophaseSegments, NULL, 0);
+													 MyTmGxactLocal->twophaseSegments, NULL, 0);
 		}
 		PG_CATCH();
 		{
@@ -803,12 +803,12 @@ doNotifyingAbort(void)
 		 * occur before the command is actually dispatched, no need to dispatch DTX for
 		 * such cases.
 		 */ 
-		if (!currentGxact->writerGangLost && currentGxact->twophaseSegments)
+		if (!MyTmGxactLocal->writerGangLost && MyTmGxactLocal->twophaseSegments)
 		{
 			succeeded = doDispatchDtxProtocolCommand(DTX_PROTOCOL_COMMAND_ABORT_NO_PREPARED, /* flags */ 0,
 													 currentGxact->gid, currentGxact->gxid,
 													 &badGangs, /* raiseError */ false,
-													 currentGxact->twophaseSegments, NULL, 0);
+													 MyTmGxactLocal->twophaseSegments, NULL, 0);
 			if (!succeeded)
 			{
 				elog(WARNING, "The distributed transaction 'Abort' broadcast failed to one or more segments for gid = %s.",
@@ -868,7 +868,7 @@ doNotifyingAbort(void)
 			succeeded = doDispatchDtxProtocolCommand(dtxProtocolCommand, /* flags */ 0,
 													 currentGxact->gid, currentGxact->gxid,
 													 &badGangs, /* raiseError */ true,
-													 currentGxact->twophaseSegments, NULL, 0);
+													 MyTmGxactLocal->twophaseSegments, NULL, 0);
 		}
 		PG_CATCH();
 		{
@@ -937,7 +937,7 @@ prepareDtxTransaction(void)
 	 * on that one segment. Otherwise, broadcast PREPARE TRANSACTION to the
 	 * segments.
 	 */
-	if (!markXidCommitted && list_length(currentGxact->twophaseSegments) < 2)
+	if (!markXidCommitted && list_length(MyTmGxactLocal->twophaseSegments) < 2)
 	{
 		setCurrentGxactState(DTX_STATE_ONE_PHASE_COMMIT);
 		return;
@@ -983,7 +983,7 @@ rollbackDtxTransaction(void)
 			break;
 
 		case DTX_STATE_PREPARING:
-			if (currentGxact->badPrepareGangs)
+			if (MyTmGxactLocal->badPrepareGangs)
 			{
 				setCurrentGxactState(DTX_STATE_RETRY_ABORT_PREPARED);
 
@@ -1198,7 +1198,8 @@ mppTxnOptions(bool needTwoPhase)
 	if (XactReadOnly)
 		options |= GP_OPT_READ_ONLY;
 
-	if (currentGxact != NULL && currentGxact->explicitBeginRemembered)
+	//XG
+	if (currentGxact != NULL && MyTmGxactLocal->explicitBeginRemembered)
 		options |= GP_OPT_EXPLICT_BEGIN;
 
 	elog(DTM_DEBUG5,
@@ -1435,14 +1436,14 @@ initGxact(TMGXACT *gxact, bool resetXid)
 	/*
 	 * Memory only fields.
 	 */
-	gxact->sessionId = gp_session_id;
-	gxact->explicitBeginRemembered = false;
 	gxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
-	gxact->badPrepareGangs = false;
-	gxact->writerGangLost = false;
-	gxact->twophaseSegmentsMap = NULL;
-	gxact->twophaseSegments = NIL;
-	gxact->isOnePhaseCommit = false;
+	MyTmGxactLocal->sessionId = gp_session_id;
+	MyTmGxactLocal->explicitBeginRemembered = false;
+	MyTmGxactLocal->badPrepareGangs = false;
+	MyTmGxactLocal->writerGangLost = false;
+	MyTmGxactLocal->twophaseSegmentsMap = NULL;
+	MyTmGxactLocal->twophaseSegments = NIL;
+	MyTmGxactLocal->isOnePhaseCommit = false;
 }
 
 bool
@@ -2009,13 +2010,14 @@ finishDistributedTransactionContext(char *debugCaller, bool aborted)
 static void
 rememberDtxExplicitBegin(void)
 {
+	//XG
 	Assert (currentGxact != NULL);
 
-	if (!currentGxact->explicitBeginRemembered)
+	if (!MyTmGxactLocal->explicitBeginRemembered)
 	{
 		elog(DTM_DEBUG5, "rememberDtxExplicitBegin explicit BEGIN for gid = %s",
 			 currentGxact->gid);
-		currentGxact->explicitBeginRemembered = true;
+		MyTmGxactLocal->explicitBeginRemembered = true;
 	}
 	else
 	{
@@ -2027,7 +2029,8 @@ rememberDtxExplicitBegin(void)
 bool
 isDtxExplicitBegin(void)
 {
-	return (currentGxact && currentGxact->explicitBeginRemembered);
+	//XG
+	return (currentGxact && MyTmGxactLocal->explicitBeginRemembered);
 }
 
 /*
@@ -2081,8 +2084,9 @@ performDtxProtocolCommitOnePhase(const char *gid)
 		 "performDtxProtocolCommitOnePhase going to call CommitTransaction for distributed transaction %s", gid);
 
 	/* MyTmGxact is now not used on QE for one-phase commit */
+	//XG
 	memcpy(MyTmGxact->gid, gid, TMGIDSIZE);
-	MyTmGxact->isOnePhaseCommit = true;
+	MyTmGxactLocal->isOnePhaseCommit = true;
 
 	StartTransactionCommand();
 
@@ -2381,13 +2385,13 @@ performDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 void
 markCurrentGxactWriterGangLost(void)
 {
-	MyTmGxact->writerGangLost = true;
+	MyTmGxactLocal->writerGangLost = true;
 }
 
 bool
 currentGxactWriterGangLost(void)
 {
-	return MyTmGxact->writerGangLost;
+	return MyTmGxactLocal->writerGangLost;
 }
 
 /*
@@ -2401,6 +2405,7 @@ addToGxactTwophaseSegments(Gang *gang)
 	int segindex;
 	int i;
 
+	//XG
 	if (!currentGxact)
 		return;
 
@@ -2422,14 +2427,14 @@ addToGxactTwophaseSegments(Gang *gang)
 			continue;
 
 		/* skip if record already */
-		if (bms_is_member(segindex, currentGxact->twophaseSegmentsMap))
+		if (bms_is_member(segindex, MyTmGxactLocal->twophaseSegmentsMap))
 			continue;
 
-		currentGxact->twophaseSegmentsMap =
-			bms_add_member(currentGxact->twophaseSegmentsMap, segindex);
+		MyTmGxactLocal->twophaseSegmentsMap =
+			bms_add_member(MyTmGxactLocal->twophaseSegmentsMap, segindex);
 
 		currentGxact->twophaseSegments =
-			lappend_int(currentGxact->twophaseSegments, segindex);
+			lappend_int(MyTmGxactLocal->twophaseSegments, segindex);
 	}
 	MemoryContextSwitchTo(oldContext);
 }

@@ -1300,7 +1300,7 @@ RecordTransactionCommit(void)
 		xid = GetTopTransactionIdIfAny();
 	markXidCommitted = TransactionIdIsValid(xid);
 
-	if (Gp_role == GP_ROLE_EXECUTE && MyTmGxact->isOnePhaseCommit)
+	if (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit)
 		dtxCrackOpenGid(MyTmGxact->gid, &distribTimeStamp, &distribXid);
 
 	/* Get data needed for commit record */
@@ -1484,7 +1484,7 @@ RecordTransactionCommit(void)
 
 				insertedDistributedCommitted();
 			}
-			else if (Gp_role == GP_ROLE_EXECUTE && MyTmGxact->isOnePhaseCommit)
+			else if (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit)
 			{
 				xlrec.distribTimeStamp = distribTimeStamp;
 				xlrec.distribXid = distribXid;
@@ -1567,7 +1567,7 @@ RecordTransactionCommit(void)
 												getDtxStartTime(),
 												getDistributedTransactionId(),
 												/* isRedo */ false);
-			else if (Gp_role == GP_ROLE_EXECUTE && MyTmGxact->isOnePhaseCommit)
+			else if (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit)
 				DistributedLog_SetCommittedTree(xid, nchildren, children,
 												distribTimeStamp, distribXid,
 												/* isRedo */ false);

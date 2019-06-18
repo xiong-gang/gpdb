@@ -218,6 +218,20 @@ typedef struct TMGXACT
 	DistributedTransactionId	gxid;
 
 	/*
+	 * This is similar to xmin of PROC, stores lowest dxid on first snapshot
+	 * by process with this as currentGXact.
+	 */
+	DistributedTransactionId	xminDistributedSnapshot;
+
+	/*
+	 * Memory only fields.
+	 */
+ 	DtxState				state;
+}	TMGXACT;
+
+typedef struct TMGXACTLOCAL
+{
+	/*
 	 * Memory only fields.
 	 */
  	DtxState				state;
@@ -229,19 +243,13 @@ typedef struct TMGXACT
 	/* Used on QE, indicates the transaction applies one-phase commit protocol */
 	bool						isOnePhaseCommit;
 
-	/*
-	 * This is similar to xmin of PROC, stores lowest dxid on first snapshot
-	 * by process with this as currentGXact.
-	 */
-	DistributedTransactionId	xminDistributedSnapshot;
-
 	bool						badPrepareGangs;
 
 	bool						writerGangLost;
 
 	Bitmapset					*twophaseSegmentsMap;
 	List						*twophaseSegments;
-}	TMGXACT;
+}	TMGXACTLOCAL;
 
 typedef struct TMGXACTSTATUS
 {
