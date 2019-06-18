@@ -584,7 +584,7 @@ doNotifyingOnePhaseCommit(void)
 	Assert(list_length(currentGxact->twophaseSegments) <= 1);
 
 	if (strlen(currentGxact->gid) >= TMGIDSIZE)
-		elog(PANIC, "Distribute transaction identifier too long (%d)",
+		elog(PANIC, "Distributed transaction identifier too long (%d)",
 			 (int) strlen(currentGxact->gid));
 
 	elog(DTM_DEBUG5, "doNotifyingOnePhaseCommit entering in state = %s", DtxStateToString(currentGxact->state));
