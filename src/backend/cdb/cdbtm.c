@@ -307,15 +307,6 @@ notifyCommittedDtxTransactionIsNeeded(void)
 	return true;
 }
 
-bool
-includeInCheckpointIsNeeded(TMGXACT *gxact)
-{
-	//XG
-	volatile DtxState state = DTX_STATE_INSERTED_COMMITTED;// = gxact->state;
-	return ((state >= DTX_STATE_INSERTED_COMMITTED &&
-			 state < DTX_STATE_INSERTED_FORGET_COMMITTED) ||
-			state == DTX_STATE_RETRY_COMMIT_PREPARED);
-}
 /*
  * Notify commited a global transaction, called by user commit
  * or by CommitTransaction
@@ -472,6 +463,7 @@ doInsertForgetCommitted(void)
 	RecordDistributedForgetCommitted(&gxact_log);
 
 	setCurrentDtxState(DTX_STATE_INSERTED_FORGET_COMMITTED);
+	MyTmGxact->needIncludedInCkpt = false;
 }
 
 void
@@ -906,7 +898,7 @@ prepareDtxTransaction(void)
 	{
 		Assert(MyTmGxact->gxid == InvalidDistributedTransactionId);
 		Assert(MyTmGxactLocal->state == DTX_STATE_NONE);
-		initGxact(false);
+		resetGxact(false);
 		return;
 	}
 
@@ -1405,21 +1397,22 @@ dispatchDtxCommand(const char *cmd)
 
 /* initialize a global transaction context */
 void
-initGxact(bool resetXid)
+resetGxact(bool resetShared)
 {
-	if (resetXid)
+	if (resetShared)
 	{
 		AssertImply(MyTmGxact->gxid != InvalidDistributedTransactionId, LWLockHeldByMe(ProcArrayLock));
 		MemSet(MyTmGxact->gid, 0, TMGIDSIZE);
 		MyTmGxact->gxid = InvalidDistributedTransactionId;
 		MyTmGxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
+		MyTmGxact->needIncludedInCkpt = false;
+		MyTmGxact->sessionId = gp_session_id;
 	}
 
 	/*
 	 * Memory only fields.
 	 */
 	MyTmGxactLocal->state = DTX_STATE_NONE;
-	MyTmGxactLocal->sessionId = gp_session_id;
 	MyTmGxactLocal->explicitBeginRemembered = false;
 	MyTmGxactLocal->badPrepareGangs = false;
 	MyTmGxactLocal->writerGangLost = false;
@@ -1479,6 +1472,7 @@ insertedDistributedCommitted(void)
 
 	Assert(MyTmGxactLocal->state == DTX_STATE_INSERTING_COMMITTED);
 	setCurrentDtxState(DTX_STATE_INSERTED_COMMITTED);
+	MyTmGxact->needIncludedInCkpt = true;
 }
 
 /* generate global transaction id */
@@ -2033,7 +2027,6 @@ performDtxProtocolCommitOnePhase(const char *gid)
 		 "performDtxProtocolCommitOnePhase going to call CommitTransaction for distributed transaction %s", gid);
 
 	/* MyTmGxact is now not used on QE for one-phase commit */
-	//XG
 	memcpy(MyTmGxact->gid, gid, TMGIDSIZE);
 	MyTmGxactLocal->isOnePhaseCommit = true;
 

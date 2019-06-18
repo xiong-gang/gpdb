@@ -222,6 +222,9 @@ typedef struct TMGXACT
 	 * by process with this as MyTmGxact.
 	 */
 	DistributedTransactionId	xminDistributedSnapshot;
+
+	bool						needIncludedInCkpt;
+	int							sessionId;
 }	TMGXACT;
 
 typedef struct TMGXACTLOCAL
@@ -230,8 +233,6 @@ typedef struct TMGXACTLOCAL
 	 * Memory only fields.
 	 */
  	DtxState				state;
-
-	int							sessionId;
 	
 	bool						explicitBeginRemembered;
 
@@ -310,7 +311,7 @@ extern void dtxFormGID(char *gid,
 extern DistributedTransactionId getDistributedTransactionId(void);
 extern bool getDistributedTransactionIdentifier(char *id);
 
-extern void initGxact(bool resetXid);
+extern void resetGxact(bool resetShared);
 extern void	prepareDtxTransaction(void);
 extern bool isPreparedDtxTransaction(void);
 extern void getDtxLogInfo(TMGXACT_LOG *gxact_log);
@@ -318,7 +319,6 @@ extern bool notifyCommittedDtxTransactionIsNeeded(void);
 extern void notifyCommittedDtxTransaction(void);
 extern void	rollbackDtxTransaction(void);
 
-extern bool includeInCheckpointIsNeeded(TMGXACT *gxact);
 extern void insertingDistributedCommitted(void);
 extern void insertedDistributedCommitted(void);
 

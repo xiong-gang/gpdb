@@ -407,7 +407,7 @@ ProcArrayEndGxact(void)
 	if (InvalidDistributedTransactionId != gxid &&
 		TransactionIdPrecedes(ShmemVariableCache->latestCompletedDxid, gxid))
 		ShmemVariableCache->latestCompletedDxid = gxid;
-	initGxact(true);
+	resetGxact(true);
 }
 
 /*
@@ -493,7 +493,7 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid, bool lockHeld)
 
 	/* Clear distributed transaction status for one-phase commit transaction */
 	if (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit)
-		initGxact(false);
+		resetGxact(false);
 }
 
 
@@ -1758,9 +1758,8 @@ getAllDistributedXactStatus(TMGALLXACTSTATUS **allDistributedXactStatus)
 			all->statusArray[i].gxid = gxact->gxid;
 			Assert(strlen(gxact->gid) < TMGIDSIZE);
 			memcpy(all->statusArray[i].gid, gxact->gid, TMGIDSIZE);
-			//XG
-			all->statusArray[i].state = 0;
-			all->statusArray[i].sessionId = 0;
+			all->statusArray[i].state = 0; /* deprecate this field */
+			all->statusArray[i].sessionId = gxact->sessionId;
 			all->statusArray[i].xminDistributedSnapshot = gxact->xminDistributedSnapshot;
 		}
 
@@ -1831,7 +1830,6 @@ getDtxCheckPointInfo(char **result, int *result_size)
 	{
 		TMGXACT_LOG *gxact_log;
 
-		//xg
 		/*
 		 * Note no 'volatile' is used to describe 'gxact'.  We will check
 		 * gxact->state first before memcpy gxact->gid. And the allowed state
@@ -1848,7 +1846,7 @@ getDtxCheckPointInfo(char **result, int *result_size)
 		 */
 		TMGXACT *gxact = &allTmGxact[arrayP->pgprocnos[i]];
 
-		if (!includeInCheckpointIsNeeded(gxact))
+		if (!gxact->needIncludedInCkpt)
 			continue;
 
 		gxact_log = &gxact_log_array[actual];
