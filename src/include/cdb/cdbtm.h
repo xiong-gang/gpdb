@@ -202,13 +202,7 @@ typedef struct TMGXACT_UTILITY_MODE_REDO
 
 typedef struct TMGXACT
 {
-	/*
-	 * These fields will be recorded in the log.  They are the same
-	 * as those in the TMGXACT_LOG struct.  We will be copying the
-	 * fields individually, so they dont have to match the same order,
-	 * but it a good idea.
-	 */
-	char						gid[TMGIDSIZE];
+	DistributedTransactionTimeStamp	distribTimeStamp;
 
 	/*
 	 * Like PGPROC->xid to local transaction, gxid is set if distributed
@@ -353,15 +347,14 @@ extern void setupRegularDtxContext (void);
 extern void setupQEDtxContext (DtxContextInfo *dtxContextInfo);
 extern void finishDistributedTransactionContext (char *debugCaller, bool aborted);
 extern void performDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
-					int flags,
-					const char *loggingStr, const char *gid, 
-					DistributedTransactionId gxid, DtxContextInfo *contextInfo);
+									  const char *gid,
+									  DtxContextInfo *contextInfo);
 extern void UtilityModeFindOrCreateDtmRedoFile(void);
 extern void UtilityModeCloseDtmRedoFile(void);
 
+extern bool currentDtxDispatchProtocolCommand(DtxProtocolCommand dtxProtocolCommand, bool raiseError);
 extern bool doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType);
-extern bool doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand, int flags,
-							 char *gid, DistributedTransactionId gxid,
+extern bool doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand, char *gid,
 							 bool *badGangs, bool raiseError, List *twophaseSegments,
 							 char *serializedDtxContextInfo, int serializedDtxContextInfoLen);
 

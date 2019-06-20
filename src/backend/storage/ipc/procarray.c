@@ -1756,8 +1756,7 @@ getAllDistributedXactStatus(TMGALLXACTSTATUS **allDistributedXactStatus)
 			TMGXACT *gxact = &allTmGxact[arrayP->pgprocnos[i]];
 
 			all->statusArray[i].gxid = gxact->gxid;
-			Assert(strlen(gxact->gid) < TMGIDSIZE);
-			memcpy(all->statusArray[i].gid, gxact->gid, TMGIDSIZE);
+			dtxFormGID(all->statusArray[i].gid, gxact->distribTimeStamp, gxact->gxid);
 			all->statusArray[i].state = 0; /* deprecate this field */
 			all->statusArray[i].sessionId = gxact->sessionId;
 			all->statusArray[i].xminDistributedSnapshot = gxact->xminDistributedSnapshot;
@@ -1850,14 +1849,11 @@ getDtxCheckPointInfo(char **result, int *result_size)
 			continue;
 
 		gxact_log = &gxact_log_array[actual];
-		if (strlen(gxact->gid) >= TMGIDSIZE)
-			elog(PANIC, "Distribute transaction identifier too long (%d)",
-				 (int) strlen(gxact->gid));
-		memcpy(gxact_log->gid, gxact->gid, TMGIDSIZE);
+		dtxFormGID(gxact_log->gid, gxact->distribTimeStamp, gxact->gxid);
 		gxact_log->gxid = gxact->gxid;
 
 		elog((Debug_print_full_dtm ? LOG : DEBUG5),
-			 "Add DTM checkpoint entry gid = %s.", gxact->gid);
+			 "Add DTM checkpoint entry gid = %s.", gxact_log->gid);
 
 		actual++;
 	}

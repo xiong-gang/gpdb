@@ -1287,8 +1287,6 @@ RecordTransactionCommit(void)
 	bool		isDtxPrepared = 0;
 	TMGXACT_LOG gxact_log;
 	XLogRecPtr	recptr = InvalidXLogRecPtr;
-	DistributedTransactionTimeStamp distribTimeStamp;
-	DistributedTransactionId distribXid;
 
 	/* Like in CommitTransaction(), treat a QE reader as if there was no XID */
 	if (DistributedTransactionContext == DTX_CONTEXT_QE_ENTRY_DB_SINGLETON ||
@@ -1299,9 +1297,6 @@ RecordTransactionCommit(void)
 	else
 		xid = GetTopTransactionIdIfAny();
 	markXidCommitted = TransactionIdIsValid(xid);
-
-	if (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit)
-		dtxCrackOpenGid(MyTmGxact->gid, &distribTimeStamp, &distribXid);
 
 	/* Get data needed for commit record */
 	nrels = smgrGetPendingDeletes(true, &rels);
@@ -1486,8 +1481,8 @@ RecordTransactionCommit(void)
 			}
 			else if (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit)
 			{
-				xlrec.distribTimeStamp = distribTimeStamp;
-				xlrec.distribXid = distribXid;
+				xlrec.distribTimeStamp = MyTmGxact->distribTimeStamp;
+				xlrec.distribXid = MyTmGxact->gxid;
 				recptr = XLogInsert(RM_XACT_ID, XLOG_XACT_ONE_PHASE_COMMIT, rdata);
 			}
 			else
@@ -1569,7 +1564,7 @@ RecordTransactionCommit(void)
 												/* isRedo */ false);
 			else if (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit)
 				DistributedLog_SetCommittedTree(xid, nchildren, children,
-												distribTimeStamp, distribXid,
+												MyTmGxact->distribTimeStamp, MyTmGxact->gxid,
 												/* isRedo */ false);
 
 			TransactionIdCommitTree(xid, nchildren, children);
