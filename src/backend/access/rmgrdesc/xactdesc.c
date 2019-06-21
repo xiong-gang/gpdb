@@ -244,13 +244,6 @@ xact_desc(StringInfo buf, XLogRecord *record)
 		appendStringInfoString(buf, "one-phase commit: ");
 		xact_desc_commit(buf, xlrec);
 	}
-	else if (info == XLOG_XACT_ONE_PHASE_COMMIT)
-	{
-		xl_xact_commit *xlrec = (xl_xact_commit *) rec;
-
-		appendStringInfoString(buf, "one-phase commit: ");
-		xact_desc_commit(buf, xlrec);
-	}
 	else
 		appendStringInfoString(buf, "UNKNOWN");
 }
