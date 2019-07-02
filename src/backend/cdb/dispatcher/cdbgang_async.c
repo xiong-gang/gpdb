@@ -74,6 +74,7 @@ cdbgang_createGang_async(List *segments, SegmentType segmentType)
 	newGangDefinition = buildGangDefinition(segments, segmentType);
 	CurrentGangCreating = newGangDefinition;
 	totalSegs = getgpsegmentCount();
+	Assert(totalSegs > 0);
 
 create_gang_retry:
 	Assert(newGangDefinition != NULL);
@@ -123,7 +124,7 @@ create_gang_retry:
 									 segdbDesc->isWriter,
 									 segdbDesc->identifier,
 									 segdbDesc->segment_database_info->hostSegs,
-									 totalSegs);
+									 totalSegs * 2);
 
 			if (!ret)
 				ereport(ERROR,
