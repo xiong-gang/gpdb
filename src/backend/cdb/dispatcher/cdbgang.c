@@ -1486,6 +1486,8 @@ void freeGangsForPortal(char *portal_name)
 	MemoryContext oldContext;
 	ListCell *cur_item = NULL;
 	ListCell *prev_item = NULL;
+	List *reuseList = NULL;
+
 
 	if (Gp_role != GP_ROLE_DISPATCH)
 		return;
@@ -1553,7 +1555,7 @@ void freeGangsForPortal(char *portal_name)
 
 			/* we only return the gang to the available list if it is good */
 			if (cleanupGang(gp))
-				availableReaderGangsN = lappend(availableReaderGangsN, gp);
+				reuseList = lappend(reuseList, gp);
 			else
 				DisconnectAndDestroyGang(gp);
 
@@ -1568,6 +1570,14 @@ void freeGangsForPortal(char *portal_name)
 			cur_item = next_item;
 		}
 	}
+
+	/*
+	 * Keep the order of the gangs the same as it's allocated
+	 * In this way, the send-receive pair can be the same across queries in the same session.
+	 * It's useful in some platforms like Azure.
+	 */
+	availableReaderGangsN = list_concat(reuseList,
+										availableReaderGangsN);
 
 	prev_item = NULL;
 	cur_item = list_head(allocatedReaderGangs1);
