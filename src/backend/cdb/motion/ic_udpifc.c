@@ -3174,6 +3174,10 @@ SetupUDPIFCInterconnect_Internal(EState *estate)
 	estate->interconnect_context->activated = true;
 
 	pthread_mutex_unlock(&ic_control_info.lock);
+
+	/* Check if any of the QEs has already finished with error */
+	if (Gp_role == GP_ROLE_DISPATCH)
+		checkForCancelFromQD(estate->interconnect_context);
 }
 
 /*
