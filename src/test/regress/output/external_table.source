@@ -24,6 +24,7 @@
 -- s/Found.+//
 --
 -- end_matchsubs
+CREATE EXTENSION IF NOT EXISTS gp_inject_fault;
 CREATE TABLE REG_REGION (R_REGIONKEY INT, R_NAME CHAR(25), R_COMMENT VARCHAR(152)) DISTRIBUTED BY (R_REGIONKEY);
 -- --------------------------------------
 -- 'file' protocol - (only CREATE, don't SELECT - won't work on distributed installation)
@@ -934,6 +935,21 @@ SELECT gp_truncate_error_log('exttab_cursor_2');
 -- the segments reaches the reject limit and reports the error back to the QD
 -- before the others, the transaction gets aborted. The timing of fetching the
 -- results will  influence the order of the ERROR in the output.
+--
+-- For gp_interconnect_type=tcp:
+-- If the segment errors out before QD call 'SetupInterconnect', QD will report
+-- this error in 'SetupInterconnect', or else, QD will report the error in the
+-- following FETCH command.
+-- To make this test deterministic, we use gp_inject_fault to let QD sleep 1
+-- second before 'SetupInterconnect' to make sure QD calls 'SetupInterconnect'
+-- after segment errors out.
+SELECT gp_inject_fault('interconnect_setup_palloc', 'sleep', '', '', '', 1, 1, 1::smallint);
+NOTICE:  Success:
+ gp_inject_fault 
+-----------------
+ t
+(1 row)
+
 BEGIN;
 DECLARE exttab_cur1 no scroll cursor FOR
 SELECT e1.i, e2.j from exttab_cursor_2 e1 INNER JOIN exttab_cursor_2 e2 ON e1.i = e2.i
@@ -941,14 +957,16 @@ UNION ALL
 SELECT e1.i, e2.j from exttab_cursor_2 e1 INNER JOIN exttab_cursor_2 e2 ON e1.i = e2.i
 UNION ALL
 SELECT e1.i, e2.j from exttab_cursor_2 e1 INNER JOIN exttab_cursor_2 e2 ON e1.i = e2.i;
--- Should not fail as we would not have reached segment reject limit yet. This fails currently though
--- because how cursors scan the rows internally is implementation dependant.
--- The test is here to track the issue.
-FETCH exttab_cur1;
-ERROR:  segment reject limit reached, aborting operation
-DETAIL:  Last error was: invalid input syntax for integer: "error_1", column i  (seg0 slice2 127.0.0.1:40000 pid=12146)
-CONTEXT:  External table exttab_cursor_2, line 7 of file://@hostname@@abs_srcdir@/data/exttab_more_errors.data, column i
+ERROR:  Segment reject limit reached. Aborting operation. Last error was: missing data for column "j"  (seg0 slice1 172.17.0.4:25432 pid=296002)
+DETAIL:  External table exttab_cursor_2, line 7 of file://09c5497cf854/home/gpadmin/workspace/gpdb5/src/test/regress/data/exttab_more_errors.data: "error_1"
 COMMIT;
+SELECT gp_inject_fault('interconnect_setup_palloc', 'reset', 1);
+NOTICE:  Success:
+ gp_inject_fault 
+-----------------
+ t
+(1 row)
+
 -- This should have errors populated already
 SELECT count(*) > 0 FROM gp_read_error_log('exttab_cursor_2');
  ?column? 

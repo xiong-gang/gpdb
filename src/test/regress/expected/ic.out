@@ -526,7 +526,6 @@ NOTICE:  Success:
 (1 row)
 
 DROP TABLE test_ic_error;
-
 -- Use WITH RECURSIVE to construct a one-time filter result node that executed
 -- on QD, meanwhile, let the result node has a outer node which contain motion.
 -- It's used to test that result node on QD can send a stop message to sender in
