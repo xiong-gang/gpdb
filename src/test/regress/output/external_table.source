@@ -958,7 +958,7 @@ SELECT e1.i, e2.j from exttab_cursor_2 e1 INNER JOIN exttab_cursor_2 e2 ON e1.i 
 UNION ALL
 SELECT e1.i, e2.j from exttab_cursor_2 e1 INNER JOIN exttab_cursor_2 e2 ON e1.i = e2.i;
 ERROR:  Segment reject limit reached. Aborting operation. Last error was: missing data for column "j"  (seg0 slice1 172.17.0.4:25432 pid=296002)
-DETAIL:  External table exttab_cursor_2, line 7 of file://09c5497cf854/home/gpadmin/workspace/gpdb5/src/test/regress/data/exttab_more_errors.data: "error_1"
+DETAIL:  External table exttab_cursor_2, line 7 of file://@hostname@@abs_srcdir@/data/exttab_more_errors.data: "error_1"
 COMMIT;
 SELECT gp_inject_fault('interconnect_setup_palloc', 'reset', 1);
 NOTICE:  Success:
