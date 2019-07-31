@@ -47,4 +47,9 @@ s/^ERROR:  Error on receive from  pid=\d+: server closed the connection unexpect
 
 m/available \d+ MB/
 s/available \d+ MB//
+
+# distributed transactions
+m/^DETAIL:.*gid=.*/
+s/gid=\d+-\d+/gid DUMMY/
+
 -- end_matchsubs
