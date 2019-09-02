@@ -1526,9 +1526,6 @@ RecordTransactionCommit(void)
 
 		SIMPLE_FAULT_INJECTOR("onephase_transaction_commit");
 
-		if (isDtxPrepared)
-			insertingDistributedCommitted();
-
 		XactLogCommitRecord(xactStopTimestamp,
 							GetPendingTablespaceForDeletionForCommit(),
 							nchildren, children, nrels, rels,
@@ -1536,9 +1533,6 @@ RecordTransactionCommit(void)
 							ndeldbs, deldbs,
 							RelcacheInitFileInval, forceSyncCommit,
 							InvalidTransactionId /* plain commit */);
-
-		if (isDtxPrepared)
-			insertedDistributedCommitted();
 
 		/*
 		 * Record plain commit ts if not replaying remote actions, or if no
@@ -6415,6 +6409,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	xl_xact_origin xl_origin;
 	xl_xact_distrib xl_distrib;
 	xl_xact_deldbs xl_deldbs;
+	XLogRecPtr recptr;
 	bool isOnePhaseQE = (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit);
 	bool isDtxPrepared = isPreparedDtxTransaction();
 
@@ -6556,7 +6551,15 @@ XactLogCommitRecord(TimestampTz commit_time,
 	/* we allow filtering by xacts */
 	XLogIncludeOrigin();
 
-	return XLogInsert(RM_XACT_ID, info);
+	if (isDtxPrepared)
+		insertingDistributedCommitted();
+
+	recptr = XLogInsert(RM_XACT_ID, info);
+
+	if (isDtxPrepared)
+		insertedDistributedCommitted();
+
+	return recptr;
 }
 
 /*
