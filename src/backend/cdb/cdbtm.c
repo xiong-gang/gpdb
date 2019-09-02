@@ -861,7 +861,7 @@ prepareDtxTransaction(void)
 	{
 		Assert(MyTmGxact->gxid == InvalidDistributedTransactionId);
 		Assert(MyTmGxactLocal->state == DTX_STATE_NONE);
-		resetGxact(false);
+		resetGxact();
 		return;
 	}
 
@@ -1372,22 +1372,21 @@ dispatchDtxCommand(const char *cmd)
 
 /* initialize a global transaction context */
 void
-resetGxact(bool resetShared)
+resetGxact()
 {
-	if (resetShared)
+	if (Gp_role == GP_ROLE_DISPATCH && MyTmGxact->gxid != InvalidDistributedTransactionId)
 	{
-		AssertImply((Gp_role == GP_ROLE_DISPATCH && MyTmGxact->gxid != InvalidDistributedTransactionId),
-					LWLockHeldByMe(ProcArrayLock));
+		Assert(LWLockHeldByMe(ProcArrayLock));
 		MyTmGxact->gxid = InvalidDistributedTransactionId;
-		MyTmGxact->distribTimeStamp = 0;
-		MyTmGxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
-		MyTmGxact->needIncludedInCkpt = false;
-		MyTmGxact->sessionId = 0;
 	}
+	else if (Gp_role == GP_ROLE_EXECUTE)
+		MyTmGxact->gxid = InvalidDistributedTransactionId;
 
-	/*
-	 * Memory only fields.
-	 */
+	MyTmGxact->distribTimeStamp = 0;
+	MyTmGxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
+	MyTmGxact->needIncludedInCkpt = false;
+	MyTmGxact->sessionId = 0;
+
 	MyTmGxactLocal->explicitBeginRemembered = false;
 	MyTmGxactLocal->badPrepareGangs = false;
 	MyTmGxactLocal->writerGangLost = false;
