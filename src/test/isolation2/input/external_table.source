@@ -57,7 +57,7 @@ SELECT gp_inject_fault('transaction_abort_failure', 'skip', dbid)
 
 -- Start a transaction with cursor that triggers error on QE
 10: BEGIN;
-10>: DECLARE exttab_cur1 no scroll cursor FOR
+10&: DECLARE exttab_cur1 no scroll cursor FOR
      SELECT e1.i, e2.j from exttab_cursor_2 e1 INNER JOIN exttab_cursor_2 e2 ON e1.i = e2.i
      UNION ALL
      SELECT e1.i, e2.j from exttab_cursor_2 e1 INNER JOIN exttab_cursor_2 e2 ON e1.i = e2.i
@@ -68,6 +68,10 @@ SELECT gp_inject_fault('transaction_abort_failure', 'skip', dbid)
 SELECT gp_wait_until_triggered_fault('transaction_abort_failure', 1, dbid)
   FROM gp_segment_configuration
  WHERE content=0 AND role='p';
+
+SELECT gp_wait_until_triggered_fault('interconnect_setup_palloc', 1, dbid)
+  FROM gp_segment_configuration
+ WHERE content=-1 AND role='p';
 
 -- Resume QD.
 -- Error from QE should be reported after QD resumes
