@@ -43,6 +43,7 @@
 #define HHA_MSG_LVL DEBUG2
 
 
+
 /* Encapture data related to a batch file. */
 struct BatchFileInfo
 {
@@ -290,9 +291,8 @@ getEmptyHashAggEntry(AggState *aggstate)
  * If no enough memory is available, this function returns NULL.
  */
 static HashAggEntry *
-makeHashAggEntryForInput(AggState *aggstate, TupleTableSlot *inputslot, uint32 hashvalue)
+makeHashAggEntryForInput(AggState *aggstate, TupleTableSlot *inputslot, HashAggEntry *entry, uint32 hashvalue)
 {
-	HashAggEntry *entry;
 	MemoryContext oldcxt;
 	HashAggTable *hashtable = aggstate->hhashtable;
 	TupleTableSlot *hashslot = aggstate->hashslot;
@@ -319,7 +319,9 @@ makeHashAggEntryForInput(AggState *aggstate, TupleTableSlot *inputslot, uint32 h
 
 	oldcxt = MemoryContextSwitchTo(hashtable->entry_cxt);
 
-	entry = getEmptyHashAggEntry(aggstate);
+	if (entry == NULL)
+		entry = getEmptyHashAggEntry(aggstate);
+
 	entry->tuple_and_aggs = NULL;
 	entry->hashvalue = hashvalue;
 	entry->is_primodial = !(hashtable->is_spilling);
@@ -382,9 +384,8 @@ makeHashAggEntryForInput(AggState *aggstate, TupleTableSlot *inputslot, uint32 h
  */
 static HashAggEntry *
 makeHashAggEntryForGroup(AggState *aggstate, void *tuple_and_aggs,
-						 int32 input_size, uint32 hashvalue)
+						 int32 input_size, HashAggEntry *entry, uint32 hashvalue)
 {
-	HashAggEntry *entry;
 	HashAggTable *hashtable = aggstate->hhashtable;
 	void *copy_tuple_and_aggs;
 
@@ -402,7 +403,8 @@ makeHashAggEntryForGroup(AggState *aggstate, void *tuple_and_aggs,
 	 */
 	oldcxt = MemoryContextSwitchTo(hashtable->serialization_cxt);
 
-	entry = getEmptyHashAggEntry(aggstate);
+	if (entry == NULL)
+		entry = getEmptyHashAggEntry(aggstate);
 	entry->hashvalue = hashvalue;
 	entry->is_primodial = !(hashtable->is_spilling);
 	entry->tuple_and_aggs = copy_tuple_and_aggs;
@@ -476,7 +478,7 @@ lookup_agg_hash_entry(AggState *aggstate,
 	bucket_idx = BUCKET_IDX(hashtable, hashkey);
 	bloomval = BLOOMVAL(hashkey);
 	entry = (0 == (hashtable->bloom[bucket_idx] & bloomval) ? NULL :
-			 hashtable->buckets[bucket_idx]);
+			 &hashtable->buckets[bucket_idx].entries[0]);
 
 	/*
 	 * Search entry chain for the bucket. If such an entry found in the
@@ -535,14 +537,23 @@ lookup_agg_hash_entry(AggState *aggstate,
 
 	if (entry == NULL)
 	{
+		HashAggEntry *localentry = NULL;
+		int localindex = hashtable->buckets[bucket_idx].index;
+		if (localindex < HHA_CONT_ENTRY)
+		{
+			localentry = hashtable->buckets[bucket_idx].entries[localindex];
+			if (localindex > 0)
+				hashtable->buckets[bucket_idx].entries[localindex - 1]->next = localentry;
+			hashtable->buckets[bucket_idx].index++;
+		}
 		/* Entry not found! Create a new matching entry. */
 		switch(input_type)
 		{
 			case INPUT_RECORD_TUPLE:
-				entry = makeHashAggEntryForInput(aggstate, (TupleTableSlot *)input_record, hashkey);
+				entry = makeHashAggEntryForInput(aggstate, (TupleTableSlot *)input_record, localentry, hashkey);
 				break;
 			case INPUT_RECORD_GROUP_AND_AGGS:
-				entry = makeHashAggEntryForGroup(aggstate, input_record, input_size, hashkey);
+				entry = makeHashAggEntryForGroup(aggstate, input_record, input_size, localentry, hashkey);
 				break;
 			default:
 				elog(ERROR, "invalid record type %d", input_type);
@@ -559,8 +570,12 @@ lookup_agg_hash_entry(AggState *aggstate,
 				bucket_idx = BUCKET_IDX(hashtable, hashkey);
 			}
 
-			entry->next = hashtable->buckets[bucket_idx];
-			hashtable->buckets[bucket_idx] = entry;
+			if (localentry == NULL)
+			{
+				Assert(localindex == HHA_CONT_ENTRY );
+				hashtable->buckets[bucket_idx].entries[localindex - 1]->next = entry;
+			}
+
 			hashtable->bloom[bucket_idx] |= bloomval;
 			
 			++hashtable->num_ht_groups;
@@ -1728,12 +1743,12 @@ agg_hash_iter(AggState *aggstate)
 	while (entry == NULL &&
 		   hashtable->nbuckets > ++ hashtable->curr_bucket_idx)
 	{
-		entry = hashtable->buckets[hashtable->curr_bucket_idx];
-		if (entry != NULL)
+		if (hashtable->buckets[hashtable->curr_bucket_idx].index != 0)
 		{
 			Assert(entry->is_primodial);
 			break;
 		}
+		entry = &hashtable->buckets[hashtable->curr_bucket_idx].entries[0];
 	}
 
 	if (entry != NULL)

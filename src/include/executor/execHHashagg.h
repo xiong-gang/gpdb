@@ -46,7 +46,13 @@ typedef struct HashAggEntry
 	bool is_primodial; /* indicates if this entry is there before spilling. */
 } HashAggEntry;
 
-typedef HashAggEntry* HashAggBucket;
+#define HHA_CONT_ENTRY 3
+
+typedef struct HashAggBucket
+{
+	struct HashAggEntry entries[HHA_CONT_ENTRY];
+	int index;
+} HashAggBucket;
 
 /* A SpillFile controls access to a temporary file used to hold  
  * transition tuples spilled from the hash table in order to free 
