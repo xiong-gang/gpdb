@@ -541,9 +541,9 @@ lookup_agg_hash_entry(AggState *aggstate,
 		int localindex = hashtable->buckets[bucket_idx].index;
 		if (localindex < HHA_CONT_ENTRY)
 		{
-			localentry = hashtable->buckets[bucket_idx].entries[localindex];
+			localentry = &hashtable->buckets[bucket_idx].entries[localindex];
 			if (localindex > 0)
-				hashtable->buckets[bucket_idx].entries[localindex - 1]->next = localentry;
+				hashtable->buckets[bucket_idx].entries[localindex - 1].next = localentry;
 			hashtable->buckets[bucket_idx].index++;
 		}
 		/* Entry not found! Create a new matching entry. */
@@ -573,7 +573,7 @@ lookup_agg_hash_entry(AggState *aggstate,
 			if (localentry == NULL)
 			{
 				Assert(localindex == HHA_CONT_ENTRY );
-				hashtable->buckets[bucket_idx].entries[localindex - 1]->next = entry;
+				hashtable->buckets[bucket_idx].entries[localindex - 1].next = entry;
 			}
 
 			hashtable->bloom[bucket_idx] |= bloomval;
@@ -864,7 +864,7 @@ create_agg_hash_table(AggState *aggstate)
 	hashtable->bloom = (uint64 *) palloc0(hashtable->nbuckets * sizeof(uint64));
 
 	hashtable->pshift = 0;
-	hashtable->expandable = true;
+	hashtable->expandable = false;
 
 	MemoryContextSwitchTo(hashtable->entry_cxt);
 	
@@ -1406,11 +1406,12 @@ spill_hash_table(AggState *aggstate)
 		for (bucket_no = file_no; bucket_no < hashtable->nbuckets;
 			 bucket_no += spill_set->num_spill_files)
 		{
-			HashAggEntry *entry = hashtable->buckets[bucket_no];
+			HashAggBucket *bucket = &hashtable->buckets[bucket_no];
 			
 			/* Ignore empty chains. */
-			if (entry == NULL) continue;
+			if (bucket->index == 0) continue;
 			
+			HashAggEntry *entry = &bucket->entries[0];
 			/* Write all entries in the hash chain. */
 			while ( entry  != NULL )
 			{
@@ -1429,7 +1430,7 @@ spill_hash_table(AggState *aggstate)
 				}
 			}
 
-			hashtable->buckets[bucket_no] = NULL;
+			hashtable->buckets[bucket_no].index = 0;
 			hashtable->bloom[bucket_no] = 0;
 		}
 	}
@@ -1500,8 +1501,11 @@ expand_hash_table(AggState *aggstate)
 	/* Iterate all the entries from the hashtable move them as needed */
 	for(bucket_idx=0; bucket_idx < old_nbuckets; ++bucket_idx)
 	{
-		entry = hashtable->buckets[bucket_idx];
-		hashtable->buckets[bucket_idx] = NULL;
+		HashAggBucket *bucket = &hashtable->buckets[bucket_idx];
+		if (bucket->index == 0)
+			continue;
+
+		entry = &bucket->entries[0];
 
 		while(entry != NULL)
 		{
@@ -1515,8 +1519,14 @@ expand_hash_table(AggState *aggstate)
 					new_bucket_idx == bucket_idx + old_nbuckets);
 
 			/* Insert this at the head of the bucket */
-			entry->next = hashtable->buckets[new_bucket_idx];
-			hashtable->buckets[new_bucket_idx] = entry;
+			HashAggBucket *newbucket = &hashtable->buckets[new_bucket_idx];
+			if (newbucket->index < HHA_CONT_ENTRY)
+				newbucket->entries[newbucket->index++].next = entry;
+			else
+			{
+				entry->next = &newbucket->entries[HHA_CONT_ENTRY-1];
+				newbucket->entries[HHA_CONT_ENTRY-1].next = entry;
+			}
 			hashtable->bloom[new_bucket_idx] |= bloomval;
 
 			entry = nextentry;
@@ -1524,6 +1534,7 @@ expand_hash_table(AggState *aggstate)
 			++nentries;
 #endif
 		}
+		bucket->index = 0;	
 	}
 	hashtable->num_expansions++;
 	Assert(hashtable->mem_for_metadata > 0);
@@ -1688,7 +1699,10 @@ agg_hash_table_stat_upd(HashAggTable *hashtable)
 
 	for (i = 0; i < hashtable->nbuckets; i++)
 	{
-		HashAggEntry   *entry = hashtable->buckets[i];
+		HashAggBucket *bucket = &hashtable->buckets[i];
+		if (bucket->index == 0)
+			continue;
+		HashAggEntry   *entry = &bucket->entries[0];
 		int             chainlength = 0;
 
 		if (entry)
@@ -1746,9 +1760,9 @@ agg_hash_iter(AggState *aggstate)
 		if (hashtable->buckets[hashtable->curr_bucket_idx].index != 0)
 		{
 			Assert(entry->is_primodial);
+			entry = &hashtable->buckets[hashtable->curr_bucket_idx].entries[0];
 			break;
 		}
-		entry = &hashtable->buckets[hashtable->curr_bucket_idx].entries[0];
 	}
 
 	if (entry != NULL)
@@ -2337,7 +2351,7 @@ void reset_agg_hash_table(AggState *aggstate, int64 nentries)
 		hashtable->buckets = (HashAggBucket *) palloc0(hashtable->nbuckets * sizeof(HashAggBucket));
 		hashtable->bloom = (uint64 *) palloc0(hashtable->nbuckets * sizeof(uint64));
 
-		hashtable->expandable = true;
+		hashtable->expandable = false;
 
 		MemoryContextSwitchTo(oldcxt);
 
