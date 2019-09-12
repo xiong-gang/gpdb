@@ -864,7 +864,7 @@ create_agg_hash_table(AggState *aggstate)
 	hashtable->bloom = (uint64 *) palloc0(hashtable->nbuckets * sizeof(uint64));
 
 	hashtable->pshift = 0;
-	hashtable->expandable = false;
+	hashtable->expandable = true;
 
 	MemoryContextSwitchTo(hashtable->entry_cxt);
 	
@@ -1456,7 +1456,7 @@ expand_hash_table(AggState *aggstate)
 	unsigned mem_needed, old_nbuckets, bucket_idx, new_bucket_idx;
 	uint32 hashkey;
 	uint64 bloomval;
-	HashAggEntry *entry, *nextentry;
+	HashAggEntry *entry, *nextentry, *head, *lastentry;
 	HashAggTable *hashtable = aggstate->hhashtable;
 
 #ifdef USE_ASSERT_CHECKING
@@ -1506,6 +1506,7 @@ expand_hash_table(AggState *aggstate)
 			continue;
 
 		entry = &bucket->entries[0];
+		head = lastentry = NULL;
 
 		while(entry != NULL)
 		{
@@ -1518,23 +1519,46 @@ expand_hash_table(AggState *aggstate)
 			Assert(new_bucket_idx == bucket_idx ||
 					new_bucket_idx == bucket_idx + old_nbuckets);
 
-			/* Insert this at the head of the bucket */
-			HashAggBucket *newbucket = &hashtable->buckets[new_bucket_idx];
-			if (newbucket->index < HHA_CONT_ENTRY)
-				newbucket->entries[newbucket->index++].next = entry;
+			if (new_bucket_idx == bucket_idx + old_nbuckets)
+			{
+				/* Insert this at the head of the bucket */
+				HashAggBucket *newbucket = &hashtable->buckets[new_bucket_idx];
+				if (newbucket->index < HHA_CONT_ENTRY)
+				{
+					newbucket->entries[newbucket->index++] = *entry;
+				}
+				else
+				{
+					entry->next = newbucket->entries[HHA_CONT_ENTRY-1].next;
+					newbucket->entries[HHA_CONT_ENTRY-1].next = entry;
+				}
+				hashtable->bloom[new_bucket_idx] |= bloomval;
+			}
 			else
 			{
-				entry->next = &newbucket->entries[HHA_CONT_ENTRY-1];
-				newbucket->entries[HHA_CONT_ENTRY-1].next = entry;
+				if (lastentry != NULL)
+					lastentry->next = entry;
+				else
+					head = entry;
+				lastentry = entry;
 			}
-			hashtable->bloom[new_bucket_idx] |= bloomval;
 
 			entry = nextentry;
 #ifdef USE_ASSERT_CHECKING
 			++nentries;
 #endif
 		}
+
 		bucket->index = 0;	
+		while (head != NULL)
+		{
+			bucket->entries[bucket->index] = *head;
+			bucket->entries[bucket->index].next = &bucket->entries[bucket->index+1];
+			bucket->index++;
+			if (bucket->index == HHA_CONT_ENTRY)
+				break;
+			head = head->next;
+		}
 	}
 	hashtable->num_expansions++;
 	Assert(hashtable->mem_for_metadata > 0);
@@ -2351,7 +2375,7 @@ void reset_agg_hash_table(AggState *aggstate, int64 nentries)
 		hashtable->buckets = (HashAggBucket *) palloc0(hashtable->nbuckets * sizeof(HashAggBucket));
 		hashtable->bloom = (uint64 *) palloc0(hashtable->nbuckets * sizeof(uint64));
 
-		hashtable->expandable = false;
+		hashtable->expandable = true;
 
 		MemoryContextSwitchTo(oldcxt);
 
