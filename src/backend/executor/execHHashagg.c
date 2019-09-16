@@ -573,6 +573,7 @@ lookup_agg_hash_entry(AggState *aggstate,
 			if (localentry == NULL)
 			{
 				Assert(localindex == HHA_CONT_ENTRY );
+				entry->next = hashtable->buckets[bucket_idx].entries[localindex - 1].next;
 				hashtable->buckets[bucket_idx].entries[localindex - 1].next = entry;
 			}
 
@@ -1525,7 +1526,10 @@ expand_hash_table(AggState *aggstate)
 				HashAggBucket *newbucket = &hashtable->buckets[new_bucket_idx];
 				if (newbucket->index < HHA_CONT_ENTRY)
 				{
-					newbucket->entries[newbucket->index++] = *entry;
+					newbucket->entries[newbucket->index] = *entry;
+					if (newbucket->index > 0)
+						newbucket->entries[newbucket->index-1].next = &newbucket->entries[newbucket->index];
+					newbucket->index++;
 				}
 				else
 				{
