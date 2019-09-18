@@ -1493,6 +1493,19 @@ expand_hash_table(AggState *aggstate)
 
 	hashtable->buckets = (HashAggBucket *) repalloc(hashtable->buckets,
 		hashtable->nbuckets * sizeof(HashAggBucket));
+	for(bucket_idx=0; bucket_idx < old_nbuckets; ++bucket_idx)
+	{
+		HashAggBucket *bucket = &hashtable->buckets[bucket_idx];
+		if (bucket->index <= 1)
+		{
+			Assert(bucket->entries[0].next == NULL);
+			continue;
+		}
+		int i;
+		for (i = 0; i < bucket->index - 1; i++)
+			bucket->entries[i].next = &bucket->entries[i+1];
+
+	}
 	hashtable->bloom =  (uint64 *) repalloc(hashtable->bloom,
 		hashtable->nbuckets * sizeof(uint64));
 
@@ -1529,6 +1542,7 @@ expand_hash_table(AggState *aggstate)
 					newbucket->entries[newbucket->index] = *entry;
 					if (newbucket->index > 0)
 						newbucket->entries[newbucket->index-1].next = &newbucket->entries[newbucket->index];
+					newbucket->entries[newbucket->index].next = NULL;
 					newbucket->index++;
 				}
 				else
@@ -1557,7 +1571,8 @@ expand_hash_table(AggState *aggstate)
 		while (head != NULL)
 		{
 			bucket->entries[bucket->index] = *head;
-			bucket->entries[bucket->index].next = &bucket->entries[bucket->index+1];
+			if (bucket->index > 0)
+				bucket->entries[bucket->index-1].next = &bucket->entries[bucket->index];
 			bucket->index++;
 			if (bucket->index == HHA_CONT_ENTRY)
 				break;
@@ -1566,7 +1581,7 @@ expand_hash_table(AggState *aggstate)
 	}
 	hashtable->num_expansions++;
 	Assert(hashtable->mem_for_metadata > 0);
-	Assert(nentries == hashtable->num_entries);
+//	Assert(nentries == hashtable->num_entries);
 }
 
 static void
@@ -1787,8 +1802,8 @@ agg_hash_iter(AggState *aggstate)
 	{
 		if (hashtable->buckets[hashtable->curr_bucket_idx].index != 0)
 		{
-			Assert(entry->is_primodial);
 			entry = &hashtable->buckets[hashtable->curr_bucket_idx].entries[0];
+			Assert(entry->is_primodial);
 			break;
 		}
 	}
