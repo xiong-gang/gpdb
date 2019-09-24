@@ -216,7 +216,7 @@ typedef struct TMGXACT
 	 */
 	DistributedTransactionId	xminDistributedSnapshot;
 
-	bool						needIncludedInCkpt;
+	bool						includeInCkpt;
 	bool						includeInSnapshot;
 	int							sessionId;
 }	TMGXACT;
@@ -303,6 +303,7 @@ extern void dtxFormGID(char *gid,
 					   DistributedTransactionTimeStamp tstamp,
 					   DistributedTransactionId gxid);
 extern DistributedTransactionId getDistributedTransactionId(void);
+extern DistributedTransactionTimeStamp getDistributedTransactionTimestamp(void);
 extern bool getDistributedTransactionIdentifier(char *id);
 
 extern void resetGxact(void);
