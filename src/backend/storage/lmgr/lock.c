@@ -3792,9 +3792,7 @@ GetLockStatusData(void)
 			instance->databaseId = proc->databaseId;
 			instance->mppSessionId = proc->mppSessionId;
 			instance->mppIsWriter = proc->mppIsWriter;
-			instance->distribXid = (Gp_role == GP_ROLE_DISPATCH)?
-								   gxact->gxid :
-								   proc->localDistribXactData.distribXid;
+			instance->distribXid = gxact->gxid;
 			instance->holdTillEndXact = (holdTillEndXactBits > 0);
 			el++;
 		}
@@ -3825,9 +3823,7 @@ GetLockStatusData(void)
 			instance->databaseId = proc->databaseId;
 			instance->mppSessionId = proc->mppSessionId;
 			instance->mppIsWriter = proc->mppIsWriter;
-			instance->distribXid = (Gp_role == GP_ROLE_DISPATCH)?
-								   gxact->gxid :
-								   proc->localDistribXactData.distribXid;
+			instance->distribXid = gxact->gxid;
 			instance->holdTillEndXact = false;
 			el++;
 		}
@@ -3883,9 +3879,7 @@ GetLockStatusData(void)
 		instance->databaseId = proc->databaseId;
 		instance->mppSessionId = proc->mppSessionId;
 		instance->mppIsWriter = proc->mppIsWriter;
-		instance->distribXid = (Gp_role == GP_ROLE_DISPATCH)?
-							   gxact->gxid :
-							   proc->localDistribXactData.distribXid;
+		instance->distribXid = gxact->gxid;
 		instance->holdTillEndXact = proclock->tag.myLock->holdTillEndXact;
 		el++;
 	}
