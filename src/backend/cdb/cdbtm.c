@@ -65,7 +65,8 @@ int	max_tm_gxacts = 100;
 
 
 #define TM_ERRDETAIL (errdetail("gid=%u-%.10u, state=%s", \
-		MyTmGxact->distribTimeStamp, MyTmGxact->gxid, DtxStateToString(MyTmGxactLocal->state)))
+		getDistributedTransactionTimestamp(), getDistributedTransactionId(),\
+		DtxStateToString(MyTmGxactLocal ? MyTmGxactLocal->state : 0)))
 /* here are some flag options relationed to the txnOptions field of
  * PQsendGpQuery
  */
@@ -183,43 +184,35 @@ getDtxStartTime(void)
 DistributedTransactionId
 getDistributedTransactionId(void)
 {
-	if (isQDContext())
-	{
-		return GetCurrentDistributedTransactionId();
-	}
-	else if (isQEContext())
-	{
-		return QEDtxContextInfo.distributedXid;
-	}
+	if (isQDContext() || isQEContext())
+		return MyTmGxact->gxid;
 	else
-	{
 		return InvalidDistributedTransactionId;
-	}
+}
+
+DistributedTransactionTimeStamp
+getDistributedTransactionTimestamp(void)
+{
+	if (isQDContext() || isQEContext())
+		return MyTmGxact->distribTimeStamp;
+	else
+		return 0;
 }
 
 bool
 getDistributedTransactionIdentifier(char *id)
 {
-	if (isQDContext())
+	Assert(MyTmGxactLocal != NULL);
+
+	if ((isQDContext() || isQEContext()) &&
+		MyTmGxact->gxid != InvalidDistributedTransactionId)
 	{
-		DistributedTransactionId gxid = GetCurrentDistributedTransactionId();
-		if (gxid != InvalidDistributedTransactionId)
-		{
-			/*
-			 * The length check here requires the identifer have a trailing
-			 * NUL character.
-			 */
-			dtxFormGID(id, getDtxStartTime(), gxid);
-			return true;
-		}
-	}
-	else if (isQEContext())
-	{
-		if (QEDtxContextInfo.distributedXid != InvalidDistributedTransactionId)
-		{
-			dtxFormGID(id, QEDtxContextInfo.distributedTimeStamp, QEDtxContextInfo.distributedXid);
-			return true;
-		}
+		/*
+		 * The length check here requires the identifer have a trailing
+		 * NUL character.
+		 */
+		dtxFormGID(id, MyTmGxact->distribTimeStamp, MyTmGxact->gxid);
+		return true;
 	}
 
 	MemSet(id, 0, TMGIDSIZE);
@@ -356,7 +349,7 @@ doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType)
 														 mppTxnOptions(true),
 														 "doDispatchSubtransactionInternalCmd");
 
-	dtxFormGID(gid, MyTmGxact->distribTimeStamp, MyTmGxact->gxid);
+	dtxFormGID(gid, getDistributedTransactionTimestamp(), getDistributedTransactionId());
 	succeeded = doDispatchDtxProtocolCommand(cmdType,
 											 gid,
 											 NULL, /* raiseError */ true,
@@ -436,13 +429,13 @@ doInsertForgetCommitted(void)
 
 	setCurrentDtxState(DTX_STATE_INSERTING_FORGET_COMMITTED);
 
-	dtxFormGID(gxact_log.gid, MyTmGxact->distribTimeStamp, MyTmGxact->gxid);
-	gxact_log.gxid = MyTmGxact->gxid;
+	dtxFormGID(gxact_log.gid, getDistributedTransactionTimestamp(), getDistributedTransactionId());
+	gxact_log.gxid = getDistributedTransactionId();
 
 	RecordDistributedForgetCommitted(&gxact_log);
 
 	setCurrentDtxState(DTX_STATE_INSERTED_FORGET_COMMITTED);
-	MyTmGxact->needIncludedInCkpt = false;
+	MyTmGxact->includeInCkpt = false;
 }
 
 void
@@ -1159,7 +1152,7 @@ currentDtxDispatchProtocolCommand(DtxProtocolCommand dtxProtocolCommand, bool ra
 	char gid[TMGIDSIZE];
 	bool *badgang = (MyTmGxactLocal->state == DTX_STATE_PREPARING) ? &MyTmGxactLocal->badPrepareGangs : NULL;
 
-	dtxFormGID(gid, MyTmGxact->distribTimeStamp, MyTmGxact->gxid);
+	dtxFormGID(gid, getDistributedTransactionTimestamp(), getDistributedTransactionId());
 	return doDispatchDtxProtocolCommand(dtxProtocolCommand, gid, badgang, raiseError,
 										MyTmGxactLocal->twophaseSegments, NULL, 0);
 }
@@ -1345,7 +1338,7 @@ resetGxact()
 	MyTmGxact->gxid = InvalidDistributedTransactionId;
 	MyTmGxact->distribTimeStamp = 0;
 	MyTmGxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
-	MyTmGxact->needIncludedInCkpt = false;
+	MyTmGxact->includeInCkpt = false;
 	MyTmGxact->sessionId = 0;
 
 	MyTmGxactLocal->explicitBeginRemembered = false;
@@ -1415,7 +1408,7 @@ insertedDistributedCommitted(void)
 	 */
 	Assert(MyPgXact->delayChkpt);
 	if (IS_QUERY_DISPATCHER())
-		MyTmGxact->needIncludedInCkpt = true;
+		MyTmGxact->includeInCkpt = true;
 }
 
 /* generate global transaction id */
@@ -1974,11 +1967,14 @@ performDtxProtocolPrepare(const char *gid)
 static void
 performDtxProtocolCommitOnePhase(const char *gid)
 {
+	DistributedTransactionTimeStamp distribTimeStamp;
+	DistributedTransactionId gxid;
 	elog(DTM_DEBUG5,
 		 "performDtxProtocolCommitOnePhase going to call CommitTransaction for distributed transaction %s", gid);
 
-	/* MyTmGxact is now not used on QE for one-phase commit */
-	dtxCrackOpenGid(gid, &MyTmGxact->distribTimeStamp, &MyTmGxact->gxid);
+	dtxCrackOpenGid(gid, &distribTimeStamp, &gxid);
+	Assert(gxid == getDistributedTransactionId());
+	Assert(distribTimeStamp == getDistributedTransactionTimestamp());
 	MyTmGxactLocal->isOnePhaseCommit = true;
 
 	StartTransactionCommand();

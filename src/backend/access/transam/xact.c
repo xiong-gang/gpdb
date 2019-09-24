@@ -1594,14 +1594,10 @@ RecordTransactionCommit(void)
 			 * to look it up in the DistributedLog.
 			 */
 			/* UNDONE: What are the locking issues here? */
-			if (isDtxPrepared)
+			if (isDtxPrepared || isOnePhaseQE)
 				DistributedLog_SetCommittedTree(xid, nchildren, children,
-												getDtxStartTime(),
+												getDistributedTransactionTimestamp(),
 												getDistributedTransactionId(),
-												/* isRedo */ false);
-			else if (isOnePhaseQE)
-				DistributedLog_SetCommittedTree(xid, nchildren, children,
-												MyTmGxact->distribTimeStamp, MyTmGxact->gxid,
 												/* isRedo */ false);
 
 			TransactionIdCommitTree(xid, nchildren, children);
@@ -6470,8 +6466,8 @@ XactLogCommitRecord(TimestampTz commit_time,
 	if (isDtxPrepared || isOnePhaseQE)
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_DISTRIB;
-		xl_distrib.distrib_timestamp = MyTmGxact->distribTimeStamp;
-		xl_distrib.distrib_xid = MyTmGxact->gxid;
+		xl_distrib.distrib_timestamp = getDistributedTransactionTimestamp();
+		xl_distrib.distrib_xid = getDistributedTransactionId();
 	}
 
 	if (xl_xinfo.xinfo != 0)
