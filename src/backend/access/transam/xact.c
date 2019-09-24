@@ -2325,6 +2325,7 @@ StartTransaction(void)
 			MyTmGxact->gxid = generateGID();
 			MyTmGxact->distribTimeStamp = getDtxStartTime();
 			MyTmGxact->sessionId = gp_session_id;
+			MyTmGxact->includeInSnapshot = true;
 
 			if (SharedLocalSnapshotSlot != NULL)
 			{

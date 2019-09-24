@@ -399,7 +399,6 @@ ProcArrayRemove(PGPROC *proc, TransactionId latestXid)
 void
 ProcArrayEndGxact(void)
 {
-	Assert(LWLockHeldByMe(ProcArrayLock));
 	DistributedTransactionId gxid = MyTmGxact->gxid;
 
 	if (InvalidDistributedTransactionId != gxid &&
@@ -489,8 +488,8 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid, bool lockHeld)
 		proc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
 	}
 
-	/* Clear distributed transaction status for one-phase commit transaction */
-	if (Gp_role == GP_ROLE_EXECUTE && MyTmGxactLocal->isOnePhaseCommit)
+	/* Clear distributed transaction status for QE*/
+	if (Gp_role == GP_ROLE_EXECUTE)
 		resetGxact();
 }
 
@@ -1906,10 +1905,12 @@ CreateDistributedSnapshot(DistributedSnapshot *ds)
 		if (dxid != InvalidDistributedTransactionId && dxid < globalXminDistributedSnapshots)
 			globalXminDistributedSnapshots = dxid;
 
+		if (!gxact_candidate->includeInSnapshot && gxact_candidate != MyTmGxact)
+			continue;
+
 		/* just fetch once */
 		gxid = gxact_candidate->gxid;
-		if (gxid == InvalidDistributedTransactionId)
-			continue;
+		Assert(gxid != InvalidDistributedTransactionId);
 
 		/*
 		 * Include the current distributed transaction in the min/max
