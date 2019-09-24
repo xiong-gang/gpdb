@@ -217,6 +217,7 @@ typedef struct TMGXACT
 	DistributedTransactionId	xminDistributedSnapshot;
 
 	bool						needIncludedInCkpt;
+	bool						includeInSnapshot;
 	int							sessionId;
 }	TMGXACT;
 

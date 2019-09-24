@@ -448,6 +448,8 @@ doInsertForgetCommitted(void)
 void
 ClearTransactionState(TransactionId latestXid)
 {
+	bool skipLock = (MyTmGxactLocal->state == DTX_STATE_PERFORMING_ONE_PHASE_COMMIT &&
+					!MyTmGxactLocal->explicitBeginRemembered);
 	/*
 	 * These two actions must be performed for a distributed transaction under
 	 * the same locking of ProceArrayLock so the visibility of the transaction
@@ -475,13 +477,18 @@ ClearTransactionState(TransactionId latestXid)
 	 * now, but nobody wants to DROP it anymore, so the master has no tuple for
 	 * "a" while the segments have it.
 	 *
-	 * To fix this, transactions require two-phase commit should defer clear 
+	 * To fix this, transactions require two-phase commit should defer clear
 	 * proc->xid here with ProcArryLock held.
 	 */
-	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
-	ProcArrayEndTransaction(MyProc, latestXid, true);
+
+	if (!skipLock)
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+
+	ProcArrayEndTransaction(MyProc, latestXid, !skipLock);
 	ProcArrayEndGxact();
-	LWLockRelease(ProcArrayLock);
+
+	if (!skipLock)
+		LWLockRelease(ProcArrayLock);
 }
 
 static void
@@ -817,7 +824,7 @@ prepareDtxTransaction(void)
 
 	if (!isCurrentDtxTwoPhaseActivated())
 	{
-		Assert(MyTmGxact->gxid == InvalidDistributedTransactionId);
+		Assert(!MyTmGxact->includeInSnapshot);
 		Assert(MyTmGxactLocal->state == DTX_STATE_NONE);
 		resetGxact();
 		return;
@@ -841,8 +848,9 @@ prepareDtxTransaction(void)
 		 DtxStateToString(MyTmGxactLocal->state));
 
 	Assert(MyTmGxactLocal->state == DTX_STATE_ACTIVE_DISTRIBUTED);
-	Assert(MyTmGxact->gxid > FirstDistributedTransactionId);
 
+	if (MyTmGxact->gxid == InvalidDistributedTransactionId)
+		MyTmGxact->includeInSnapshot = true;
 	doPrepareTransaction();
 }
 
@@ -1327,15 +1335,14 @@ dispatchDtxCommand(const char *cmd)
 void
 resetGxact()
 {
-	if (Gp_role == GP_ROLE_DISPATCH && MyTmGxact->gxid != InvalidDistributedTransactionId)
+	if (Gp_role == GP_ROLE_DISPATCH && MyTmGxact->includeInSnapshot)
 	{
 		/* As QE doesn't take distributed snapshot, we don't have to hold ProcArrayLock to clear gxid */
 		Assert(LWLockHeldByMe(ProcArrayLock));
-		MyTmGxact->gxid = InvalidDistributedTransactionId;
+		MyTmGxact->includeInSnapshot = false;
 	}
-	else if (Gp_role == GP_ROLE_EXECUTE)
-		MyTmGxact->gxid = InvalidDistributedTransactionId;
 
+	MyTmGxact->gxid = InvalidDistributedTransactionId;
 	MyTmGxact->distribTimeStamp = 0;
 	MyTmGxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
 	MyTmGxact->needIncludedInCkpt = false;
@@ -1901,9 +1908,13 @@ rememberDtxExplicitBegin(void)
 				(errmsg("rememberDtxExplicitBegin explicit BEGIN"),
 				TM_ERRDETAIL));
 		MyTmGxactLocal->explicitBeginRemembered = true;
+
+		Assert(MyTmGxact->gxid > FirstDistributedTransactionId);
+		MyTmGxact->includeInSnapshot = true;
 	}
 	else
 	{
+		Assert(MyTmGxact->includeInSnapshot);
 		ereport(DTM_DEBUG5,
 				(errmsg("rememberDtxExplicitBegin already an explicit BEGIN"),
 				TM_ERRDETAIL));
