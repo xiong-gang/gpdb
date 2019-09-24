@@ -272,9 +272,6 @@ static TransactionId unreportedXids[PGPROC_MAX_CACHED_SUBXIDS];
 
 static TransactionState CurrentTransactionState = &TopTransactionStateData;
 
-/* distributed transaction id of current transaction, if any. */
-static DistributedTransactionId currentDistribXid;
-
 /*
  * The subtransaction ID and command ID assignment counters are global
  * to a whole transaction, so we do not keep them in the state stack.
@@ -476,22 +473,11 @@ GetAllTransactionXids(
 {
 	TransactionState s = CurrentTransactionState;
 
-	*distribXid = currentDistribXid;
+	*distribXid = getDistributedTransactionId();
 	*localXid = s->transactionId;
 	*subXid = s->subTransactionId;
 }
 
-DistributedTransactionId
-GetCurrentDistributedTransactionId(void)
-{
-	return currentDistribXid;
-}
-
-void
-SetCurrentDistributedTransactionId(DistributedTransactionId gxid)
-{
-	currentDistribXid = gxid;
-}
 /*
  *	GetTopTransactionId
  *
@@ -2336,16 +2322,9 @@ StartTransaction(void)
 
 		case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
 		{
-			/*
-			 * FIXME: get rid of currentDistribXid and use MyTmGxact->gxid
-			 *
-			 * Generate the distributed transaction ID and save it.
-			 * it's not really needed by a select-only implicit transaction, but
-			 * currently gpfdist and pxf is using it.
-			 * We should probably replace xid with "session id + command id" in
-			 * identify a query in gpfdist and pxf.
-			 */
-			currentDistribXid = generateGID();
+			MyTmGxact->gxid = generateGID();
+			MyTmGxact->distribTimeStamp = getDtxStartTime();
+			MyTmGxact->sessionId = gp_session_id;
 
 			if (SharedLocalSnapshotSlot != NULL)
 			{
@@ -2400,13 +2379,14 @@ StartTransaction(void)
 			 * will auto-commit, and then we will follow it with the real user
 			 * command.
 			 */
+			MyTmGxact->gxid = QEDtxContextInfo.distributedXid;
+			MyTmGxact->distribTimeStamp = QEDtxContextInfo.distributedTimeStamp;
+
 			if (DistributedTransactionContext ==
 				DTX_CONTEXT_QE_TWO_PHASE_EXPLICIT_WRITER ||
 				DistributedTransactionContext ==
 				DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER)
 			{
-				currentDistribXid = QEDtxContextInfo.distributedXid;
-
 				Assert(QEDtxContextInfo.distributedTimeStamp != 0);
 				Assert(QEDtxContextInfo.distributedXid !=
 					   InvalidDistributedTransactionId);
@@ -2458,7 +2438,8 @@ StartTransaction(void)
 			 * MPP: we're a QE Reader.
 			 */
 			Assert (SharedLocalSnapshotSlot != NULL);
-			currentDistribXid = QEDtxContextInfo.distributedXid;
+			MyTmGxact->gxid = QEDtxContextInfo.distributedXid;
+			MyTmGxact->distribTimeStamp = QEDtxContextInfo.distributedTimeStamp;
 
 			/*
 			 * Snapshot must not be created before setting transaction
@@ -2908,7 +2889,6 @@ CommitTransaction(void)
 		LocalDistribXactCache_ShowStats("CommitTransaction");
 	}
 
-	currentDistribXid = InvalidDistributedTransactionId;
 	s->transactionId = InvalidTransactionId;
 	s->subTransactionId = InvalidSubTransactionId;
 	s->nestingLevel = 0;
@@ -3225,7 +3205,6 @@ PrepareTransaction(void)
 		LocalDistribXactCache_ShowStats("PrepareTransaction");
 	}
 
-	currentDistribXid = InvalidDistributedTransactionId;
 	s->transactionId = InvalidTransactionId;
 	s->subTransactionId = InvalidSubTransactionId;
 	s->nestingLevel = 0;
@@ -3520,7 +3499,6 @@ CleanupTransaction(void)
 
 	AtCleanup_Memory();			/* and transaction memory */
 
-	currentDistribXid = InvalidDistributedTransactionId;
 	s->transactionId = InvalidTransactionId;
 	s->subTransactionId = InvalidSubTransactionId;
 	s->nestingLevel = 0;

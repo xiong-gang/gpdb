@@ -249,28 +249,7 @@ isCurrentDtxTwoPhaseActivated(void)
 static void
 currentDtxActivateTwoPhase(void)
 {
-	DistributedTransactionId gxid;
-
-	gxid = GetCurrentDistributedTransactionId();
-	if (gxid == InvalidDistributedTransactionId)
-	{
-		gxid = generateGID();
-		SetCurrentDistributedTransactionId(gxid);
-		Assert(gxid != InvalidDistributedTransactionId);
-	}
-
-	MyTmGxact->distribTimeStamp = getDtxStartTime();
-	MyTmGxact->sessionId = gp_session_id;
 	setCurrentDtxState(DTX_STATE_ACTIVE_DISTRIBUTED);
-
-	/*
-	 * As addressed in access/transam/README, we have to hold ProcArrayLock
-	 * when cleaning MyPgXact->xid as well as MyTmGxact->gxid to make sure
-	 * someone else can take a consistent snapshot at the same time. But it's
-	 * fine to not hold ProcArrayLock when setting xid and gxid, it won't
-	 * affect the correctness of snapshot.
-	 */
-	MyTmGxact->gxid = gxid;
 }
 
 static void
