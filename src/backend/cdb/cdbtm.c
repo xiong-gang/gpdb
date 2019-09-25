@@ -103,7 +103,6 @@ static void doQEDistributedExplicitBegin();
 static void currentDtxActivateTwoPhase(void);
 static void setCurrentDtxState(DtxState state);
 
-static bool isDtxQueryDispatcher(void);
 static void performDtxProtocolCommitPrepared(const char *gid, bool raiseErrorIfNotFound);
 static void performDtxProtocolAbortPrepared(const char *gid, bool raiseErrorIfNotFound);
 
@@ -1519,7 +1518,7 @@ doQEDistributedExplicitBegin()
 	CommitTransactionCommand();
 }
 
-static bool
+bool
 isDtxQueryDispatcher(void)
 {
 	bool		isDtmStarted;
@@ -1534,64 +1533,21 @@ isDtxQueryDispatcher(void)
 }
 
 /*
- * Called prior to handling a requested that comes to the QD, or a utility request to a QE.
+ * Called prior to handling a requested that comes to the QD
  *
  * Sets up the distributed transaction context value and does some basic error checking.
- *
- * Essentially:
- *     if the DistributedTransactionContext is already QD_DISTRIBUTED_CAPABLE then leave it
- *     else if the DistributedTransactionContext is already QE_TWO_PHASE_EXPLICIT_WRITER then leave it
- *     else it MUST be a LOCAL_ONLY, and is converted to QD_DISTRIBUTED_CAPABLE if this process is acting
- *          as a QE.
  */
 void
 setupRegularDtxContext(void)
 {
-	switch (DistributedTransactionContext)
-	{
-		case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
-			/* Continue in this context.  Do not touch QEDtxContextInfo, etc. */
-			break;
+	if (DistributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE)
+		return;
 
-		case DTX_CONTEXT_QE_TWO_PHASE_EXPLICIT_WRITER:
-			/* Allow this for copy...???  Do not touch QEDtxContextInfo, etc. */
-			break;
+	if (DistributedTransactionContext != DTX_CONTEXT_LOCAL_ONLY)
+		elog(ERROR, "setupRegularDtxContext finds unexpected DistributedTransactionContext = '%s'",
+			 DtxContextToString(DistributedTransactionContext));
 
-		default:
-			if (DistributedTransactionContext != DTX_CONTEXT_LOCAL_ONLY)
-			{
-				/*
-				 * we must be one of:
-				 *
-				 * DTX_CONTEXT_QD_RETRY_PHASE_2,
-				 * DTX_CONTEXT_QE_ENTRY_DB_SINGLETON,
-				 * DTX_CONTEXT_QE_AUTO_COMMIT_IMPLICIT,
-				 * DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER,
-				 * DTX_CONTEXT_QE_READER, DTX_CONTEXT_QE_PREPARED
-				 */
-
-				elog(ERROR, "setupRegularDtxContext finds unexpected DistributedTransactionContext = '%s'",
-					 DtxContextToString(DistributedTransactionContext));
-			}
-
-			/* DistributedTransactionContext is DTX_CONTEXT_LOCAL_ONLY */
-
-			Assert(QEDtxContextInfo.distributedXid == InvalidDistributedTransactionId);
-
-			/*
-			 * Determine if we are strictly local or a distributed capable QD.
-			 */
-			Assert(DistributedTransactionContext == DTX_CONTEXT_LOCAL_ONLY);
-
-			if (isDtxQueryDispatcher())
-			{
-				setDistributedTransactionContext(DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE);
-			}
-			break;
-	}
-
-	elog(DTM_DEBUG5, "setupRegularDtxContext leaving with DistributedTransactionContext = '%s'.",
-		 DtxContextToString(DistributedTransactionContext));
+	setDistributedTransactionContext(DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE);
 }
 
 /**

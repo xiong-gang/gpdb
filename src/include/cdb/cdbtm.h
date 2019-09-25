@@ -328,6 +328,7 @@ extern bool isCurrentDtxTwoPhaseActivated(void);
 extern void sendDtxExplicitBegin(void);
 extern bool isDtxExplicitBegin(void);
 
+extern bool isDtxQueryDispatcher(void);
 extern bool dispatchDtxCommand(const char *cmd);
 
 extern void tmShmemInit(void);
