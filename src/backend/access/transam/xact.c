@@ -3527,7 +3527,7 @@ CleanupTransaction(void)
 void
 StartTransactionCommand(void)
 {
-	if (Gp_role == GP_ROLE_DISPATCH)
+	if (isDtxQueryDispatcher())
 		setupRegularDtxContext();
 
 	TransactionState s = CurrentTransactionState;
