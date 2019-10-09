@@ -60,6 +60,7 @@ volatile DistributedTransactionTimeStamp *shmDistribTimeStamp;
 volatile DistributedTransactionId *shmGIDSeq;
 
 uint32 *shmNextSnapshotId;
+slock_t *shmGxidGenLock;
 
 int	max_tm_gxacts = 100;
 
@@ -250,28 +251,18 @@ isCurrentDtxTwoPhaseActivated(void)
 static void
 currentDtxActivateTwoPhase(void)
 {
-	DistributedTransactionId gxid;
+	SpinLockAcquire(shmGxidGenLock);
+	MyTmGxact->gxid = shmGIDSeq++;
+	SpinLockRelease(shmGxidGenLock);
 
-	gxid = GetCurrentDistributedTransactionId();
-	if (gxid == InvalidDistributedTransactionId)
-	{
-		gxid = generateGID();
-		SetCurrentDistributedTransactionId(gxid);
-		Assert(gxid != InvalidDistributedTransactionId);
-	}
+	if (MyTmGxact->gxid == LastDistributedTransactionId)
+		ereport(PANIC,
+				(errmsg("reached the limit of %u global transactions per start",
+						LastDistributedTransactionId)));
 
 	MyTmGxact->distribTimeStamp = getDtxStartTime();
 	MyTmGxact->sessionId = gp_session_id;
 	setCurrentDtxState(DTX_STATE_ACTIVE_DISTRIBUTED);
-
-	/*
-	 * As addressed in access/transam/README, we have to hold ProcArrayLock
-	 * when cleaning MyPgXact->xid as well as MyTmGxact->gxid to make sure
-	 * someone else can take a consistent snapshot at the same time. But it's
-	 * fine to not hold ProcArrayLock when setting xid and gxid, it won't
-	 * affect the correctness of snapshot.
-	 */
-	MyTmGxact->gxid = gxid;
 }
 
 static void
@@ -1100,11 +1091,13 @@ tmShmemInit(void)
 
 		*shmGIDSeq = FirstDistributedTransactionId;
 		ShmemVariableCache->latestCompletedDxid = InvalidDistributedTransactionId;
+		SpinLockInit(shared->gxidGenLock);
 	}
 	shmDtmStarted = &shared->DtmStarted;
 	shmNextSnapshotId = &shared->NextSnapshotId;
 	shmNumCommittedGxacts = &shared->num_committed_xacts;
 	shmCommittedGxactArray = &shared->committed_gxact_array[0];
+	shmGxidGenLock = &shared->gxidGenLock;
 
 	if (!IsUnderPostmaster)
 		/* Initialize locks and shared memory area */

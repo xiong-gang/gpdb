@@ -269,6 +269,7 @@ typedef struct TmControlBlock
 
     /* Array [0..max_tm_gxacts-1] of TMGXACT_LOG ptrs is appended starting here */
 	TMGXACT_LOG  			    committed_gxact_array[1];
+	slock_t						gxidGenLock;
 }	TmControlBlock;
 
 
@@ -361,7 +362,6 @@ extern void markCurrentGxactWriterGangLost(void);
 extern bool currentGxactWriterGangLost(void);
 
 extern void addToGxactTwophaseSegments(struct Gang* gp);
-
 extern DistributedTransactionId generateGID(void);
 extern void ClearTransactionState(TransactionId latestXid);
 
