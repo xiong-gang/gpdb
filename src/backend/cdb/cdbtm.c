@@ -251,17 +251,6 @@ isCurrentDtxTwoPhaseActivated(void)
 static void
 currentDtxActivateTwoPhase(void)
 {
-	SpinLockAcquire(shmGxidGenLock);
-	MyTmGxact->gxid = shmGIDSeq++;
-	SpinLockRelease(shmGxidGenLock);
-
-	if (MyTmGxact->gxid == LastDistributedTransactionId)
-		ereport(PANIC,
-				(errmsg("reached the limit of %u global transactions per start",
-						LastDistributedTransactionId)));
-
-	MyTmGxact->distribTimeStamp = getDtxStartTime();
-	MyTmGxact->sessionId = gp_session_id;
 	setCurrentDtxState(DTX_STATE_ACTIVE_DISTRIBUTED);
 }
 
@@ -1460,18 +1449,20 @@ insertedDistributedCommitted(void)
 }
 
 /* generate global transaction id */
-DistributedTransactionId
+void
 generateGID(void)
 {
-	DistributedTransactionId gxid;
+	SpinLockAcquire(shmGxidGenLock);
+	MyTmGxact->gxid = shmGIDSeq++;
+	SpinLockRelease(shmGxidGenLock);
 
-	gxid = pg_atomic_add_fetch_u32((pg_atomic_uint32*)shmGIDSeq, 1);
-	if (gxid == LastDistributedTransactionId)
+	if (MyTmGxact->gxid == LastDistributedTransactionId)
 		ereport(PANIC,
 				(errmsg("reached the limit of %u global transactions per start",
 						LastDistributedTransactionId)));
 
-	return gxid;
+	MyTmGxact->distribTimeStamp = getDtxStartTime();
+	MyTmGxact->sessionId = gp_session_id;
 }
 
 /*

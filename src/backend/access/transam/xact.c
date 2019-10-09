@@ -2322,7 +2322,7 @@ StartTransaction(void)
 
 		case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
 		{
-			currentDistribXid = generateGID();
+			generateGID();
 
 			if (SharedLocalSnapshotSlot != NULL)
 			{

@@ -362,7 +362,7 @@ extern void markCurrentGxactWriterGangLost(void);
 extern bool currentGxactWriterGangLost(void);
 
 extern void addToGxactTwophaseSegments(struct Gang* gp);
-extern DistributedTransactionId generateGID(void);
+extern void generateGID(void);
 extern void ClearTransactionState(TransactionId latestXid);
 
 extern void DtxRecoveryMain(Datum main_arg);
