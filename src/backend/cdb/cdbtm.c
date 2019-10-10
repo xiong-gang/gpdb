@@ -60,6 +60,7 @@ volatile DistributedTransactionTimeStamp *shmDistribTimeStamp;
 volatile DistributedTransactionId *shmGIDSeq;
 
 uint32 *shmNextSnapshotId;
+slock_t *shmGxidGenLock;
 
 int	max_tm_gxacts = 100;
 
@@ -1055,10 +1056,12 @@ tmShmemInit(void)
 
 		*shmGIDSeq = FirstDistributedTransactionId;
 		ShmemVariableCache->latestCompletedDxid = InvalidDistributedTransactionId;
+		SpinLockInit(&shared->gxidGenLock);
 	}
 	shmDtmStarted = &shared->DtmStarted;
 	shmNextSnapshotId = &shared->NextSnapshotId;
 	shmNumCommittedGxacts = &shared->num_committed_xacts;
+	shmGxidGenLock = &shared->gxidGenLock;
 	shmCommittedGxactArray = &shared->committed_gxact_array[0];
 
 	if (!IsUnderPostmaster)
@@ -1418,18 +1421,21 @@ insertedDistributedCommitted(void)
 }
 
 /* generate global transaction id */
-DistributedTransactionId
+void
 generateGID(void)
 {
-	DistributedTransactionId gxid;
+	SpinLockAcquire(shmGxidGenLock);
+	MyTmGxact->gxid = shmGIDSeq++;
+	SpinLockRelease(shmGxidGenLock);
 
-	gxid = pg_atomic_add_fetch_u32((pg_atomic_uint32*)shmGIDSeq, 1);
-	if (gxid == LastDistributedTransactionId)
+	if (MyTmGxact->gxid == LastDistributedTransactionId)
 		ereport(PANIC,
 				(errmsg("reached the limit of %u global transactions per start",
 						LastDistributedTransactionId)));
 
-	return gxid;
+	MyTmGxact->distribTimeStamp = getDtxStartTime();
+	MyTmGxact->sessionId = gp_session_id;
+	MyTmGxact->includeInSnapshot = true;
 }
 
 /*
