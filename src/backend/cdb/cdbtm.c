@@ -817,8 +817,8 @@ prepareDtxTransaction(void)
 
 	if (!isCurrentDtxTwoPhaseActivated())
 	{
-		Assert(!MyTmGxact->includeInSnapshot);
 		Assert(MyTmGxactLocal->state == DTX_STATE_NONE);
+		MyTmGxact->includeInSnapshot = false;
 		resetGxact();
 		return;
 	}
@@ -833,7 +833,7 @@ prepareDtxTransaction(void)
 	    (!markXidCommitted && list_length(MyTmGxactLocal->twophaseSegments) < 2))
 	{
 		setCurrentDtxState(DTX_STATE_ONE_PHASE_COMMIT);
-		MyTmGxact->includeInSnapshot = true;
+		MyTmGxact->includeInSnapshot = false;
 		return;
 	}
 
@@ -1417,7 +1417,8 @@ void
 generateGID(void)
 {
 	SpinLockAcquire(shmGxidGenLock);
-	MyTmGxact->gxid = shmGIDSeq++;
+	MyTmGxact->gxid = (*shmGIDSeq)++;
+	MyTmGxact->includeInSnapshot = true;
 	SpinLockRelease(shmGxidGenLock);
 
 	if (MyTmGxact->gxid == LastDistributedTransactionId)
@@ -1427,7 +1428,6 @@ generateGID(void)
 
 	MyTmGxact->distribTimeStamp = getDtxStartTime();
 	MyTmGxact->sessionId = gp_session_id;
-	MyTmGxact->includeInSnapshot = true;
 }
 
 /*

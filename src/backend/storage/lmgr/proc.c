@@ -505,6 +505,7 @@ InitProcess(void)
 	MyProc->queryCommandId = -1;
 
 	/* Init gxact */
+	MyTmGxact->includeInSnapshot = false;
 	resetGxact();
 
 	/*

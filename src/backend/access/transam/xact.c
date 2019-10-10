@@ -2318,10 +2318,7 @@ StartTransaction(void)
 
 		case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
 		{
-			MyTmGxact->gxid = generateGID();
-			MyTmGxact->distribTimeStamp = getDtxStartTime();
-			MyTmGxact->sessionId = gp_session_id;
-			MyTmGxact->includeInSnapshot = true;
+			generateGID();
 
 			if (SharedLocalSnapshotSlot != NULL)
 			{
