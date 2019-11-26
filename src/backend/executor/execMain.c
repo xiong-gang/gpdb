@@ -4919,9 +4919,7 @@ OpenIntoRel(QueryDesc *queryDesc)
 	estate->es_into_relation_is_bulkload = bufferPoolBulkLoad;
 	estate->es_into_relation_descriptor = intoRelationDesc;
 
-	relFileNode.spcNode = tablespaceId;
-	relFileNode.dbNode = MyDatabaseId;
-	relFileNode.relNode = intoRelationId;
+	relFileNode = intoRelationDesc->rd_node;
 	if (estate->es_into_relation_is_bulkload)
 	{
 		MirroredBufferPool_BeginBulkLoad(
