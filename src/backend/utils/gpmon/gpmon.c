@@ -159,11 +159,8 @@ void gpmon_record_update(int32 tmid, int32 ssid, int32 ccnt,
 
 void gpmon_gettmid(int32* tmid)
 {
-    char buff[TMGIDSIZE] = {0};
-    int32 xid;
-    getDistributedTransactionIdentifier(buff);
-    sscanf(buff, "%d-%d", tmid, &xid);
-} 
+	*tmid = (int32)getDtxStartTime();
+}
 
 
 void gpmon_send(gpmon_packet_t* p)

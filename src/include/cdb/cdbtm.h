@@ -209,6 +209,8 @@ typedef struct TMGXACT
 	 */
 	char						gid[TMGIDSIZE];
 
+	DistributedTransactionTimeStamp	distribTimeStamp;
+
 	/*
 	 * Like PGPROC->xid to local transaction, gxid is set if distributed
 	 * transaction needs two-phase, and it's reset when distributed
@@ -259,23 +261,6 @@ typedef struct TMGALLXACTSTATUS
 	TMGXACTSTATUS		*statusArray;
 } TMGALLXACTSTATUS;
 
-
-typedef struct TmControlBlock
-{
-	DistributedTransactionTimeStamp	distribTimeStamp;
-	DistributedTransactionId	seqno;
-	bool						DtmStarted;
-	uint32						NextSnapshotId;
-	int							num_committed_xacts;
-
-    /* Array [0..max_tm_gxacts-1] of TMGXACT_LOG ptrs is appended starting here */
-	TMGXACT_LOG  			    committed_gxact_array[1];
-}	TmControlBlock;
-
-
-#define TMCONTROLBLOCK_BYTES(num_gxacts) \
-	(offsetof(TmControlBlock, committed_gxact_array) + sizeof(TMGXACT_LOG) * (num_gxacts))
-
 #define DTM_DEBUG3 (Debug_print_full_dtm ? LOG : DEBUG3)
 #define DTM_DEBUG5 (Debug_print_full_dtm ? LOG : DEBUG5)
 
@@ -299,10 +284,14 @@ extern DistributedTransactionTimeStamp getDtxStartTime(void);
 extern void dtxCrackOpenGid(const char	*gid,
 							DistributedTransactionTimeStamp	*distribTimeStamp,
 							DistributedTransactionId		*distribXid);
+extern void dtxFormGID(char *gid,
+					   DistributedTransactionTimeStamp tstamp,
+					   DistributedTransactionId gxid);
 extern DistributedTransactionId getDistributedTransactionId(void);
+extern DistributedTransactionTimeStamp getDistributedTransactionTimestamp(void);
 extern bool getDistributedTransactionIdentifier(char *id);
 
-extern void initGxact(TMGXACT *gxact, bool resetXid);
+extern void initGxact(void);
 extern void activeCurrentGxact(void);
 extern void	prepareDtxTransaction(void);
 extern bool isPreparedDtxTransaction(void);
@@ -363,7 +352,6 @@ extern bool currentGxactWriterGangLost(void);
 
 extern void addToGxactTwophaseSegments(struct Gang* gp);
 
-extern DistributedTransactionId generateGID(void);
 extern void ClearTransactionState(TransactionId latestXid);
 
 extern int dtx_recovery_start(void);

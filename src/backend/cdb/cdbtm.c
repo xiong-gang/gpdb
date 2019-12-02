@@ -23,6 +23,7 @@
 #include "cdb/cdbtm.h"
 #include "libpq/libpq-be.h"
 #include "miscadmin.h"
+#include "storage/s_lock.h"
 #include "storage/shmem.h"
 #include "storage/ipc.h"
 #include "cdb/cdbdisp.h"
@@ -52,6 +53,23 @@
 #include "utils/snapmgr.h"
 #include "utils/memutils.h"
 
+typedef struct TmControlBlock
+{
+	DistributedTransactionTimeStamp	distribTimeStamp;
+	DistributedTransactionId	seqno;
+	bool						DtmStarted;
+	uint32						NextSnapshotId;
+	int							num_committed_xacts;
+	slock_t						gxidGenLock;
+
+	/* Array [0..max_tm_gxacts-1] of TMGXACT_LOG ptrs is appended starting here */
+	TMGXACT_LOG  			    committed_gxact_array[1];
+}	TmControlBlock;
+
+
+#define TMCONTROLBLOCK_BYTES(num_gxacts) \
+	(offsetof(TmControlBlock, committed_gxact_array) + sizeof(TMGXACT_LOG) * (num_gxacts))
+
 extern bool Test_print_direct_dispatch_info;
 
 #define DTX_PHASE2_SLEEP_TIME_BETWEEN_RETRIES_MSECS 100
@@ -60,6 +78,7 @@ volatile DistributedTransactionTimeStamp *shmDistribTimeStamp;
 volatile DistributedTransactionId *shmGIDSeq;
 
 uint32 *shmNextSnapshotId;
+slock_t *shmGxidGenLock;
 
 /**
  * This pointer into shared memory is on the QD, and represents the current open transaction.
@@ -204,58 +223,42 @@ isQEContext()
 DistributedTransactionTimeStamp
 getDtxStartTime(void)
 {
-	if (shmDistribTimeStamp != NULL)
-		return *shmDistribTimeStamp;
-	else
-		return 0;
+	Assert(shmDistribTimeStamp != NULL);
+	return *shmDistribTimeStamp;
 }
 
 DistributedTransactionId
 getDistributedTransactionId(void)
 {
-	if (isQDContext())
-	{
-		return GetCurrentDistributedTransactionId();
-	}
-	else if (isQEContext())
-	{
-		return QEDtxContextInfo.distributedXid;
-	}
+	if (isQDContext() || isQEContext())
+		return MyTmGxact->gxid;
 	else
-	{
 		return InvalidDistributedTransactionId;
-	}
+}
+
+DistributedTransactionTimeStamp
+getDistributedTransactionTimestamp(void)
+{
+	if (isQDContext() || isQEContext())
+		return MyTmGxact->distribTimeStamp;
+	else
+		return 0;
 }
 
 bool
 getDistributedTransactionIdentifier(char *id)
 {
-	if (isQDContext())
+	Assert(MyTmGxact != NULL);
+
+	if ((isQDContext() || isQEContext()) &&
+		MyTmGxact->gxid != InvalidDistributedTransactionId)
 	{
-		DistributedTransactionId gxid = GetCurrentDistributedTransactionId();
-		if (gxid != InvalidDistributedTransactionId)
-		{
-			/*
-			 * The length check here requires the identifer have a trailing
-			 * NUL character.
-			 */
-			sprintf(id, "%u-%.10u", *shmDistribTimeStamp, gxid);
-			if (strlen(id) >= TMGIDSIZE)
-				elog(PANIC, "distributed transaction identifier too long (%d)",
-					 (int) strlen(id));
-			return true;
-		}
-	}
-	else if (isQEContext())
-	{
-		if (QEDtxContextInfo.distributedXid != InvalidDistributedTransactionId)
-		{
-			if (strlen(QEDtxContextInfo.distributedId) >= TMGIDSIZE)
-				elog(PANIC, "distributed transaction identifier too long (%d)",
-					 (int) strlen(QEDtxContextInfo.distributedId));
-			memcpy(id, QEDtxContextInfo.distributedId, TMGIDSIZE);
-			return true;
-		}
+		/*
+		 * The length check here requires the identifer have a trailing
+		 * NUL character.
+		 */
+		dtxFormGID(id, MyTmGxact->distribTimeStamp, MyTmGxact->gxid);
+		return true;
 	}
 
 	MemSet(id, 0, TMGIDSIZE);
@@ -326,7 +329,7 @@ notifyCommittedDtxTransaction(void)
 	Assert(DistributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE);
 	Assert(currentGxact != NULL);
 
-	switch(MyTmGxactLocal->state)
+	switch(MyTmGxact->state)
 	{
 		case DTX_STATE_PREPARED:
 		case DTX_STATE_INSERTED_COMMITTED:
@@ -336,9 +339,7 @@ notifyCommittedDtxTransaction(void)
 			doNotifyingOnePhaseCommit();
 			break;
 		default:
-			ereport(ERROR,
-					(errmsg("Unexpected DTX state"),
-					 TM_ERRDETAIL));
+			elog(ERROR, "Unexpected DTX state: %d", MyTmGxact->state);
 	}
 }
 
@@ -895,9 +896,9 @@ prepareDtxTransaction(void)
 
 	if (currentGxact == NULL)
 	{
-		Assert(MyTmGxact->gxid == InvalidDistributedTransactionId);
 		Assert(MyTmGxact->state == DTX_STATE_NONE);
-		initGxact(MyTmGxact, false);
+		Assert(Gp_role != GP_ROLE_DISPATCH || MyTmGxact->gxid == InvalidDistributedTransactionId);
+		initGxact();
 		return;
 	}
 
@@ -1124,10 +1125,12 @@ tmShmemInit(void)
 
 		*shmGIDSeq = FirstDistributedTransactionId;
 		ShmemVariableCache->latestCompletedDxid = InvalidDistributedTransactionId;
+		SpinLockInit(&shared->gxidGenLock);
 	}
 	shmDtmStarted = &shared->DtmStarted;
 	shmNextSnapshotId = &shared->NextSnapshotId;
 	shmNumCommittedGxacts = &shared->num_committed_xacts;
+	shmGxidGenLock = &shared->gxidGenLock;
 	shmCommittedGxactArray = &shared->committed_gxact_array[0];
 
 	if (!IsUnderPostmaster)
@@ -1394,26 +1397,22 @@ dispatchDtxCommand(const char *cmd)
 
 /* initialize a global transaction context */
 void
-initGxact(TMGXACT *gxact, bool resetXid)
+initGxact(void)
 {
-	if (resetXid)
-	{
-		MemSet(gxact->gid, 0, TMGIDSIZE);
-		gxact->gxid = InvalidDistributedTransactionId;
-		setGxactState(gxact, DTX_STATE_NONE);
-	}
-
-	/*
-	 * Memory only fields.
-	 */
-	gxact->sessionId = gp_session_id;
-	gxact->explicitBeginRemembered = false;
-	gxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
-	gxact->badPrepareGangs = false;
-	gxact->writerGangLost = false;
-	gxact->twophaseSegmentsMap = NULL;
-	gxact->twophaseSegments = NIL;
-	gxact->isOnePhaseCommit = false;
+	AssertImply(Gp_role == GP_ROLE_DISPATCH && MyTmGxact->gxid != InvalidDistributedTransactionId,
+				LWLockHeldByMe(ProcArrayLock));
+	memset(MyTmGxact->gid, 0, sizeof(MyTmGxact->gid));
+	MyTmGxact->gxid = InvalidDistributedTransactionId;
+	MyTmGxact->distribTimeStamp = 0;
+	MyTmGxact->sessionId = gp_session_id;
+	MyTmGxact->explicitBeginRemembered = false;
+	MyTmGxact->xminDistributedSnapshot = InvalidDistributedTransactionId;
+	MyTmGxact->badPrepareGangs = false;
+	MyTmGxact->writerGangLost = false;
+	MyTmGxact->twophaseSegmentsMap = NULL;
+	MyTmGxact->twophaseSegments = NIL;
+	MyTmGxact->isOnePhaseCommit = false;
+	MyTmGxact->state = DTX_STATE_NONE;
 }
 
 bool
@@ -1433,26 +1432,42 @@ getNextDistributedXactStatus(TMGALLXACTSTATUS *allDistributedXactStatus, TMGXACT
 void
 activeCurrentGxact(void)
 {
-	DistributedTransactionId gxid;
+	/*
+	 * Bump 'shmGIDSeq' and assign it to 'MyTmGxact->gxid', this needs to be atomic.
+	 * Otherwise, another transaction might start and commit in between, which will
+	 * bump 'ShmemVariableCache->latestCompletedDxid'.  If someone else take a
+	 * snapshot now, it will consider this transaction has finished: it's not
+	 * in-progress (MyTmGxact->gxid is not set) and its transaction precedes the xmax.
+	 *
+	 * For example:
+	 * tx1: insert into t values(1), (2);
+	 * tx2: insert into t values(3), (4);
+	 * tx3: select * from t;
+	 *
+	 * It happens in the following order:
+	 * 1. tx1 generates a distributed transaction-id X1
+	 * 2. tx2 generates a distributed transaction-id X2 (X1 < X2)
+	 * 3. tx2 finished
+	 * 4. tx3 takes a distributed snapshot
+	 * 5. tx1 set 'TMGXACT->gxid'
+	 * 6. tx1 finish 'commit prepared' on segment 0 but not on segment 1 yet.
+	 * 7. tx3 will see the change of tx1 on segment 0 but not on segment 1, that's
+	 * because tx1 is considered finished according to the snapshot.
+	 */
+	SpinLockAcquire(shmGxidGenLock);
+	MyTmGxact->gxid = ++(*shmGIDSeq);
+	SpinLockRelease(shmGxidGenLock);
+
+	if (MyTmGxact->gxid == LastDistributedTransactionId)
+		ereport(PANIC,
+				(errmsg("reached the limit of %u global transactions per start",
+						LastDistributedTransactionId)));
+
+	MyTmGxact->distribTimeStamp = getDtxStartTime();
+	MyTmGxact->sessionId = gp_session_id;
+	dtxFormGID(MyTmGxact->gid, MyTmGxact->distribTimeStamp, MyTmGxact->gxid);
 	currentGxact = MyTmGxact;
-
-	gxid = GetCurrentDistributedTransactionId();
-	if (gxid == InvalidDistributedTransactionId)
-	{
-		gxid = generateGID();
-		SetCurrentDistributedTransactionId(gxid);
-		Assert(gxid != InvalidDistributedTransactionId);
-	}
-
-	Assert(*shmDistribTimeStamp != 0);
-	sprintf(currentGxact->gid, "%u-%.10u", *shmDistribTimeStamp, gxid);
-	if (strlen(currentGxact->gid) >= TMGIDSIZE)
-		elog(PANIC, "Distribute transaction identifier too long (%d)",
-				(int) strlen(currentGxact->gid));
-
 	setCurrentGxactState(DTX_STATE_ACTIVE_DISTRIBUTED);
-
-	currentGxact->gxid = gxid;
 }
 
 static void
@@ -1502,21 +1517,6 @@ insertedDistributedCommitted(void)
 
 	Assert(currentGxact->state == DTX_STATE_INSERTING_COMMITTED);
 	setCurrentGxactState(DTX_STATE_INSERTED_COMMITTED);
-}
-
-/* generate global transaction id */
-DistributedTransactionId
-generateGID(void)
-{
-	DistributedTransactionId gxid;
-
-	gxid = pg_atomic_add_fetch_u32((pg_atomic_uint32*)shmGIDSeq, 1);
-	if (gxid == LastDistributedTransactionId)
-		ereport(PANIC,
-				(errmsg("reached the limit of %u global transactions per start",
-						LastDistributedTransactionId)));
-
-	return gxid;
 }
 
 /*
