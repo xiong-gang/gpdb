@@ -27,6 +27,7 @@
 #include "cdb/cdbdispatchresult.h"
 #include "cdb/cdbgang.h"
 
+#include "storage/proc.h"
 #include "storage/procarray.h"	/* updateSharedLocalSnapshot */
 #include "utils/snapmgr.h"
 
@@ -70,7 +71,6 @@ CdbDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 							  char *gid,
 							  ErrorData **qeError,
 							  int *numresults,
-							  bool *badGangs,
 							  List *twophaseSegments,
 							  char *serializedDtxContextInfo,
 							  int serializedDtxContextInfoLen)
@@ -120,15 +120,10 @@ CdbDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 
 	if (!pr)
 	{
-		if (!GangOK(primaryGang) && badGangs != NULL)
-		{
-			*badGangs = true;
-			elog((Debug_print_full_dtm ? LOG : DEBUG5),
-				 "CdbDispatchDtxProtocolCommand: Bad gang from dispatch of %s for gid = %s",
-				 dtxProtocolCommandLoggingStr, gid);
-		}
-
 		cdbdisp_destroyDispatcherState(ds);
+		if (MyTmGxactLocal->state == DTX_STATE_PREPARING && !GangOK(primaryGang))
+			ResetAllGangs();
+
 		return NULL;
 	}
 

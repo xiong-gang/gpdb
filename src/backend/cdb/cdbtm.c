@@ -403,7 +403,7 @@ doDispatchSubtransactionInternalCmd(DtxProtocolCommand cmdType)
 	dtxFormGID(gid, getDistributedTransactionTimestamp(), getDistributedTransactionId());
 	succeeded = doDispatchDtxProtocolCommand(cmdType,
 											 gid,
-											 NULL, /* raiseError */ true,
+											 /* raiseError */ true,
 											 cdbcomponent_getCdbComponentsList(),
 											 serializedDtxContextInfo, serializedDtxContextInfoLen);
 
@@ -449,9 +449,6 @@ doPrepareTransaction(void)
 
 	if (!succeeded)
 	{
-		elog(DTM_DEBUG5, "doPrepareTransaction error finds badPrimaryGangs = %s",
-			 (MyTmGxactLocal->badPrepareGangs ? "true" : "false"));
-
 		ereport(ERROR,
 				(errmsg("The distributed transaction 'Prepare' broadcast failed to one or more segments"),
 				TM_ERRDETAIL));
@@ -859,18 +856,6 @@ rollbackDtxTransaction(void)
 			break;
 
 		case DTX_STATE_PREPARING:
-			if (MyTmGxactLocal->badPrepareGangs)
-			{
-				setCurrentDtxState(DTX_STATE_RETRY_ABORT_PREPARED);
-
-				/*
-				 * DisconnectAndDestroyAllGangs and ResetSession happens
-				 * inside retryAbortPrepared.
-				 */
-				retryAbortPrepared();
-				clearAndResetGxact();
-				return;
-			}
 			setCurrentDtxState(DTX_STATE_NOTIFYING_ABORT_SOME_PREPARED);
 			break;
 
@@ -1110,17 +1095,16 @@ bool
 currentDtxDispatchProtocolCommand(DtxProtocolCommand dtxProtocolCommand, bool raiseError)
 {
 	char gid[TMGIDSIZE];
-	bool *badgang = (MyTmGxactLocal->state == DTX_STATE_PREPARING) ? &MyTmGxactLocal->badPrepareGangs : NULL;
 
 	dtxFormGID(gid, getDistributedTransactionTimestamp(), getDistributedTransactionId());
-	return doDispatchDtxProtocolCommand(dtxProtocolCommand, gid, badgang, raiseError,
+	return doDispatchDtxProtocolCommand(dtxProtocolCommand, gid, raiseError,
 										MyTmGxactLocal->twophaseSegments, NULL, 0);
 }
 
 bool
 doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 							 char *gid,
-							 bool *badGangs, bool raiseError,
+							 bool raiseError,
 							 List *twophaseSegments,
 							 char *serializedDtxContextInfo,
 							 int serializedDtxContextInfoLen)
@@ -1152,7 +1136,7 @@ doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	results = CdbDispatchDtxProtocolCommand(dtxProtocolCommand,
 											dtxProtocolCommandStr,
 											gid,
-											&qeError, &resultCount, badGangs, twophaseSegments,
+											&qeError, &resultCount, twophaseSegments,
 											serializedDtxContextInfo, serializedDtxContextInfoLen);
 
 	if (qeError)
@@ -1298,7 +1282,6 @@ resetGxact(void)
 	MyTmGxact->sessionId = 0;
 
 	MyTmGxactLocal->explicitBeginRemembered = false;
-	MyTmGxactLocal->badPrepareGangs = false;
 	MyTmGxactLocal->writerGangLost = false;
 	MyTmGxactLocal->twophaseSegmentsMap = NULL;
 	MyTmGxactLocal->twophaseSegments = NIL;
