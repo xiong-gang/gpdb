@@ -1,0 +1,73 @@
+-- Test this scenario:
+-- mirror has latency replaying the WAL from the primary, the master is reset
+-- from PANIC, master will start the DTX recovery process to recover the
+-- in-progress two-phase transactions. When DTX recovery process performing
+-- 'RECOVERY COMMIT PREPARED' on a transaction that is currently waiting for
+-- sync replication, it should wait rather than error out.
+
+1: create table t_wait_lsn(a int);
+CREATE
+
+-- suspend segment 0 before performing 'COMMIT PREPARED'
+2: select gp_inject_fault_infinite('finish_prepared_start_of_function', 'suspend', dbid) from gp_segment_configuration where content=0 and role='p';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+2&: select gp_wait_until_triggered_fault('finish_prepared_start_of_function', 1, dbid) from gp_segment_configuration where content=0 and role='p';  <waiting ...>
+1&: insert into t_wait_lsn select generate_series(1,10);  <waiting ...>
+2<:  <... completed>
+ gp_wait_until_triggered_fault 
+-------------------------------
+ Success:                      
+(1 row)
+
+-- let walreceiver on mirror 0 skip WAL flush
+2: select gp_inject_fault_infinite('walrecv_skip_flush', 'skip', dbid) from gp_segment_configuration where content=0 and role='m';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+-- resume 'COMMIT PREPARED', session 1 will hang on 'SyncRepWaitForLSN'
+2: select gp_inject_fault_infinite('finish_prepared_start_of_function', 'reset', dbid) from gp_segment_configuration where content=0 and role='p';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+
+-- trigger master reset
+3: select gp_inject_fault('before_read_command', 'panic', 1);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+3: select 1;
+PANIC:  fault triggered, fault name:'before_read_command' fault type:'panic'
+server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+
+-- resume walreceiver on mirror 0
+-1U: select gp_inject_fault_infinite('walrecv_skip_flush', 'reset', dbid) from gp_segment_configuration where content=0 and role='m';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+-1Uq: ... <quitting>
+
+4: select count(*) from t_wait_lsn;
+ count 
+-------
+ 10    
+(1 row)
+4: drop table t_wait_lsn;
+DROP
+4q: ... <quitting>
+Traceback (most recent call last):
+  File "./sql_isolation_testcase.py", line 696, in <module>
+    executor.process_isolation_file(sys.stdin, sys.stdout)
+  File "./sql_isolation_testcase.py", line 488, in process_isolation_file
+    process.stop()
+  File "./sql_isolation_testcase.py", line 130, in stop
+    raise Exception("Should not finish test case while waiting for results")
+Exception: Should not finish test case while waiting for results

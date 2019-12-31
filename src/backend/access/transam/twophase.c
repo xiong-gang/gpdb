@@ -530,7 +530,7 @@ MarkAsPrepared(GlobalTransaction gxact)
  *		Locate the prepared transaction and mark it busy for COMMIT or PREPARE.
  */
 static GlobalTransaction
-LockGXact(const char *gid, Oid user, bool raiseErrorIfNotFound)
+LockGXact(const char *gid, Oid user, bool isRecovery, bool raiseErrorIfNotFound)
 {
 	int			i;
 
@@ -559,10 +559,18 @@ LockGXact(const char *gid, Oid user, bool raiseErrorIfNotFound)
 
 		/* Found it, but has someone else got it locked? */
 		if (gxact->locking_backend != InvalidBackendId)
+		{
+			if (isRecovery)
+			{
+				LWLockRelease(TwoPhaseStateLock);
+				return NULL;
+			}
+
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				errmsg("prepared transaction with identifier \"%s\" is busy",
 					   gid)));
+		}
 
 		if (user != gxact->owner && !superuser_arg(user))
 			ereport(ERROR,
@@ -1379,7 +1387,7 @@ finish_prepared_transaction_tablespace_storage(bool isCommit) {
  * FinishPreparedTransaction: execute COMMIT PREPARED or ROLLBACK PREPARED
  */
 bool
-FinishPreparedTransaction(const char *gid, bool isCommit, bool raiseErrorIfNotFound)
+FinishPreparedTransaction(const char *gid, bool isCommit, bool isRecovery, bool raiseErrorIfNotFound)
 {
 	GlobalTransaction gxact;
 	PGPROC	   *proc;
@@ -1406,7 +1414,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit, bool raiseErrorIfNotFo
 	 * Validate the GID, and lock the GXACT to ensure that two backends do not
 	 * try to commit the same GID at once.
 	 */
-	gxact = LockGXact(gid, GetUserId(), raiseErrorIfNotFound);
+	gxact = LockGXact(gid, GetUserId(), isRecovery, raiseErrorIfNotFound);
 	if (gxact == NULL)
 	{
 		/* GPDB_96_MERGE_FIXME: understand this comment, and figure out if
