@@ -186,7 +186,7 @@ static GlobalTransaction MyLockedGxact = NULL;
 
 static bool twophaseExitRegistered = false;
 
-static void RecordTransactionCommitPrepared(TransactionId xid,
+static XLogRecPtr RecordTransactionCommitPrepared(TransactionId xid,
 								const char *gid,
 								int nchildren,
 								TransactionId *children,
@@ -197,7 +197,7 @@ static void RecordTransactionCommitPrepared(TransactionId xid,
 								int ninvalmsgs,
 								SharedInvalidationMessage *invalmsgs,
 								bool initfileinval);
-static void RecordTransactionAbortPrepared(TransactionId xid,
+static XLogRecPtr RecordTransactionAbortPrepared(TransactionId xid,
 							   int nchildren,
 							   TransactionId *children,
 							   int nrels,
@@ -1407,14 +1407,29 @@ FinishPreparedTransaction(const char *gid, bool isCommit, bool isRecovery, bool 
 	DbDirNode *deldbs;
 	int			ndeldbs;
 	SharedInvalidationMessage *invalmsgs;
+	XLogRecPtr recptr;
 
 	SIMPLE_FAULT_INJECTOR("finish_prepared_start_of_function");
+
+	/*
+	 * 'isRecovery' means it's performing DTX_PROTOCOL_COMMAND_RECOVERY_COMMIT_PREPARED or
+	 * DTX_PROTOCOL_COMMAND_RECOVERY_ABORT_PREPARED. When it's true, grab the lock in
+	 * exclusive mode.
+	 *
+	 * If there's an other proc that is currently performing DTX_PROTOCOL_COMMAND_COMMIT_PREPARED
+	 * or DTX_PROTOCOL_COMMAND_ABORT_PREPARED, we need to make sure it could lock the gxact
+	 * and write the WAL atomically. The lock should be released before 'SyncRepWaitForLSN()'
+	 */
+	LWLockAcquire(TwophaseRecoveryLock, isRecovery ? LW_EXCLUSIVE : LW_SHARED);
 
 	/*
 	 * Validate the GID, and lock the GXACT to ensure that two backends do not
 	 * try to commit the same GID at once.
 	 */
 	gxact = LockGXact(gid, GetUserId(), isRecovery, raiseErrorIfNotFound);
+	if (isRecovery)
+		LWLockRelease(TwophaseRecoveryLock);
+
 	if (gxact == NULL)
 	{
 		/* GPDB_96_MERGE_FIXME: understand this comment, and figure out if
@@ -1498,18 +1513,29 @@ FinishPreparedTransaction(const char *gid, bool isCommit, bool isRecovery, bool 
 	 * callbacks will release the locks the transaction held.
 	 */
 	if (isCommit)
-		RecordTransactionCommitPrepared(xid,
-										gid,
-										hdr->nsubxacts, children,
-										hdr->ncommitrels, commitrels,
-										hdr->ncommitdbs, commitdbs,
-										hdr->ninvalmsgs, invalmsgs,
-										hdr->initfileinval);
+		recptr = RecordTransactionCommitPrepared(xid,
+												gid,
+												hdr->nsubxacts, children,
+												hdr->ncommitrels, commitrels,
+												hdr->ncommitdbs, commitdbs,
+												hdr->ninvalmsgs, invalmsgs,
+												hdr->initfileinval);
 	else
-		RecordTransactionAbortPrepared(xid,
-									   hdr->nsubxacts, children,
-									   hdr->nabortrels, abortrels,
-									   hdr->nabortdbs, abortdbs);
+		recptr = RecordTransactionAbortPrepared(xid,
+											   hdr->nsubxacts, children,
+											   hdr->nabortrels, abortrels,
+											   hdr->nabortdbs, abortdbs);
+
+	if (!isRecovery)
+		LWLockRelease(TwophaseRecoveryLock);
+
+	/*
+	 * Wait for synchronous replication, if required.
+	 *
+	 * Note that at this stage we have marked clog, but still show as running
+	 * in the procarray and continue to hold locks.
+	 */
+	SyncRepWaitForLSN(recptr, isCommit);
 
 	ProcArrayRemove(proc, latestXid);
 
@@ -2187,7 +2213,7 @@ RecoverPreparedTransactions(void)
  * We know the transaction made at least one XLOG entry (its PREPARE),
  * so it is never possible to optimize out the commit record.
  */
-static void
+static XLogRecPtr 
 RecordTransactionCommitPrepared(TransactionId xid,
 								const char *gid,
 								int nchildren,
@@ -2282,13 +2308,7 @@ RecordTransactionCommitPrepared(TransactionId xid,
 
 	END_CRIT_SECTION();
 
-	/*
-	 * Wait for synchronous replication, if required.
-	 *
-	 * Note that at this stage we have marked clog, but still show as running
-	 * in the procarray and continue to hold locks.
-	 */
-	SyncRepWaitForLSN(recptr, true);
+	return recptr;
 }
 
 /*
@@ -2299,7 +2319,7 @@ RecordTransactionCommitPrepared(TransactionId xid,
  * We know the transaction made at least one XLOG entry (its PREPARE),
  * so it is never possible to optimize out the abort record.
  */
-static void
+static XLogRecPtr 
 RecordTransactionAbortPrepared(TransactionId xid,
 							   int nchildren,
 							   TransactionId *children,
@@ -2341,11 +2361,5 @@ RecordTransactionAbortPrepared(TransactionId xid,
 
 	END_CRIT_SECTION();
 
-	/*
-	 * Wait for synchronous replication, if required.
-	 *
-	 * Note that at this stage we have marked clog, but still show as running
-	 * in the procarray and continue to hold locks.
-	 */
-	SyncRepWaitForLSN(recptr, false);
+	return recptr;
 }
