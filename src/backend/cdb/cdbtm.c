@@ -22,7 +22,9 @@
 #include "catalog/pg_authid.h"
 #include "cdb/cdbtm.h"
 #include "libpq/libpq-be.h"
+#include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "storage/lmgr.h"
 #include "storage/s_lock.h"
 #include "storage/shmem.h"
 #include "storage/ipc.h"
@@ -124,6 +126,7 @@ static void setCurrentDtxState(DtxState state);
 static bool isDtxQueryDispatcher(void);
 static void performDtxProtocolCommitPrepared(const char *gid, bool raiseErrorIfNotFound);
 static void performDtxProtocolAbortPrepared(const char *gid, bool raiseErrorIfNotFound);
+static void sendWaitGxidsToQD(List *waitGxids);
 
 extern void CheckForResetSession(void);
 
@@ -264,6 +267,7 @@ currentDtxActivate(void)
 	MyTmGxact->distribTimeStamp = getDtmStartTime();
 	MyTmGxact->sessionId = gp_session_id;
 	setCurrentDtxState(DTX_STATE_ACTIVE_DISTRIBUTED);
+	GxactLockTableInsert(MyTmGxact->gxid);
 }
 
 static void
@@ -307,6 +311,7 @@ notifyCommittedDtxTransaction(void)
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 	Assert(DistributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE);
 	Assert(isCurrentDtxActivated());
+	ListCell   *l;
 
 	switch(MyTmGxactLocal->state)
 	{
@@ -321,6 +326,10 @@ notifyCommittedDtxTransaction(void)
 					(errmsg("Unexpected DTX state"),
 					 TM_ERRDETAIL));
 	}
+
+
+	foreach(l, MyTmGxactLocal->waitGxids)
+		GxactLockTableWait(lfirst_int(l));
 }
 
 void
@@ -1134,6 +1143,7 @@ doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	char	   *dtxProtocolCommandStr = 0;
 
 	struct pg_result **results;
+	MemoryContext oldContext;
 
 	if (!dtxSegments)
 		return true;
@@ -1214,8 +1224,23 @@ doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 		}
 	}
 
+	MyTmGxactLocal->waitGxids = NULL;
 	for (i = 0; i < resultCount; i++)
-		PQclear(results[i]);
+	{
+		int idx;
+		struct pg_result *result = results[i];
+
+		if (result->nWaits == 0)
+		{
+			PQclear(result);
+			continue;
+		}
+
+		oldContext = MemoryContextSwitchTo(TopTransactionContext);
+		for (idx = 0; idx < result->nWaits; idx++)
+			MyTmGxactLocal->waitGxids = list_append_unique_int(MyTmGxactLocal->waitGxids, result->waitGxids[idx]);
+		MemoryContextSwitchTo(oldContext);
+	}
 
 	if (results)
 		pfree(results);
@@ -1304,6 +1329,7 @@ resetGxact(void)
 	MyTmGxactLocal->dtxSegmentsMap = NULL;
 	MyTmGxactLocal->dtxSegments = NIL;
 	MyTmGxactLocal->isOnePhaseCommit = false;
+	MyTmGxactLocal->waitGxids = NULL;
 	setCurrentDtxState(DTX_STATE_NONE);
 }
 
@@ -1886,7 +1912,22 @@ performDtxProtocolPrepare(const char *gid)
 	setDistributedTransactionContext(DTX_CONTEXT_QE_PREPARED);
 }
 
+static void
+sendWaitGxidsToQD(List *waitGxids)
+{
+	ListCell *lc;
+	StringInfoData buf;
+	int len = list_length(waitGxids);
 
+	if (len == 0)
+		return;
+
+	pq_beginmessage(&buf, 'w');
+	pq_sendint(&buf, len, 4);
+	foreach(lc, waitGxids)
+		pq_sendint(&buf, lfirst_oid(lc), 4);
+	pq_endmessage(&buf);
+}
 /**
  * On the QE, run the Commit one-phase operation.
  */
@@ -1895,6 +1936,8 @@ performDtxProtocolCommitOnePhase(const char *gid)
 {
 	DistributedTransactionTimeStamp distribTimeStamp;
 	DistributedTransactionId gxid;
+	List *waitGxids = list_copy(MyTmGxactLocal->waitGxids);
+
 	elog(DTM_DEBUG5,
 		 "performDtxProtocolCommitOnePhase going to call CommitTransaction for distributed transaction %s", gid);
 
@@ -1916,6 +1959,8 @@ performDtxProtocolCommitOnePhase(const char *gid)
 
 	finishDistributedTransactionContext("performDtxProtocolCommitOnePhase -- Commit onephase", false);
 	MyProc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
+
+	sendWaitGxidsToQD(waitGxids);
 }
 
 /**
@@ -1928,6 +1973,8 @@ performDtxProtocolCommitPrepared(const char *gid, bool raiseErrorIfNotFound)
 
 	elog(DTM_DEBUG5,
 		 "performDtxProtocolCommitPrepared going to call FinishPreparedTransaction for distributed transaction %s", gid);
+
+	List *waitGxids = list_copy(MyTmGxactLocal->waitGxids);
 
 	StartTransactionCommand();
 
@@ -1950,6 +1997,8 @@ performDtxProtocolCommitPrepared(const char *gid, bool raiseErrorIfNotFound)
 	 * work to be performed.
 	 */
 	CommitTransactionCommand();
+
+	sendWaitGxidsToQD(waitGxids);
 
 	finishDistributedTransactionContext("performDtxProtocolCommitPrepared -- Commit Prepared", false);
 }

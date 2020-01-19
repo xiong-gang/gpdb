@@ -22,6 +22,54 @@ UPDATE 1
 ---+----+--------------------------------------------------------------------------------------
  1 | 21 | test                                                                                 
 (1 row)
+1q: ... <quitting>
+2q: ... <quitting>
+
+DROP TABLE t_concurrent_update;
+DROP
+
+
+-- Test the concurrent update transaction order on the segment is reflected on master
+CREATE TABLE t_concurrent_update(a int, b int);
+CREATE
+INSERT INTO t_concurrent_update VALUES(1,1);
+INSERT 1
+
+1: BEGIN;
+BEGIN
+1: UPDATE t_concurrent_update SET b=b+10 WHERE a=1;
+UPDATE 1
+2: BEGIN;
+BEGIN
+-- transaction 2 will wait transaction 1 on the segment
+2&: UPDATE t_concurrent_update SET b=b+10 WHERE a=1;  <waiting ...>
+-- transaction 1 suspend before commit, but it will wake up transaction 2 on segment
+1: select gp_inject_fault('before_xact_end_procarray', 'suspend', '', '', '', 1, 1, 0, 1);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1&: END;  <waiting ...>
+-- transaction 2 should wait transaction 1 commit on master
+2&: END;  <waiting ...>
+select gp_inject_fault('before_xact_end_procarray', 'reset', 1);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+-- the query should not get the incorrect distributed snapshot: transaction 1 in-progress
+-- and transaction 2 finished
+SELECT * FROM t_concurrent_update;
+ a | b 
+---+---
+ 1 | 1 
+(1 row)
+1<:  <... completed>
+END
+2<:  <... completed>
+UPDATE 1
+1q: ... <quitting>
+2q: ... <quitting>
 
 DROP TABLE t_concurrent_update;
 DROP
