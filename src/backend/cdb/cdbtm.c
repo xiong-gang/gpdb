@@ -329,7 +329,9 @@ notifyCommittedDtxTransaction(void)
 
 
 	foreach(l, MyTmGxactLocal->waitGxids)
+	{
 		GxactLockTableWait(lfirst_int(l));
+	}
 }
 
 void
@@ -1118,6 +1120,17 @@ isMppTxOptions_ExplicitBegin(int txnOptions)
 /*=========================================================================
  * HELPER FUNCTIONS
  */
+static int
+compare_int(const void *va, const void *vb)
+{
+	int			a = *((const int *) va);
+	int			b = *((const int *) vb);
+
+	if (a == b)
+		return 0;
+	return (a > b) ? 1 : -1;
+}
+
 bool
 currentDtxDispatchProtocolCommand(DtxProtocolCommand dtxProtocolCommand, bool raiseError)
 {
@@ -1144,6 +1157,8 @@ doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 
 	struct pg_result **results;
 	MemoryContext oldContext;
+	int *waitGxids = NULL;
+	int totalWaits = 0;
 
 	if (!dtxSegments)
 		return true;
@@ -1224,23 +1239,49 @@ doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 		}
 	}
 
-	MyTmGxactLocal->waitGxids = NULL;
+	/* gather all the waited gxids from segments and remove the duplicates */
+	for (i = 0; i < resultCount; i++)
+		totalWaits += results[i]->nWaits;
+
+	if (totalWaits > 0)
+		waitGxids = palloc(sizeof(int) * totalWaits);
+
+	totalWaits = 0;
 	for (i = 0; i < resultCount; i++)
 	{
 		int idx;
 		struct pg_result *result = results[i];
 
-		if (result->nWaits == 0)
+		for (idx = 0; idx < result->nWaits; idx++)
+			waitGxids[totalWaits++] = result->waitGxids[idx];
+
+		PQclear(result);
+	}
+
+	if (totalWaits > 0)
+	{
+		int lastRepeat = -1;
+		if (MyTmGxactLocal->waitGxids)
 		{
-			PQclear(result);
-			continue;
+			pfree(MyTmGxactLocal->waitGxids);
+			MyTmGxactLocal->waitGxids = NULL;
 		}
 
+		qsort(waitGxids, totalWaits, sizeof(int), compare_int);
+
 		oldContext = MemoryContextSwitchTo(TopTransactionContext);
-		for (idx = 0; idx < result->nWaits; idx++)
-			MyTmGxactLocal->waitGxids = list_append_unique_int(MyTmGxactLocal->waitGxids, result->waitGxids[idx]);
+		for (i = 0; i < totalWaits; i++)
+		{
+			if (waitGxids[i] == lastRepeat)
+				continue;
+			MyTmGxactLocal->waitGxids = lappend_int(MyTmGxactLocal->waitGxids, waitGxids[i]);
+			lastRepeat = waitGxids[i];
+		}
 		MemoryContextSwitchTo(oldContext);
 	}
+
+	if (waitGxids)
+		pfree(waitGxids);
 
 	if (results)
 		pfree(results);
@@ -1925,7 +1966,9 @@ sendWaitGxidsToQD(List *waitGxids)
 	pq_beginmessage(&buf, 'w');
 	pq_sendint(&buf, len, 4);
 	foreach(lc, waitGxids)
-		pq_sendint(&buf, lfirst_oid(lc), 4);
+	{
+		pq_sendint(&buf, lfirst_int(lc), 4);
+	}
 	pq_endmessage(&buf);
 }
 /**

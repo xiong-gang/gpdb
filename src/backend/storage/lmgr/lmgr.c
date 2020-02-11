@@ -647,6 +647,11 @@ XactLockTableWait(TransactionId xid, Relation rel, ItemPointer ctid,
 	ErrorContextCallback callback;
 	bool		first = true;
 
+	/*
+	 * Concurrent update and delete will wait on segment when GDD is enabled,
+	 * need to report the waited transactions to QD to make sure the they have
+	 * the same transaction order on the master.
+	 */
 	if (gp_enable_global_deadlock_detector && Gp_role == GP_ROLE_EXECUTE)
 	{
 		MemoryContext oldContext;
