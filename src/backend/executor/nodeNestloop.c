@@ -589,7 +589,13 @@ ExecReScanNestLoop(NestLoopState *node, ExprContext *exprCtxt)
 	node->nl_NeedNewOuter = true;
 	node->nl_MatchedOuter = false;
 	node->nl_innerSideScanned = false;
-	/* CDB: We intentionally leave node->nl_innerSquelchNeeded unchanged on ReScan */
+
+	/*
+	 * If the parameter is used in the filter of the outer table scan, the outer returns
+	 * NULL doesn't mean we can squelch the inner, because next parameter to the outer
+	 * may return a valid tuple.
+	 */
+	node->nl_innerSquelchNeeded = false;
 }
 
 void

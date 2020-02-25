@@ -1787,6 +1787,13 @@ ExecReScanMergeJoin(MergeJoinState *node, ExprContext *exprCtxt)
 	node->mj_InnerTupleSlot = NULL;
 
 	/*
+	 * If the parameter is used in the filter of the outer table scan, the outer returns
+	 * NULL doesn't mean we can squelch the inner, because next parameter to the outer
+	 * may return a valid tuple. Same as ExecReScanNestLoop.
+	 */
+	node->mj_squelchInner = false;
+
+	/*
 	 * if chgParam of subnodes is not null then plans will be re-scanned by
 	 * first ExecProcNode.
 	 */

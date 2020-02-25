@@ -373,3 +373,34 @@ join t_randomly_dist_table on t_subquery_general.a = t_randomly_dist_table.c;
 reset enable_hashjoin;
 reset enable_mergejoin;
 reset enable_nestloop;
+
+-- test the scenario that the nestloop/merge join is in a subquery and the
+-- parameter passed to the outer of the join. We should not squelch the inner
+-- if the outer doesn't return a qualified tuple, because squelch the inner
+-- would stop the motion and when the next parameter comes in, the inner rescan
+-- can't get the correct data.
+
+create table t_join_squelch_a (a int, b int);
+insert into t_join_squelch_a values (2, 2);
+create table t_join_squelch_b (x int, y int);
+insert into t_join_squelch_b values (2, 2);
+create table t_join_squelch_c(i int);
+insert into t_join_squelch_c values (1), (2);
+analyze t_join_squelch_a;
+analyze t_join_squelch_b;
+analyze t_join_squelch_c;
+
+set enable_nestloop to on;
+set enable_hashjoin to off;
+set enable_mergejoin to off;
+
+explain select (select count(*) from (select 'random' from t_join_squelch_a a join t_join_squelch_b b on a.a = b.x and a.b = c.i) x)d from t_join_squelch_c c;
+select (select count(*) from (select 'random' from t_join_squelch_a a join t_join_squelch_b b on a.a = b.x and a.b = c.i) x)d from t_join_squelch_c c;
+
+set enable_nestloop to off;
+set enable_hashjoin to off;
+set enable_mergejoin to on;
+
+explain select (select count(*) from (select 'random' from t_join_squelch_a a join t_join_squelch_b b on a.a = b.x and a.b = c.i) x)d from t_join_squelch_c c;
+select (select count(*) from (select 'random' from t_join_squelch_a a join t_join_squelch_b b on a.a = b.x and a.b = c.i) x)d from t_join_squelch_c c;
+drop table t_join_squelch_a, t_join_squelch_b, t_join_squelch_c;
