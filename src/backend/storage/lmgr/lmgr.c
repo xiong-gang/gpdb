@@ -659,7 +659,12 @@ XactLockTableWait(TransactionId xid, Relation rel, ItemPointer ctid,
 
 		if (gxid != InvalidDistributedTransactionId)
 		{
-			oldContext = MemoryContextSwitchTo(TopTransactionContext);
+			/*
+			 * allocate waitGxids in TopMemoryContext since it's used in
+			 * 'commit prepared' and the TopTransactionContext has been delete
+			 * after 'prepare'
+			 */
+			oldContext = MemoryContextSwitchTo(TopMemoryContext);
 			MyTmGxactLocal->waitGxids = lappend_int(MyTmGxactLocal->waitGxids, gxid);
 			MemoryContextSwitchTo(oldContext);
 		}

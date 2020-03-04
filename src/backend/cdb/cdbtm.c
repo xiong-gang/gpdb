@@ -308,10 +308,11 @@ notifyCommittedDtxTransactionIsNeeded(void)
 void
 notifyCommittedDtxTransaction(void)
 {
+	ListCell   *l;
+
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 	Assert(DistributedTransactionContext == DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE);
 	Assert(isCurrentDtxActivated());
-	ListCell   *l;
 
 	switch(MyTmGxactLocal->state)
 	{
@@ -1249,12 +1250,13 @@ doDispatchDtxProtocolCommand(DtxProtocolCommand dtxProtocolCommand,
 	totalWaits = 0;
 	for (i = 0; i < resultCount; i++)
 	{
-		int idx;
 		struct pg_result *result = results[i];
 
-		for (idx = 0; idx < result->nWaits; idx++)
-			waitGxids[totalWaits++] = result->waitGxids[idx];
-
+		if (result->nWaits > 0)
+		{
+			memcpy(&waitGxids[totalWaits], result->waitGxids, sizeof(int) * result->nWaits);
+			totalWaits += result->nWaits;
+		}
 		PQclear(result);
 	}
 
@@ -1370,7 +1372,11 @@ resetGxact(void)
 	MyTmGxactLocal->dtxSegmentsMap = NULL;
 	MyTmGxactLocal->dtxSegments = NIL;
 	MyTmGxactLocal->isOnePhaseCommit = false;
-	MyTmGxactLocal->waitGxids = NULL;
+	if (MyTmGxactLocal->waitGxids != NULL)
+	{
+		pfree(MyTmGxactLocal->waitGxids);
+		MyTmGxactLocal->waitGxids = NULL;
+	}
 	setCurrentDtxState(DTX_STATE_NONE);
 }
 

@@ -444,6 +444,7 @@ DistributedLog_GetDistributedXid(
 	ptr += entryno;
 	*distribTimeStamp = ptr->distribTimeStamp;
 	*distribXid = ptr->distribXid;
+	LWLockRelease(DistributedLogControlLock);
 }
 
 /*
