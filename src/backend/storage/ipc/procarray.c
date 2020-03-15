@@ -4832,6 +4832,7 @@ LocalXidGetDistributedXid(TransactionId xid)
 	DistributedTransactionId gxid = InvalidDistributedTransactionId;
 	ProcArrayStruct *arrayP = procArray;
 
+	SIMPLE_FAULT_INJECTOR("before_get_distributed_xid");
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
 	for (index = 0; index < arrayP->numProcs; index++)
 	{
