@@ -2766,6 +2766,7 @@ waitOnGroup(ResGroupData *group)
 	char *new_status = NULL;
 	int len;
 	PGPROC *proc = MyProc;
+	const char *queueStr = " queuing";
 
 	Assert(!LWLockHeldExclusiveByMe(ResGroupLock));
 	Assert(!selfIsAssigned());
@@ -2774,10 +2775,11 @@ waitOnGroup(ResGroupData *group)
 	if (update_process_title)
 	{
 		old_status = get_real_act_ps_display(&len);
-		new_status = (char *) palloc(len + 8 + 1);
+		new_status = (char *) palloc(len + strlen(queueStr) + 1);
 		memcpy(new_status, old_status, len);
-		strcpy(new_status + len, " queuing");
-		set_ps_display(new_status, false);		/* truncate off " queuing" */
+		strcpy(new_status + len, queueStr);
+		set_ps_display(new_status, false);
+		/* truncate off " queuing" */
 		new_status[len] = '\0';
 	}
 
