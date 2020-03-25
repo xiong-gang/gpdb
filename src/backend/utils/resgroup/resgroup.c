@@ -84,7 +84,8 @@ ResManagerMemoryPolicy     	gp_resgroup_memory_policy = RESMANAGER_MEMORY_POLICY
 bool						gp_log_resgroup_memory = false;
 int							gp_resgroup_memory_policy_auto_fixed_mem;
 bool						gp_resgroup_print_operator_memory_limits = false;
-int							memory_spill_ratio=20;
+int							memory_spill_ratio = 20;
+int							gp_resource_group_queuing_timeout = 0;
 
 /*
  * Data structures
@@ -2796,6 +2797,9 @@ SwitchResGroupOnSegment(const char *buf, int len)
 static void
 waitOnGroup(ResGroupData *group)
 {
+	int64 timeout = -1;
+	TimestampTz groupWaitStart;
+	TimestampTz curTime;
 	PGPROC *proc = MyProc;
 
 	Assert(!LWLockHeldExclusiveByMe(ResGroupLock));
@@ -2809,6 +2813,7 @@ waitOnGroup(ResGroupData *group)
 	 * This is used for interrupt cleanup, similar to lockAwaited in ProcSleep
 	 */
 	groupAwaited = group;
+	groupWaitStart = GetCurrentTimestamp();
 
 	/*
 	 * Make sure we have released all locks before going to sleep, to eliminate
@@ -2824,7 +2829,26 @@ waitOnGroup(ResGroupData *group)
 
 			if (!procIsWaiting(proc))
 				break;
-			WaitLatch(&proc->procLatch, WL_LATCH_SET | WL_POSTMASTER_DEATH, -1);
+
+			if (gp_resource_group_queuing_timeout > 0)
+			{
+				long secs;
+				int usecs;
+
+				curTime = GetCurrentTimestamp();
+				if (TimestampDifferenceExceeds(groupWaitStart, curTime, gp_resource_group_queuing_timeout))
+					ereport(ERROR,
+							(errcode(ERRCODE_QUERY_CANCELED),
+							 errmsg("canceling statement due to resource group waiting timeout")));
+
+				TimestampDifference(groupWaitStart, curTime, &secs, &usecs);
+				timeout = gp_resource_group_queuing_timeout - (secs * 1000 + usecs / 1000);
+				WaitLatch(&proc->procLatch, WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, (long)timeout);
+			}
+			else
+			{
+				WaitLatch(&proc->procLatch, WL_LATCH_SET | WL_POSTMASTER_DEATH, -1);
+			}
 		}
 	}
 	PG_CATCH();
