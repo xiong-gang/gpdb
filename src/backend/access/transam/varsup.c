@@ -188,7 +188,6 @@ GetNewTransactionId(bool isSubXact)
 	ExtendCLOG(xid);
 	ExtendCommitTs(xid);
 	ExtendSUBTRANS(xid);
-	DistributedLog_Extend(xid);
 
 	/*
 	 * Now advance the nextXid counter.  This must not happen until after we

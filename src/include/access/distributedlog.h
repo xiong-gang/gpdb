@@ -31,20 +31,6 @@
 
 #include "access/xlog.h"
 
-/*
- * The full binary representation of the distributed transaction id.
- * The DTM start time and the distributed xid.
- */
-typedef struct DistributedLogEntry
-{
-	DistributedTransactionTimeStamp distribTimeStamp;
-	DistributedTransactionId distribXid;
-
-} DistributedLogEntry;
-
-/* Number of SLRU buffers to use for the distributed log */
-#define NUM_DISTRIBUTEDLOG_BUFFERS	8
-
 extern void DistributedLog_SetCommittedTree(TransactionId xid, int nxids, TransactionId *xids,
 								DistributedTransactionTimeStamp	distribTimeStamp,
 								DistributedTransactionId distribXid,
@@ -64,23 +50,9 @@ extern TransactionId DistributedLog_GetOldestXmin(TransactionId oldestLocalXmin)
 
 extern Size DistributedLog_ShmemSize(void);
 extern void DistributedLog_ShmemInit(void);
-extern void DistributedLog_BootStrap(void);
-extern void DistributedLog_Startup(
-					   TransactionId oldestActiveXid,
-					   TransactionId nextXid);
-extern void DistributedLog_Shutdown(void);
 extern void DistributedLog_CheckPoint(void);
-extern void DistributedLog_Extend(TransactionId newestXid);
-extern bool DistributedLog_GetLowWaterXid(
-							  TransactionId *lowWaterXid);
 extern void DistributedLog_InitOldestXmin(void);
 
-/* XLOG stuff */
-#define DISTRIBUTEDLOG_ZEROPAGE		0x00
-#define DISTRIBUTEDLOG_TRUNCATE		0x10
-
-extern void DistributedLog_redo(XLogReaderState *record);
-extern void DistributedLog_desc(StringInfo buf, XLogReaderState *record);
 extern const char *DistributedLog_identify(uint8 info);
 extern void DistributedLog_GetDistributedXid(
 				TransactionId 						localXid,

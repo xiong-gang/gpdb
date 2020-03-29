@@ -5037,7 +5037,6 @@ BootStrapXLOG(void)
 	BootStrapCommitTs();
 	BootStrapSUBTRANS();
 	BootStrapMultiXact();
-	DistributedLog_BootStrap();
 
 	pfree(buffer);
 }
@@ -7761,8 +7760,7 @@ StartupXLOG(void)
 	{
 		StartupCLOG();
 		StartupSUBTRANS(oldestActiveXID);
-		DistributedLog_Startup(oldestActiveXID,
-							   ShmemVariableCache->nextXid);
+		DistributedLog_InitOldestXmin();
 	}
 
 	/*
@@ -8450,7 +8448,6 @@ ShutdownXLOG(int code pg_attribute_unused() , Datum arg pg_attribute_unused() )
 	ShutdownCommitTs();
 	ShutdownSUBTRANS();
 	ShutdownMultiXact();
-	DistributedLog_Shutdown();
 }
 
 /*
