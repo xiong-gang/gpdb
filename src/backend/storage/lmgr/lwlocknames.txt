@@ -58,5 +58,4 @@ ErrorLogLock						48
 SessionStateLock					49
 RelfilenodeGenLock					50
 WorkFileManagerLock					51
-DistributedLogTruncateLock			52
-TwophaseCommitLock				53
+TwophaseCommitLock				52
