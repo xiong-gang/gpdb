@@ -30,13 +30,6 @@ DistributedLog_desc(StringInfo buf, XLogReaderState *record)
 		memcpy(&page, rec, sizeof(int));
 		appendStringInfo(buf, "zeropage: %d", page);
 	}
-	else if (info == DISTRIBUTEDLOG_TRUNCATE)
-	{
-		int			page;
-
-		memcpy(&page, rec, sizeof(int));
-		appendStringInfo(buf, "truncate before: %d", page);
-	}
 	else
 		appendStringInfo(buf, "UNKNOWN");
 }
@@ -51,8 +44,8 @@ DistributedLog_identify(uint8 info)
 		case DISTRIBUTEDLOG_ZEROPAGE:
 			id = "DISTRIBUTEDLOG_ZEROPAGE";
 			break;
-		case DISTRIBUTEDLOG_TRUNCATE:
-			id = "DISTRIBUTEDLOG_TRUNCATE";
+		default:
+			id = "UNKNOWN";
 			break;
 	}
 

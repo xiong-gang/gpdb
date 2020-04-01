@@ -40,8 +40,6 @@ MPP_20426(void **state, TransactionId nextXid)
 	ShmemVariableCache = &data;
 	ShmemVariableCache->oldestXid = 3;
 	ShmemVariableCache->latestCompletedXid = 4;
-	DistributedLogShmem dls;
-	DistributedLogShared = &dls;
 
 	/* Setup DistributedLogCtl */
 	DistributedLogCtl->shared = (SlruShared) malloc(sizeof(SlruSharedData));
@@ -68,6 +66,10 @@ MPP_20426(void **state, TransactionId nextXid)
 	expect_any(SimpleLruReadPage, write_ok);
 	expect_value(SimpleLruReadPage, xid, nextXid);
 	will_return(SimpleLruReadPage, 0);
+
+	expect_value(SimpleLruTruncateWithLock, ctl, DistributedLogCtl);
+	expect_any(SimpleLruTruncateWithLock, cutoffPage);
+	will_be_called(SimpleLruTruncateWithLock);
 
 	expect_value(LWLockRelease, lock, DistributedLogControlLock);
 	will_be_called(LWLockRelease);
@@ -127,6 +129,10 @@ setup(TransactionId nextXid)
 	expect_any(SimpleLruReadPage, write_ok);
 	expect_value(SimpleLruReadPage, xid, nextXid);
 	will_return(SimpleLruReadPage, 0);
+
+	expect_value(SimpleLruTruncateWithLock, ctl, DistributedLogCtl);
+	expect_any(SimpleLruTruncateWithLock, cutoffPage);
+	will_be_called(SimpleLruTruncateWithLock);
 
 	expect_value(LWLockRelease, lock, DistributedLogControlLock);
 	will_be_called(LWLockRelease);

@@ -118,6 +118,15 @@ typedef struct VariableCacheData
 										 * aborted */
 	TransactionId latestCompletedDxid;	/* newest distributed XID that has
 										   committed or aborted */
+	/*
+	 * Oldest local XID that is still visible to some distributed snapshot.
+	 *
+	 * This is initialized by DistributedLog_InitOldestXmin() after
+	 * postmaster startup, and advanced whenever we receive a new
+	 * distributed snapshot from the QD (or in the QD itself, whenever
+	 * we compute a new snapshot).
+	 */
+	volatile TransactionId	oldestXmin;
 } VariableCacheData;
 
 typedef VariableCacheData *VariableCache;

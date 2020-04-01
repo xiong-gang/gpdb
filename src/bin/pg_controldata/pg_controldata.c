@@ -238,6 +238,8 @@ main(int argc, char *argv[])
 		   ControlFile->checkPointCopy.oldestXidDB);
 	printf(_("Latest checkpoint's oldestActiveXID:  %u\n"),
 		   ControlFile->checkPointCopy.oldestActiveXid);
+	printf(_("Latest checkpoint's oldestXmin:  %u\n"),
+		   ControlFile->checkPointCopy.oldestXmin);
 	printf(_("Latest checkpoint's oldestMultiXid:   %u\n"),
 		   ControlFile->checkPointCopy.oldestMulti);
 	printf(_("Latest checkpoint's oldestMulti's DB: %u\n"),

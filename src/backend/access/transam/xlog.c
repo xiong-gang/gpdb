@@ -4936,6 +4936,7 @@ BootStrapXLOG(void)
 	checkPoint.newestCommitTsXid = InvalidTransactionId;
 	checkPoint.time = (pg_time_t) time(NULL);
 	checkPoint.oldestActiveXid = InvalidTransactionId;
+	checkPoint.oldestXmin = InvalidTransactionId;
 
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
@@ -6636,6 +6637,8 @@ StartupXLOG(void)
 					 checkPoint.newestCommitTsXid);
 	XLogCtl->ckptXidEpoch = checkPoint.nextXidEpoch;
 	XLogCtl->ckptXid = checkPoint.nextXid;
+	if (!IsBootstrapProcessingMode())
+		DistributedLog_SetOldestXmin(checkPoint.oldestXmin);
 
 	/*
 	 * Initialize replication slots, before there's a chance to remove
@@ -6912,7 +6915,7 @@ StartupXLOG(void)
 			 */
 			StartupCLOG();
 			StartupSUBTRANS(oldestActiveXID);
-			DistributedLog_Startup(oldestActiveXID,
+			DistributedLog_Startup(ShmemVariableCache->oldestXmin,
 								   ShmemVariableCache->nextXid);
 
 			/*
@@ -7761,7 +7764,7 @@ StartupXLOG(void)
 	{
 		StartupCLOG();
 		StartupSUBTRANS(oldestActiveXID);
-		DistributedLog_Startup(oldestActiveXID,
+		DistributedLog_Startup(ShmemVariableCache->oldestXmin,
 							   ShmemVariableCache->nextXid);
 	}
 
@@ -8726,6 +8729,9 @@ CreateCheckPoint(int flags)
 		checkPoint.oldestActiveXid = GetOldestActiveTransactionId();
 	else
 		checkPoint.oldestActiveXid = InvalidTransactionId;
+
+	if (!IS_QUERY_DISPATCHER())
+		checkPoint.oldestXmin = DistributedLog_GetOldestXmin(InvalidTransactionId);
 
 	/*
 	 * We must block concurrent insertions while examining insert state to

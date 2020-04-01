@@ -61,6 +61,7 @@ extern TransactionId DistributedLog_AdvanceOldestXmin(TransactionId oldestInProg
 								 DistributedTransactionTimeStamp distribTimeStamp,
 								 DistributedTransactionId oldestDistribXid);
 extern TransactionId DistributedLog_GetOldestXmin(TransactionId oldestLocalXmin);
+extern void DistributedLog_SetOldestXmin(TransactionId oldestXmin);
 
 extern Size DistributedLog_ShmemSize(void);
 extern void DistributedLog_ShmemInit(void);
@@ -76,7 +77,6 @@ extern bool DistributedLog_GetLowWaterXid(
 
 /* XLOG stuff */
 #define DISTRIBUTEDLOG_ZEROPAGE		0x00
-#define DISTRIBUTEDLOG_TRUNCATE		0x10
 
 extern void DistributedLog_redo(XLogReaderState *record);
 extern void DistributedLog_desc(StringInfo buf, XLogReaderState *record);

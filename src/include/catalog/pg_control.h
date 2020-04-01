@@ -65,6 +65,9 @@ typedef struct CheckPoint
 	 */
 	TransactionId oldestActiveXid;
 
+	/* distributed oldestXmin */
+	TransactionId oldestXmin;
+
 	/* IN XLOG RECORD, MORE DATA FOLLOWS AT END OF STRUCT FOR DTM CHECKPOINT */
 } CheckPoint;
 
