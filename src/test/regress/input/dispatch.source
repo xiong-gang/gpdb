@@ -115,6 +115,17 @@ DROP TABLE public."my table";
 CREATE TABLE "my table" (id integer);
 DROP TABLE "my table";
 
+-- test ALTER DATABASE SET FROM CURRENT
+SHOW search_path;
+ALTER DATABASE "dispatch test db" RESET ALL;
+\c
+SHOW search_path;
+SET search_path="my schema", public;
+SHOW search_path;
+ALTER DATABASE "dispatch test db" SET search_path FROM CURRENT;
+\c
+SHOW search_path;
+
 -- Clean up
 \c dispatch_test_db
 DROP DATABASE "dispatch test db";
