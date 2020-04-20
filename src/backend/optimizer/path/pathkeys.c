@@ -1470,7 +1470,7 @@ make_pathkeys_for_groupclause(PlannerInfo *root,
 			GroupClause *gc = (GroupClause *) node;
 
 			sortkey = (Expr *) get_sortgroupclause_expr(gc, tlist);
-			pathkey = make_pathkey_from_sortinfo(root, sortkey, gc->sortop, gc->nulls_first, false, 0);
+			pathkey = make_pathkey_from_sortinfo(root, sortkey, gc->sortop, gc->nulls_first, gc->tleSortGroupRef, false);
 
 			/*
 			 * Similar to SortClauses, the pathkey becomes a one-elment
