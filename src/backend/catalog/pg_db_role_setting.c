@@ -241,7 +241,7 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 		else if (valuestr == NULL)
 			appendStringInfo(&buffer, "RESET %s", quote_identifier(setstmt->name));
 		else if (setstmt->kind ==  VAR_SET_CURRENT)
-			appendStringInfo(&buffer, "SET %s TO %s", quote_identifier(setstmt->name), quote_identifier(valuestr));
+			appendStringInfo(&buffer, "SET %s TO %s", quote_identifier(setstmt->name), quote_literal_cstr(valuestr));
 		else
 		{
 			ListCell   *l;

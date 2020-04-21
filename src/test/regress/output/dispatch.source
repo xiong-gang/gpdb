@@ -186,6 +186,18 @@ SHOW search_path;
  "my schema", public
 (1 row)
 
+SELECT 0 as gp_segment_id, setconfig FROM gp_dist_random('pg_db_role_setting')
+WHERE setdatabase = (SELECT oid FROM pg_database WHERE datname='dispatch test db') and gp_segment_id = 0
+UNION
+SELECT -1 as gp_segment_id, setconfig FROM pg_db_role_setting
+WHERE setdatabase = (SELECT oid FROM pg_database WHERE datname='dispatch test db')
+ORDER BY gp_segment_id;
+ gp_segment_id |                   setconfig                   
+---------------+-----------------------------------------------
+            -1 | {"search_path=\"my schema\", public"}
+             0 | {"search_path=\"\"\"my schema\"\", public\""}
+(2 rows)
+
 -- Clean up
 \c dispatch_test_db
 DROP DATABASE "dispatch test db";
