@@ -26,7 +26,7 @@
 #include "miscadmin.h"
 #include "storage/lmgr.h"
 #include "utils/memutils.h"
-#include "utils/snapmgr.h"
+#include "access/genam.h"
 
 
 PG_MODULE_MAGIC;
@@ -88,6 +88,9 @@ typedef struct BtreeLevel
 	/* Is this level reported as "true" root level by meta page? */
 	bool		istruerootlevel;
 } BtreeLevel;
+
+Datum bt_index_check(PG_FUNCTION_ARGS);
+Datum bt_index_parent_check(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(bt_index_check);
 PG_FUNCTION_INFO_V1(bt_index_parent_check);
@@ -168,6 +171,14 @@ bt_index_check_internal(Oid indrelid, bool parentcheck)
 		lockmode = AccessShareLock;
 
 	/*
+	 * GPDB: when backport to 5x, if the indrelid doesn't exist or if it is a
+	 * heap table, IndexGetRelation will give some confusing error messages.
+	 * So open and close the index to error out earlier.
+	 */
+	indrel = index_open(indrelid, NoLock);
+	index_close(indrel, NoLock);
+
+	/*
 	 * We must lock table before index to avoid deadlocks.  However, if the
 	 * passed indrelid isn't an index then IndexGetRelation() will fail.
 	 * Rather than emitting a not-very-helpful error message, postpone
@@ -175,7 +186,7 @@ bt_index_check_internal(Oid indrelid, bool parentcheck)
 	 *
 	 * In hot standby mode this will raise an error when parentcheck is true.
 	 */
-	heapid = IndexGetRelation(indrelid, true);
+	heapid = IndexGetRelation(indrelid);
 	if (OidIsValid(heapid))
 		heaprel = heap_open(heapid, lockmode);
 	else
@@ -195,7 +206,7 @@ bt_index_check_internal(Oid indrelid, bool parentcheck)
 	 * examined during verification currently, a recheck still seems like a
 	 * good idea.
 	 */
-	if (heaprel == NULL || heapid != IndexGetRelation(indrelid, false))
+	if (heaprel == NULL || heapid != IndexGetRelation(indrelid))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_TABLE),
 				 errmsg("could not open parent table of index %s",
@@ -234,13 +245,6 @@ btree_index_checkable(Relation rel)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("only B-Tree indexes are supported as targets for verification"),
 				 errdetail("Relation \"%s\" is not a B-Tree index.",
-						   RelationGetRelationName(rel))));
-
-	if (RELATION_IS_OTHER_TEMP(rel))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot access temporary tables of other sessions"),
-				 errdetail("Index \"%s\" is associated with temporary relation.",
 						   RelationGetRelationName(rel))));
 
 	if (!IndexIsValid(rel->rd_index))
@@ -317,7 +321,7 @@ bt_check_every_level(Relation rel, bool readonly)
 				(errcode(ERRCODE_NO_DATA),
 				 errmsg("harmless fast root mismatch in index %s",
 						RelationGetRelationName(rel)),
-				 errdetail_internal("Fast root block %u (level %u) differs from true root block %u (level %u).",
+				 errdetail("Fast root block %u (level %u) differs from true root block %u (level %u).",
 									metad->btm_fastroot, metad->btm_fastlevel,
 									metad->btm_root, metad->btm_level)));
 
@@ -487,8 +491,8 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("left link/right link pair in index \"%s\" not in agreement",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Block=%u left block=%u left link from block=%u.",
-										current, leftcurrent, opaque->btpo_prev)));
+					 errdetail("Block=%u left block=%u left link from block=%u.",
+								  current, leftcurrent, opaque->btpo_prev)));
 
 		/* Check level, which must be valid for non-ignorable page */
 		if (level.level != opaque->btpo.level)
@@ -496,8 +500,8 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("leftmost down link for level points to block in index \"%s\" whose level is not one level down",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Block pointed to=%u expected level=%u level in pointed to block=%u.",
-										current, level.level, opaque->btpo.level)));
+					 errdetail("Block pointed to=%u expected level=%u level in pointed to block=%u.",
+								 current, level.level, opaque->btpo.level)));
 
 		/* Verify invariants for page -- all important checks occur here */
 		bt_target_page_check(state);
@@ -624,12 +628,12 @@ bt_target_page_check(BtreeCheckState *state)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("high key invariant violated for index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Index tid=%s points to %s tid=%s page lsn=%X/%X.",
+					 errdetail("Index tid=%s points to %s tid=%s page lsn=%X/%X.",
 										itid,
 										P_ISLEAF(topaque) ? "heap" : "index",
 										htid,
-										(uint32) (state->targetlsn >> 32),
-										(uint32) state->targetlsn)));
+										state->targetlsn.xlogid,
+										state->targetlsn.xrecoff)));
 		}
 
 		/*
@@ -665,17 +669,17 @@ bt_target_page_check(BtreeCheckState *state)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("item order invariant violated for index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Lower index tid=%s (points to %s tid=%s) "
-										"higher index tid=%s (points to %s tid=%s) "
-										"page lsn=%X/%X.",
-										itid,
-										P_ISLEAF(topaque) ? "heap" : "index",
-										htid,
-										nitid,
-										P_ISLEAF(topaque) ? "heap" : "index",
-										nhtid,
-										(uint32) (state->targetlsn >> 32),
-										(uint32) state->targetlsn)));
+			   errdetail("Lower index tid=%s (points to %s tid=%s) "
+								  "higher index tid=%s (points to %s tid=%s) "
+								  "page lsn=%X/%X.",
+								  itid,
+								  P_ISLEAF(topaque) ? "heap" : "index",
+								  htid,
+								  nitid,
+								  P_ISLEAF(topaque) ? "heap" : "index",
+								  nhtid,
+								  state->targetlsn.xlogid,
+								  state->targetlsn.xrecoff)));
 		}
 
 		/*
@@ -728,10 +732,10 @@ bt_target_page_check(BtreeCheckState *state)
 						(errcode(ERRCODE_INDEX_CORRUPTED),
 						 errmsg("cross page item order invariant violated for index \"%s\"",
 								RelationGetRelationName(state->rel)),
-						 errdetail_internal("Last item on page tid=(%u,%u) page lsn=%X/%X.",
+						 errdetail("Last item on page tid=(%u,%u) page lsn=%X/%X.",
 											state->targetblock, offset,
-											(uint32) (state->targetlsn >> 32),
-											(uint32) state->targetlsn)));
+											state->targetlsn.xlogid,
+											state->targetlsn.xrecoff)));
 			}
 		}
 
@@ -824,8 +828,8 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 		ereport(DEBUG1,
 				(errcode(ERRCODE_NO_DATA),
 				 errmsg("level %u leftmost page of index \"%s\" was found deleted or half dead",
-						opaque->btpo.level, RelationGetRelationName(state->rel)),
-				 errdetail_internal("Deleted page found when building scankey from right sibling.")));
+					opaque->btpo.level, RelationGetRelationName(state->rel)),
+				 errdetail("Deleted page found when building scankey from right sibling.")));
 
 		/* Be slightly more pro-active in freeing this memory, just in case */
 		pfree(rightpage);
@@ -1052,10 +1056,10 @@ bt_downlink_check(BtreeCheckState *state, BlockNumber childblock,
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("down-link lower bound invariant violated for index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Parent block=%u child index tid=(%u,%u) parent page lsn=%X/%X.",
-										state->targetblock, childblock, offset,
-										(uint32) (state->targetlsn >> 32),
-										(uint32) state->targetlsn)));
+					 errdetail("Parent block=%u child index tid=(%u,%u) parent page lsn=%X/%X.",
+									  state->targetblock, childblock, offset,
+									  state->targetlsn.xlogid,
+									  state->targetlsn.xrecoff)));
 	}
 
 	pfree(child);
@@ -1173,14 +1177,18 @@ palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum)
 	Page		page;
 	BTPageOpaque opaque;
 
+	MIRROREDLOCK_BUFMGR_DECLARE;
+
 	page = palloc(BLCKSZ);
+
+	// -------- MirroredLock ----------
+	MIRROREDLOCK_BUFMGR_LOCK;
 
 	/*
 	 * We copy the page into local storage to avoid holding pin on the buffer
 	 * longer than we must.
 	 */
-	buffer = ReadBufferExtended(state->rel, MAIN_FORKNUM, blocknum, RBM_NORMAL,
-								state->checkstrategy);
+	buffer = ReadBufferWithStrategy(state->rel, blocknum, state->checkstrategy);
 	LockBuffer(buffer, BT_READ);
 
 	/*
@@ -1192,6 +1200,8 @@ palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum)
 	/* Only use copy of page in palloc()'d memory */
 	memcpy(page, BufferGetPage(buffer), BLCKSZ);
 	UnlockReleaseBuffer(buffer);
+	MIRROREDLOCK_BUFMGR_UNLOCK;
+	// -------- MirroredLock ----------
 
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
