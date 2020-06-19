@@ -248,43 +248,6 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid, bool isCommit)
 {
 	bool needNotifyCommittedDtxTransaction;
 
-	/*
-	 * MyProc->localDistribXactData is only used for debugging purpose by
-	 * backend itself on segments only hence okay to modify without holding
-	 * the lock.
-	 */
-	if (MyProc->localDistribXactData.state != LOCALDISTRIBXACT_STATE_NONE)
-	{
-		switch (DistributedTransactionContext)
-		{
-			case DTX_CONTEXT_QE_TWO_PHASE_EXPLICIT_WRITER:
-			case DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER:
-			case DTX_CONTEXT_QE_AUTO_COMMIT_IMPLICIT:
-				LocalDistribXact_ChangeState(MyProc,
-											 isCommit ?
-											 LOCALDISTRIBXACT_STATE_COMMITTED :
-											 LOCALDISTRIBXACT_STATE_ABORTED);
-				break;
-
-			case DTX_CONTEXT_QE_READER:
-			case DTX_CONTEXT_QE_ENTRY_DB_SINGLETON:
-				// QD or QE Writer will handle it.
-				break;
-
-			case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
-			case DTX_CONTEXT_QD_RETRY_PHASE_2:
-			case DTX_CONTEXT_QE_PREPARED:
-			case DTX_CONTEXT_QE_FINISH_PREPARED:
-				elog(PANIC, "Unexpected distribute transaction context: '%s'",
-					 DtxContextToString(DistributedTransactionContext));
-				break;
-
-			default:
-				elog(PANIC, "Unrecognized DTX transaction context: %d",
-					 (int) DistributedTransactionContext);
-		}
-	}
-
 	if (isCommit && notifyCommittedDtxTransactionIsNeeded())
 		needNotifyCommittedDtxTransaction = true;
 	else
@@ -351,6 +314,43 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid, bool isCommit)
 		Assert(proc->subxids.overflowed == false);
 	}
 
+	/*
+	 * MyProc->localDistribXactData is used by backend itself hence okay to
+	 * modify without holding the lock.
+	 */
+	if (MyProc->localDistribXactData.state != LOCALDISTRIBXACT_STATE_NONE)
+	{
+		switch (DistributedTransactionContext)
+		{
+			case DTX_CONTEXT_QE_TWO_PHASE_EXPLICIT_WRITER:
+			case DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER:
+			case DTX_CONTEXT_QE_AUTO_COMMIT_IMPLICIT:
+			case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
+			case DTX_CONTEXT_QD_RETRY_PHASE_2:
+			case DTX_CONTEXT_LOCAL_ONLY:
+			case DTX_CONTEXT_QE_FINISH_PREPARED:
+				LocalDistribXact_ChangeState(MyProc,
+											 isCommit ?
+											 LOCALDISTRIBXACT_STATE_COMMITTED :
+											 LOCALDISTRIBXACT_STATE_ABORTED);
+				break;
+
+			case DTX_CONTEXT_QE_READER:
+			case DTX_CONTEXT_QE_ENTRY_DB_SINGLETON:
+				// QD or QE Writer will handle it.
+				break;
+
+			case DTX_CONTEXT_QE_PREPARED:
+				elog(PANIC, "Unexpected distribute transaction context: '%s'",
+					 DtxContextToString(DistributedTransactionContext));
+				break;
+
+			default:
+				elog(PANIC, "Unrecognized DTX transaction context: %d",
+					 (int) DistributedTransactionContext);
+		}
+	}
+
 	return needNotifyCommittedDtxTransaction;
 }
 
@@ -375,8 +375,6 @@ ProcArrayClearTransaction(PGPROC *proc, bool commit)
 	 */
 	proc->xid = InvalidTransactionId;
 	proc->xmin = InvalidTransactionId;
-
-	proc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
 
 	/* redundant, but just in case */
 	proc->vacuumFlags &= ~PROC_VACUUM_STATE_MASK;

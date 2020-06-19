@@ -252,6 +252,8 @@ typedef enum FaultInjectorIdentifier_e {
 
 	DynamicIndexScanContextReset,
 
+	AbortAfterProcarrayEnd,
+
 	/* INSERT has to be done before that line */
 	FaultInjectorIdMax,
 	

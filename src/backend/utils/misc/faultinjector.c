@@ -371,6 +371,8 @@ FaultInjectorIdentifierEnumToString[] = {
 		/* inject fault inside dynamic index scan after context reset */
 	_("dynamic_index_scan_context_reset"),
 		/* inject fault when creating new TOAST tables, to modify the chunk size */
+	_("abort_after_procarray_end"),
+		/* inject fault in AbortTransaction after ProcArrayEndTransaction */
 	_("not recognized"),
 };
 
@@ -1082,6 +1084,7 @@ FaultInjector_NewHashEntry(
 			case DecreaseToastMaxChunkSize:
 			case ProcessStartupPacketFault:
 			case DynamicIndexScanContextReset:
+			case AbortAfterProcarrayEnd:
 
 				break;
 			default:

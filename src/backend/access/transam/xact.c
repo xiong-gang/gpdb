@@ -1762,7 +1762,9 @@ RecordTransactionAbort(bool isSubXact)
 	 * wrote a commit record for it, there's no turning back. The Distributed
 	 * Transaction Manager will take care of completing the transaction for us.
 	 */
-	if (isQEReader || getCurrentDtxState() == DTX_STATE_NOTIFYING_COMMIT_PREPARED)
+	if (isQEReader ||
+		getCurrentDtxState() == DTX_STATE_NOTIFYING_COMMIT_PREPARED ||
+		MyProc->localDistribXactData.state == LOCALDISTRIBXACT_STATE_ABORTED)
 		xid = InvalidTransactionId;
 	else
 		xid = GetCurrentTransactionIdIfAny();
@@ -2315,6 +2317,12 @@ StartTransaction(void)
 		case DTX_CONTEXT_QD_RETRY_PHASE_2:
 		case DTX_CONTEXT_QE_FINISH_PREPARED:
 		{
+			if (DistributedTransactionContext == DTX_CONTEXT_LOCAL_ONLY &&
+				Gp_role == GP_ROLE_UTILITY)
+			{
+				LocalDistribXactData *ele = &MyProc->localDistribXactData;
+				ele->state = LOCALDISTRIBXACT_STATE_ACTIVE;
+			}
 			/*
 			 * MPP: we're in utility-mode or a QE starting a pure-local
 			 * transaction without any synchronization to segmates!
@@ -2345,6 +2353,8 @@ StartTransaction(void)
 						(errmsg("setting SharedLocalSnapshotSlot->startTimestamp = " INT64_FORMAT "[old=" INT64_FORMAT "])",
 								stmtStartTimestamp, oldStartTimestamp)));
 			}
+			LocalDistribXactData *ele = &MyProc->localDistribXactData;
+			ele->state = LOCALDISTRIBXACT_STATE_ACTIVE;
 		}
 		break;
 
@@ -2803,6 +2813,8 @@ CommitTransaction(void)
 	 */
 	MyProc->inCommit = false;
 	MyProc->lxid = InvalidLocalTransactionId;
+
+	MyProc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
 
 	AtEOXact_MultiXact();
 
@@ -3286,6 +3298,7 @@ AbortTransaction(void)
 	 */
 	ProcArrayEndTransaction(MyProc, latestXid, false);
 
+	SIMPLE_FAULT_INJECTOR(AbortAfterProcarrayEnd);
 	/*
 	 * Post-abort cleanup.	See notes in CommitTransaction() concerning
 	 * ordering.  We can skip all of it if the transaction failed before
