@@ -3027,6 +3027,40 @@ def checkMirroringMatching():
         GV.checkStatus = False
         myprint('  Execution error: ' + str(ex))
 
+def checkAOSegVpinfo():
+    db_connection = connect2(GV.cfg[1], utilityMode=True)
+    aoseg_query = """
+       SELECT a.relid, a.segrelid, cl.relname
+       FROM (SELECT relid, segrelid FROM pg_appendonly p LEFT JOIN pg_class c ON p.relid = c.oid) a
+       LEFT JOIN pg_class cl ON a.segrelid = cl.oid;
+    """
+
+    try:
+        # Read the list of aoseg tables from the database
+        curs = db_connection.query(aoseg_query)
+
+        for [relid, segrelid, relname] in curs.getresult():
+            qry = "SELECT count(*) FROM pg_attribute WHERE attrelid=%d AND attnum > 0;" % (relid)
+            att_count = db_connection.query(qry).getresult()[0]
+
+            qry = "SELECT distinct(length(vpinfo)) FROM pg_aoseg.%s;" % (relname)
+            vpinfo_curs = db_connection.query(qry)
+            nrows = vpinfo_curs.ntuples()
+            if nrows == 0:
+                continue
+            elif nrows > 0:
+                setError(ERROR_NOREPAIR)
+                myprint("[ERROR]: inconsistent vpinfo in '%s' on segment %d" % (relname, GV.cfg[1]['content']))
+                continue
+
+            vpinfo_length = vpinfo_curs.getresult()[0][0]
+            if vpinfo_length != 12 + att_count * 16:
+                setError(ERROR_NOREPAIR)
+                myprint("[ERROR]: vpinfo in '%s' doesn't match pg_attribute on segment %d" % (relname, GV.cfg[1]['content']))
+    except Exception, e:
+        setError(ERROR_NOREPAIR)
+        myprint('  Execution error: ' + str(e))
+
 # -------------------------------------------------------------------------------
 
 # Exclude these tuples from the catalog table scan
@@ -3615,6 +3649,14 @@ all_checks = {
             "fn": lambda: checkMirroringMatching(),
             "version": 'main',
             "order": 16,
+            "online": True
+        },
+    "aoseg_table":
+        {
+            "description": "Check that vpinfo in aoseg table is consistent with pg_attribute",
+            "fn": lambda: checkAOSegVpinfo(),
+            "version": 'main',
+            "order": 17,
             "online": True
         }
 }
