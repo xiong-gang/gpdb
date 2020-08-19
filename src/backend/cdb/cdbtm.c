@@ -2650,6 +2650,7 @@ releaseGxact_UnderLocks(void)
 {
 	int			i;
 	int			curr;
+	int			numGxacts;
 
 	if (currentGxact == NULL)
 	{
@@ -2661,8 +2662,8 @@ releaseGxact_UnderLocks(void)
 		 currentGxact->gid, currentGxact->debugIndex);
 
 	/* find slot of current transaction */
-	curr = *shmNumGxacts;	/* A bad value we can safely test. */
-	for (i = 0; i < *shmNumGxacts; i++)
+	numGxacts = curr = *shmNumGxacts;	/* A bad value we can safely test. */
+	for (i = 0; i < numGxacts; i++)
 	{
 		if (shmGxactArray[i] == currentGxact)
 		{
@@ -2671,6 +2672,10 @@ releaseGxact_UnderLocks(void)
 		}
 	}
 
+	if (curr == numGxacts)
+		ereport(PANIC, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("Cannot find my global transaction in the array")));
+
 	/* move this to the next available slot */
 	(*shmNumGxacts)--;
 	if (curr != *shmNumGxacts)
@@ -2678,6 +2683,10 @@ releaseGxact_UnderLocks(void)
 		shmGxactArray[curr] = shmGxactArray[*shmNumGxacts];
 		shmGxactArray[*shmNumGxacts] = currentGxact;
 	}
+
+	if (*shmNumGxacts != numGxacts - 1)
+		ereport(PANIC, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("Shared memory corrupted")));
 
 	currentGxact = NULL;
 }
