@@ -1634,7 +1634,7 @@ tmShmemSize(void)
 		return 0;
 
 	return
-		MAXALIGN(TMCONTROLBLOCK_BYTES(max_tm_gxacts) + max_tm_gxacts * sizeof(TMGXACT));
+		MAXALIGN(TMCONTROLBLOCK_BYTES(max_tm_gxacts));
 }
 
 
@@ -1676,6 +1676,7 @@ tmShmemInit(void)
 			elog(PANIC, "cannot generate global transaction id");
 		}
 
+		MemSet(shared, 0, tmShmemSize());
 		*shmDistribTimeStamp = (DistributedTransactionTimeStamp)t;
   		elog(DEBUG1, "DTM start timestamp %u", *shmDistribTimeStamp);
 
