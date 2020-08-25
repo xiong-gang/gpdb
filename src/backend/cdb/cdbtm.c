@@ -1634,7 +1634,7 @@ tmShmemSize(void)
 		return 0;
 
 	return
-		MAXALIGN(TMCONTROLBLOCK_BYTES(max_tm_gxacts));
+		MAXALIGN(TMCONTROLBLOCK_BYTES(max_tm_gxacts) + max_tm_gxacts * sizeof(TMGXACT));
 }
 
 
@@ -1828,9 +1828,10 @@ isMppTxOptions_ExplicitBegin(int txnOptions)
 void
 getTmLock(void)
 {
-
 	if (ControlLockCount++ == 0)
 		LWLockAcquire(shmControlLock, LW_EXCLUSIVE);
+
+	Assert(LWLockHeldByMe(shmControlLock));
 }
 
 /* release tm lw lock */
@@ -1839,7 +1840,6 @@ releaseTmLock(void)
 {
 	if (--ControlLockCount == 0)
 		LWLockRelease(shmControlLock);
-
 }
 
 /*
@@ -2675,7 +2675,9 @@ releaseGxact_UnderLocks(void)
 
 	if (curr == numGxacts)
 		ereport(PANIC, (errcode(ERRCODE_INTERNAL_ERROR),
-						errmsg("Cannot find my global transaction in the array")));
+						errmsg("Cannot find my global transaction in the array"),
+						errdetail("ControlLockCount: %u, numGxacts: %u, gid: %s, currentGxact: %p",
+								   ControlLockCount, numGxacts, currentGxact->gid, currentGxact)));
 
 	/* move this to the next available slot */
 	(*shmNumGxacts)--;

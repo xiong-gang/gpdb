@@ -264,7 +264,7 @@ typedef struct TmControlBlock
 
 
 #define TMCONTROLBLOCK_BYTES(num_gxacts) \
-	(offsetof(TmControlBlock, gxact_array) + sizeof(TMGXACT) * (num_gxacts))
+	(offsetof(TmControlBlock, gxact_array) + sizeof(TMGXACT *) * (num_gxacts))
 
 extern DtxContext DistributedTransactionContext;
 
