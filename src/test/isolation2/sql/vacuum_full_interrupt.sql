@@ -11,7 +11,7 @@
 1: ANALYZE vacuum_full_interrupt;
 -- the relfrozenxid is the same as xmin when there's concurrent transactions.
 -- the reltuples is 100
-1: SELECT int8in(xidout(xmin))=int8in(xidout(relfrozenxid)) relfrozenxid_not_changed, relhasindex, reltuples FROM pg_class WHERE relname='vacuum_full_interrupt';
+1: SELECT xmin=relfrozenxid relfrozenxid_not_changed, relhasindex, reltuples FROM pg_class WHERE relname='vacuum_full_interrupt';
 
 -- break on QE after 'swap_relation_files' is finished
 1: SELECT gp_inject_fault('after_swap_relation_files', 'suspend', dbid) FROM gp_segment_configuration WHERE role='p' AND content = 0;
@@ -25,7 +25,8 @@
 
 -- the relfrozenxid should stay unchanged
 -- the reltuples should be 100, but QD has already commit the transaction and the reltuples is updated to 0, this looks like a bug
-2: SELECT int8in(xidout(xmin))=int8in(xidout(relfrozenxid)) relfrozenxid_not_changed, relhasindex, reltuples FROM pg_class WHERE relname='vacuum_full_interrupt';
+2: SELECT xmin=relfrozenxid relfrozenxid_not_changed, relhasindex, reltuples FROM pg_class WHERE relname='vacuum_full_interrupt';
+0U: SELECT xmin=relfrozenxid relfrozenxid_not_changed, relhasindex, reltuples FROM pg_class WHERE relname='vacuum_full_interrupt';
 
 -- verify the index is correctly when insert new tuples, in bug also reset 'relhasindex' in pg_class.
 2: INSERT INTO vacuum_full_interrupt SELECT i, i, i from generate_series(1,100)i;
