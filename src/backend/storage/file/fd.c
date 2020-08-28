@@ -1710,7 +1710,7 @@ FileClose(File file)
 			stat_errno = 0;
 
 		if (vfdP->fdstate & FD_WORKFILE)
-			WorkFileDeleted(file);
+			WorkFileDeleted(file, false);
 
 		/* in any case do the unlink */
 		if (unlink(vfdP->fileName))

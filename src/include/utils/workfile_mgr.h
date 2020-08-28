@@ -81,6 +81,9 @@ typedef struct workfile_set
 	dlist_node	node;
 
 	bool		active;
+
+	/* the work_set and the workfiles are kept across transactions */
+	bool		interXact;
 } workfile_set;
 
 /* Workfile Set operations */
@@ -90,9 +93,11 @@ extern void WorkFileShmemInit(void);
 
 extern void RegisterFileWithSet(File file, struct workfile_set *work_set);
 extern void UpdateWorkFileSize(File file, uint64 newsize);
-extern void WorkFileDeleted(File file);
+extern void WorkFileDeleted(File file, bool heldLock);
+extern void AtEOXact_WorkFile(void);
+extern void AtStart_WorkFile(void);
 
-extern workfile_set *workfile_mgr_create_set(const char *operator_name, const char *prefix);
+extern workfile_set *workfile_mgr_create_set(const char *operator_name, const char *prefix, bool interXact);
 extern void workfile_mgr_close_set(workfile_set *work_set);
 
 extern Datum gp_workfile_mgr_cache_entries_internal(PG_FUNCTION_ARGS);

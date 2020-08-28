@@ -1737,7 +1737,7 @@ tuplestore_make_shared(Tuplestorestate *state, const char *filename)
 {
 	ResourceOwner oldowner;
 
-	state->work_set = workfile_mgr_create_set("SharedTupleStore", filename);
+	state->work_set = workfile_mgr_create_set("SharedTupleStore", filename, false);
 
 	state->shared = true;
 

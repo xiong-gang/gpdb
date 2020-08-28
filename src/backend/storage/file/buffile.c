@@ -187,7 +187,7 @@ BufFileCreateTemp(char *operation_name, bool interXact)
 {
 	workfile_set *work_set;
 
-	work_set = workfile_mgr_create_set(operation_name, NULL);
+	work_set = workfile_mgr_create_set(operation_name, NULL, interXact);
 
 	return BufFileCreateTempInSet(work_set, interXact);
 }
@@ -219,6 +219,7 @@ BufFileCreateTempInSet(workfile_set *work_set, bool interXact)
 
 	FileSetIsWorkfile(file->file);
 	RegisterFileWithSet(file->file, work_set);
+	Assert(work_set->interXact == interXact);
 
 	SIMPLE_FAULT_INJECTOR("workfile_creation_failure");
 
@@ -262,6 +263,7 @@ BufFileCreateNamedTemp(const char *fileName, bool interXact, workfile_set *work_
 	{
 		FileSetIsWorkfile(file->file);
 		RegisterFileWithSet(file->file, work_set);
+		Assert(work_set->interXact == interXact);
 	}
 
 	return file;

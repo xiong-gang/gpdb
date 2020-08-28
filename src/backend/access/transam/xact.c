@@ -75,6 +75,7 @@
 #include "utils/snapmgr.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
+#include "utils/workfile_mgr.h"
 #include "pg_trace.h"
 
 #include "access/distributedlog.h"
@@ -2323,6 +2324,7 @@ StartTransaction(void)
 	 */
 	AtStart_Memory();
 	AtStart_ResourceOwner();
+	AtStart_WorkFile();
 
 	/*
 	 * Transactions may be started while recovery is in progress, if
@@ -2896,6 +2898,7 @@ CommitTransaction(void)
 	AtEOXact_HashTables(true);
 	AtEOXact_PgStat(true);
 	AtEOXact_Snapshot(true);
+	AtEOXact_WorkFile();
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -3214,6 +3217,7 @@ PrepareTransaction(void)
 	AtEOXact_HashTables(true);
 	/* don't call AtEOXact_PgStat here; we fixed pgstat state above */
 	AtEOXact_Snapshot(true);
+	AtEOXact_WorkFile();
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -3454,6 +3458,7 @@ AbortTransaction(void)
 		AtEOXact_ComboCid();
 		AtEOXact_HashTables(false);
 		AtEOXact_PgStat(false);
+		AtEOXact_WorkFile();
 		pgstat_report_xact_timestamp(0);
 	}
 

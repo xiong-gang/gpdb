@@ -94,9 +94,11 @@ typedef struct
 static WorkFileLocalEntry *localEntries = NULL;
 static int sizeLocalEntries = 0;
 
-static workfile_set *workfile_mgr_create_set_internal(const char *operator_name, const char *prefix);
+static workfile_set *workfile_mgr_create_set_internal(const char *operator_name, const char *prefix, bool interXact);
 
 static void AtProcExit_WorkFile(int code, Datum arg);
+static void WorkSetCleanup(bool skipInterXact, bool skipDangling);
+static void WorkSetDeleted(WorkFileSetSharedEntry *work_set);
 
 static bool proc_exit_hook_registered = false;
 
@@ -177,10 +179,91 @@ WorkFileShmemInit(void)
 static void
 AtProcExit_WorkFile(int code, Datum arg)
 {
-	int			i;
+	WorkSetCleanup(false, false);
+}
+
+/*
+ * Cleanup the work sets at the end of transaction.
+ * When transaction aborts, QEs call this function in different pace, the deleted
+ * work set might still been used by other QEs, so skip delete the dangling work
+ * sets.
+*/
+void
+AtEOXact_WorkFile(void)
+{
+	WorkSetCleanup(true, true);
+}
+
+/*
+ * It might be a good timing to delete the dangling work sets at the beginning of
+ * the transaction on the writer QE, since the reader QE will wait when create
+ * snapshot, there's no conflict like AtEOXact_WorkFile.
+*/
+void
+AtStart_WorkFile(void)
+{
+	if (Gp_role == GP_ROLE_EXECUTE && !Gp_is_writer)
+		return;
+	WorkSetCleanup(true, false);
+}
+
+/*
+ * delete the open work files and drop the work sets if no file is registered to it.
+ *
+ * skipInterXact: don't delete the work sets that are through transactions.
+ * skipDangling: when true, don't delete the work sets that has work files registered.
+*/
+static void
+WorkSetCleanup(bool skipInterXact, bool skipDangling)
+{
+	int i;
+	dlist_mutable_iter iter;
+
+	LWLockAcquire(WorkFileManagerLock, LW_EXCLUSIVE);
 
 	for (i = 0; i < sizeLocalEntries; i++)
-		WorkFileDeleted(i);
+		WorkFileDeleted(i, true);
+
+	if (skipDangling)
+	{
+		LWLockRelease(WorkFileManagerLock);
+		return;
+	}
+
+	dlist_foreach_modify(iter, &workfile_shared->activeList)
+	{
+		WorkFileSetSharedEntry *work_set = dlist_container(WorkFileSetSharedEntry, node, iter.cur);
+		WorkFileUsagePerQuery *perquery = work_set->perquery;
+		if (work_set->session_id != gp_session_id)
+			continue;
+
+		Assert(work_set->active);
+		AssertImply(!skipInterXact, work_set->interXact);
+		if (skipInterXact && work_set->interXact)
+			continue;
+
+		if (work_set->num_files == 0)
+		{
+			Assert(work_set->total_bytes == 0);
+			elog(LOG, "unused work_set. num_files:%u, total_bytes:%lu, active:%u",
+					work_set->num_files, work_set->total_bytes, work_set->active);
+		}
+		else
+		{
+			elog(LOG, "dangling work_set. num_files:%u, total_bytes:%lu, active:%u",
+					work_set->num_files, work_set->total_bytes, work_set->active);
+		}
+
+		workfile_shared->total_bytes -= work_set->total_bytes;
+		perquery->total_bytes -= work_set->total_bytes;
+		perquery->num_files -= work_set->num_files;
+		work_set->num_files = 0;
+		work_set->total_bytes = 0;
+
+		WorkSetDeleted(work_set);
+	}
+
+	LWLockRelease(WorkFileManagerLock);
 }
 
 /*
@@ -273,6 +356,10 @@ UpdateWorkFileSize(File file, uint64 newsize)
 	ensureLocalEntriesSize(file);
 	localEntry = &localEntries[file];
 
+	work_set = localEntry->work_set;
+	Assert(work_set);
+	perquery = work_set->perquery;
+
 	diff = (int64) newsize - localEntry->size;
 	if (diff == 0)
 		return;
@@ -286,48 +373,13 @@ UpdateWorkFileSize(File file, uint64 newsize)
 
 	LWLockAcquire(WorkFileManagerLock, LW_EXCLUSIVE);
 
-	/*
-	 * If this file doesn't belong to a working set yet, create a new one,
-	 * so that it can be tracked.
-	 *
-	 * XXX: perhaps we should skip this for very small files, to reduce
-	 * overhead?
-	 */
-	if (localEntry->work_set == NULL)
+	if (!work_set->active)
 	{
-		Assert(localEntry->size == 0);
-
-		work_set = workfile_mgr_create_set_internal(NULL, NULL);
-		localEntry->work_set = work_set;
-		work_set->num_files++;
-
-		perquery = work_set->perquery;
-		perquery->num_files++;
-
-		/*
-		 * Enforce the limit on number of files.
-		 *
-		 * We do this after associating the file with the set, so the
-		 * shared memory will reflect the state where we are already over
-		 * the limit. That seems accurate, we have already created the
-		 * file, after all. Transaction abort will delete it shortly, so
-		 * this is a very transient state.
-		 */
-		if (gp_workfile_limit_files_per_query > 0 &&
-			perquery->num_files > gp_workfile_limit_files_per_query)
-		{
-			ereport(ERROR,
-					(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-					 errmsg("number of workfiles per query limit exceeded")));
-		}
-
+		elog(LOG, "work_set is deleted, might be deleted at the end of transaction");
+		LWLockRelease(WorkFileManagerLock);
+		return;
 	}
-	else
-	{
-		work_set = localEntry->work_set;
-		perquery = work_set->perquery;
-	}
-	Assert(work_set->active);
+
 	Assert(perquery->active);
 
 	/*
@@ -364,8 +416,45 @@ UpdateWorkFileSize(File file, uint64 newsize)
 	LWLockRelease(WorkFileManagerLock);
 }
 
+static void
+WorkSetDeleted(WorkFileSetSharedEntry *work_set)
+{
+	WorkFileUsagePerQuery *perquery = work_set->perquery;
+
+	Assert(perquery->refcount > 0);
+	perquery->refcount--;
+
+	Assert(work_set->total_bytes == 0);
+	/* Unlink from the active list */
+	dlist_delete(&work_set->node);
+
+	Assert(workfile_shared->num_active > 0);
+	workfile_shared->num_active--;
+
+	/* and add to the free list */
+	dlist_push_head(&workfile_shared->freeList, &work_set->node);
+	work_set->active = false;
+
+	/*
+	 * Similarly, update / remove the per-query entry.
+	 */
+	if (perquery->refcount == 0)
+	{
+		bool		found;
+
+		Assert(perquery->total_bytes == 0);
+
+		perquery->active = false;
+		(void) hash_search(workfile_shared->per_query_hash,
+				perquery,
+				HASH_REMOVE, &found);
+		if (!found)
+			elog(PANIC, "per-query hash table is corrupt");
+	}
+}
+
 void
-WorkFileDeleted(File file)
+WorkFileDeleted(File file, bool heldLock)
 {
 	WorkFileLocalEntry *localEntry;
 	WorkFileSetSharedEntry *work_set;
@@ -381,68 +470,50 @@ WorkFileDeleted(File file)
 	if (!localEntry->work_set)
 		return;		/* not a tracked work file */
 
-	LWLockAcquire(WorkFileManagerLock, LW_EXCLUSIVE);
+	if (!heldLock)
+		LWLockAcquire(WorkFileManagerLock, LW_EXCLUSIVE);
 
 	work_set = localEntry->work_set;
 	perquery = work_set->perquery;
 	oldsize = localEntry->size;
 
-	if (!work_set->active || !work_set->perquery->active)
-		ereport(PANIC,
-				(errmsg("workfile_set/per-query summarry is not active")));
-
-	/*
-	 * Update the summaries in shared memory
-	 */
-	Assert(work_set->num_files > 0);
-	work_set->num_files--;
-	work_set->total_bytes -= oldsize;
-
-	Assert(perquery->num_files > 0);
-	perquery->num_files--;
-	perquery->total_bytes -= oldsize;
-
-	workfile_shared->total_bytes -= oldsize;
-
-	/*
-	 * Update the workfile_set. If this was the last file in this
-	 * set, remove it.
-	 */
-	if (work_set->num_files == 0)
+	if (work_set->active)
 	{
-		perquery->refcount--;
-
-		Assert(work_set->total_bytes == 0);
-		/* Unlink from the active list */
-		dlist_delete(&work_set->node);
-		workfile_shared->num_active--;
-
-		/* and add to the free list */
-		dlist_push_head(&workfile_shared->freeList, &work_set->node);
-		work_set->active = false;
+		Assert(perquery->active);
 
 		/*
-		 * Similarly, update / remove the per-query entry.
+		 * Update the summaries in shared memory
 		 */
-		if (perquery->refcount == 0)
-		{
-			bool		found;
+		Assert(work_set->num_files > 0);
+		work_set->num_files--;
+		work_set->total_bytes -= oldsize;
 
-			Assert(perquery->total_bytes == 0);
+		Assert(perquery->num_files > 0);
+		perquery->num_files--;
+		perquery->total_bytes -= oldsize;
 
-			perquery->active = false;
-			(void) hash_search(workfile_shared->per_query_hash,
-							   perquery,
-							   HASH_REMOVE, &found);
-			if (!found)
-				elog(PANIC, "per-query hash table is corrupt");
-		}
+		workfile_shared->total_bytes -= oldsize;
+
+		/*
+		 * Update the workfile_set. If this was the last file in this
+		 * set, remove it.
+		 */
+		if (work_set->num_files == 0)
+			WorkSetDeleted(work_set);
+	}
+	else
+	{
+		elog(LOG, "work_set is deleted, might be deleted at the end of the transaction, "
+				  "ignore the work files");
+		Assert(work_set->num_files == 0);
+		Assert(work_set->total_bytes == 0);
 	}
 
 	localEntry->size = 0;
 	localEntry->work_set = NULL;
 
-	LWLockRelease(WorkFileManagerLock);
+	if (!heldLock)
+		LWLockRelease(WorkFileManagerLock);
 }
 
 
@@ -450,7 +521,7 @@ WorkFileDeleted(File file)
  * Public API for creating a workfile set
  */
 workfile_set *
-workfile_mgr_create_set(const char *operator_name, const char *prefix)
+workfile_mgr_create_set(const char *operator_name, const char *prefix, bool interXact)
 {
 	workfile_set *work_set;
 
@@ -463,7 +534,7 @@ workfile_mgr_create_set(const char *operator_name, const char *prefix)
 
 	LWLockAcquire(WorkFileManagerLock, LW_EXCLUSIVE);
 
-	work_set = workfile_mgr_create_set_internal(operator_name, prefix);
+	work_set = workfile_mgr_create_set_internal(operator_name, prefix, interXact);
 
 	LWLockRelease(WorkFileManagerLock);
 
@@ -474,7 +545,7 @@ workfile_mgr_create_set(const char *operator_name, const char *prefix)
  * lock must be held
  */
 static workfile_set *
-workfile_mgr_create_set_internal(const char *operator_name, const char *prefix)
+workfile_mgr_create_set_internal(const char *operator_name, const char *prefix, bool interXact)
 {
 	WorkFileUsagePerQuery *perquery;
 	bool		found;
@@ -534,6 +605,7 @@ workfile_mgr_create_set_internal(const char *operator_name, const char *prefix)
 	work_set->num_files = 0;
 	work_set->total_bytes = 0;
 	work_set->active = true;
+	work_set->interXact = interXact;
 
 	if (operator_name)
 		strlcpy(work_set->operator, operator_name, sizeof(work_set->operator));
