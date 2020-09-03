@@ -98,6 +98,10 @@ test__createDtxSnapshot(void **state)
 	will_be_called_count(LWLockAcquire, -1);
 	expect_value_count(LWLockRelease, lockid, shmControlLock, -1);
 	will_be_called_count(LWLockRelease, -1);
+#ifdef USE_ASSERT_CHECKING
+	expect_value_count(LWLockHeldByMe, lockid, shmControlLock, -1);
+	will_return_count(LWLockHeldByMe, true, -1);
+#endif
 
 	/* This is going to act as our gxact */
 	shmGxactArray[0]->gxid = 20;
