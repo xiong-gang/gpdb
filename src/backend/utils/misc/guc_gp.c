@@ -2006,6 +2006,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 	},
 
 	{
+		{"gp_resgroup_debug_wait_queue", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Enable the debugging check on the wait queue of resource group."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&gp_resgroup_debug_wait_queue,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"enable_partition_rules", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Enable creation of RULEs to implement partitioning"),
 			NULL,
