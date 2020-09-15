@@ -81,6 +81,7 @@
 
 #include "utils/resource_manager.h"
 #include "utils/session_state.h"
+#include "utils/workfile_mgr.h"
 
 
 static HeapTuple GetDatabaseTuple(const char *dbname);
@@ -1363,6 +1364,9 @@ ShutdownPostgres(int code, Datum arg)
 	GPMemoryProtect_Shutdown();
 	/* Release SessionState entry */
 	SessionState_Shutdown();
+
+	/* Release work files and work sets */
+	WorkFile_Shutdown();
 
 	/*
 	 * User locks are not released by transaction end, so be sure to release

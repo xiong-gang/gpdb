@@ -96,11 +96,8 @@ static int sizeLocalEntries = 0;
 
 static workfile_set *workfile_mgr_create_set_internal(const char *operator_name, const char *prefix, bool interXact);
 
-static void AtProcExit_WorkFile(int code, Datum arg);
 static void WorkSetCleanup(bool skipInterXact, bool skipDangling);
 static void WorkSetDeleted(WorkFileSetSharedEntry *work_set);
-
-static bool proc_exit_hook_registered = false;
 
 Datum gp_workfile_mgr_cache_entries(PG_FUNCTION_ARGS);
 Datum gp_workfile_mgr_used_diskspace(PG_FUNCTION_ARGS);
@@ -176,9 +173,11 @@ WorkFileShmemInit(void)
  * have access to shared memory. fd.c's on_proc_exit callback runs after
  * detaching from shared memory, which is too late.
  */
-static void
-AtProcExit_WorkFile(int code, Datum arg)
+void
+WorkFile_Shutdown(void)
 {
+	if (Gp_role == GP_ROLE_EXECUTE && !Gp_is_writer)
+		return;
 	WorkSetCleanup(false, false);
 }
 
@@ -226,6 +225,8 @@ WorkSetCleanup(bool skipInterXact, bool skipDangling)
 
 	if (skipDangling)
 	{
+		/* clean worksets at the end of transaction */
+		Assert(skipInterXact);
 		LWLockRelease(WorkFileManagerLock);
 		return;
 	}
@@ -357,6 +358,10 @@ UpdateWorkFileSize(File file, uint64 newsize)
 	localEntry = &localEntries[file];
 
 	work_set = localEntry->work_set;
+	/*
+	 * We got here only when the file's fdstate is FD_WORKFILE, and that
+	 * means the file is registered to a work set.
+	 */
 	Assert(work_set);
 	perquery = work_set->perquery;
 
@@ -364,18 +369,11 @@ UpdateWorkFileSize(File file, uint64 newsize)
 	if (diff == 0)
 		return;
 
-	if (!proc_exit_hook_registered)
-	{
-		/* register proc-exit hook to ensure temp files are dropped at exit */
-		before_shmem_exit(AtProcExit_WorkFile, 0);
-		proc_exit_hook_registered = true;
-	}
-
 	LWLockAcquire(WorkFileManagerLock, LW_EXCLUSIVE);
 
 	if (!work_set->active)
 	{
-		elog(LOG, "work_set is deleted, might be deleted at the end of transaction");
+		elog(LOG, "work_set is deleted, might be deleted by writer QE at the end of transaction");
 		LWLockRelease(WorkFileManagerLock);
 		return;
 	}
@@ -421,6 +419,7 @@ WorkSetDeleted(WorkFileSetSharedEntry *work_set)
 {
 	WorkFileUsagePerQuery *perquery = work_set->perquery;
 
+	Assert(LWLockHeldExclusiveByMe(WorkFileManagerLock));
 	Assert(perquery->refcount > 0);
 	perquery->refcount--;
 
@@ -525,13 +524,6 @@ workfile_mgr_create_set(const char *operator_name, const char *prefix, bool inte
 {
 	workfile_set *work_set;
 
-	if (!proc_exit_hook_registered)
-	{
-		/* register proc-exit hook to ensure temp files are dropped at exit */
-		before_shmem_exit(AtProcExit_WorkFile, 0);
-		proc_exit_hook_registered = true;
-	}
-
 	LWLockAcquire(WorkFileManagerLock, LW_EXCLUSIVE);
 
 	work_set = workfile_mgr_create_set_internal(operator_name, prefix, interXact);
@@ -551,8 +543,6 @@ workfile_mgr_create_set_internal(const char *operator_name, const char *prefix, 
 	bool		found;
 	WorkFileUsagePerQuery key;
 	workfile_set *work_set;
-
-	Assert(proc_exit_hook_registered);
 
 	if (dlist_is_empty(&workfile_shared->freeList))
 	{
