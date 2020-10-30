@@ -647,9 +647,9 @@ AppendOnlyVisimapDelete_Stash(
 	 * previously stashed visimap entry before we were called, we must seek
 	 * till the end of it before writing new visimap entries.
 	 */
-	if (BufFileSeek(file, 0, 0, SEEK_END) != 0)
+	if (BufFileSeek(visiMapDelete->workfile, 0, 0, SEEK_END) != 0)
 		elog(ERROR, "failed to seek to end of visimap buf file");
-	BufFileTell(file, &fileno, &offset);
+	BufFileTell(visiMapDelete->workfile, &fileno, &offset);
 
 	elogif(Debug_appendonly_print_visimap, LOG,
 		   "Append-only visi map delete: Stash dirty visimap entry %d/" INT64_FORMAT,
