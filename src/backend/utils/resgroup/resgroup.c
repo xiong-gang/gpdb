@@ -164,6 +164,7 @@ struct ResGroupSlotData
 	int32			memQuota;	/* memory quota of current slot */
 	int32			memUsage;	/* total memory usage of procs belongs to this slot */
 	int				nProcs;		/* number of procs in this slot */
+	TimestampTz		moveTimestamp; /* the last time this slot was moved */
 
 	ResGroupSlotData	*next;
 
@@ -1591,6 +1592,7 @@ initSlot(ResGroupSlotData *slot, ResGroupData *group, int32 slotMemQuota)
 	slot->caps = group->caps;
 	slot->memQuota = slotMemQuota;
 	slot->memUsage = 0;
+	slot->moveTimestamp = 0;
 }
 
 /*
@@ -1624,6 +1626,7 @@ slotpoolInit(void)
 		slot->groupId = InvalidOid;
 		slot->memQuota = -1;
 		slot->memUsage = 0;
+		slot->moveTimestamp = 0;
 
 		slot->next = next;
 		next = slot;
@@ -1665,6 +1668,7 @@ slotpoolFreeSlot(ResGroupSlotData *slot)
 	slot->groupId = InvalidOid;
 	slot->memQuota = -1;
 	slot->memUsage = 0;
+	slot->moveTimestamp = 0;
 
 	slot->next = pResGroupControl->freeSlot;
 	pResGroupControl->freeSlot = slot;
@@ -4621,6 +4625,7 @@ HandleMoveResourceGroup(void)
 
 		PG_TRY();
 		{
+			slot->moveTimestamp = GetCurrentTimestamp();
 			sessionSetSlot(slot);
 
 			/* Add proc memory accounting info into group and slot */
@@ -4753,6 +4758,25 @@ moveQueryCheck(int sessionId, Oid groupId)
 	}
 
 	cdbdisp_clearCdbPgResults(&cdb_pgresults);
+
+	/* wait at least 5 seconds to move the same query */
+	LWLockAcquire(ResGroupLock, LW_EXCLUSIVE);
+	ResGroupSlotData *slot = ResGroupGetSlotBySessionId(sessionId);
+	if (!slot)
+	{
+		LWLockRelease(ResGroupLock);
+		elog(ERROR, "the process to move has ended");
+	}
+
+	if (slot->moveTimestamp != 0 &&
+		!TimestampDifferenceExceeds(slot->moveTimestamp, GetCurrentTimestamp(), 5000))
+	{
+		LWLockRelease(ResGroupLock);
+		elog(ERROR, "The query cannot be moved because it was been moving to a new group by another session");
+	}
+
+	slot->moveTimestamp = GetCurrentTimestamp();
+	LWLockRelease(ResGroupLock);
 }
 
 void
@@ -4806,14 +4830,15 @@ ResGroupMoveQuery(int sessionId, Oid groupId, const char *groupName)
 	}
 	PG_END_TRY();
 }
+
 /*
- * get resource group id by session id
+ * get resource group slot by session id
  */
-Oid
-ResGroupGetGroupIdBySessionId(int sessionId)
+ResGroupSlotData *
+ResGroupGetSlotBySessionId(int sessionId)
 {
-	Oid groupId = InvalidOid;
 	SessionState *curSessionState;
+	ResGroupSlotData *slot = NULL;
 
 	LWLockAcquire(SessionStateLock, LW_SHARED);
 	curSessionState = AllSessionStateEntries->usedList;
@@ -4821,15 +4846,28 @@ ResGroupGetGroupIdBySessionId(int sessionId)
 	{
 		if (curSessionState->sessionId == sessionId)
 		{
-			ResGroupSlotData *slot = (ResGroupSlotData *)curSessionState->resGroupSlot;
-			if (slot != NULL)
-				groupId = slot->groupId;
+			slot = (ResGroupSlotData *)curSessionState->resGroupSlot;
 			break;
 		}
 		curSessionState = curSessionState->next;
 	}
 	LWLockRelease(SessionStateLock);
 
+	return slot;
+}
+/*
+ * get resource group id by session id
+ */
+Oid
+ResGroupGetGroupIdBySessionId(int sessionId)
+{
+	Oid groupId = InvalidOid;
+
+	LWLockAcquire(ResGroupLock, LW_SHARED);
+	ResGroupSlotData *slot = ResGroupGetSlotBySessionId(sessionId);
+	if (slot)
+		groupId = slot->groupId;
+	LWLockRelease(ResGroupLock);
 	return groupId;
 }
 
@@ -4840,22 +4878,12 @@ int32
 ResGroupGetSessionMemUsage(int sessionId)
 {
 	int32 memUsage = -1;
-	SessionState *curSessionState;
 
-	LWLockAcquire(SessionStateLock, LW_SHARED);
-	curSessionState = AllSessionStateEntries->usedList;
-	while (curSessionState != NULL)
-	{
-		if (curSessionState->sessionId == sessionId)
-		{
-			ResGroupSlotData *slot = (ResGroupSlotData *)curSessionState->resGroupSlot;
-			memUsage = (slot == NULL) ? 0 : slot->memUsage;
-			break;
-		}
-		curSessionState = curSessionState->next;
-	}
-	LWLockRelease(SessionStateLock);
-
+	LWLockAcquire(ResGroupLock, LW_SHARED);
+	ResGroupSlotData *slot = ResGroupGetSlotBySessionId(sessionId);
+	if (slot)
+		memUsage = slot->memUsage;
+	LWLockRelease(ResGroupLock);
 	return memUsage;
 }
 

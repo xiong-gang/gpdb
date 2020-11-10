@@ -143,6 +143,22 @@ SELECT is_session_in_group(pid, 'rg_move_query_mem_small') FROM pg_stat_activity
 1q:
 2q:
 
+-- test8: should wait at least 5 seconds to move the same query
+1: SET ROLE role_move_query_mem_small;
+1: BEGIN;
+1: SELECT hold_memory_by_percent_on_qe(1,0.1);
+2: SELECT pg_resgroup_move_query(pid, 'rg_move_query') FROM pg_stat_activity WHERE query LIKE '%hold_memory_by_percent_on_qe%' AND rsgname='rg_move_query_mem_small';
+2: SELECT is_session_in_group(pid, 'rg_move_query') FROM pg_stat_activity WHERE query LIKE '%hold_memory_by_percent_on_qe%' AND state = 'idle in transaction';
+-- should fail
+3: SELECT pg_resgroup_move_query(pid, 'admin_group') FROM pg_stat_activity WHERE query LIKE '%hold_memory_by_percent_on_qe%' AND rsgname='rg_move_query';
+3: select pg_sleep(5);
+-- should success
+3: SELECT pg_resgroup_move_query(pid, 'admin_group') FROM pg_stat_activity WHERE query LIKE '%hold_memory_by_percent_on_qe%' AND rsgname='rg_move_query';
+2: SELECT is_session_in_group(pid, 'admin_group') FROM pg_stat_activity WHERE query LIKE '%hold_memory_by_percent_on_qe%' AND state = 'idle in transaction';
+1q:
+2q:
+3q:
+
 DROP ROLE role_move_query;
 DROP RESOURCE GROUP rg_move_query;
 DROP ROLE role_move_query_mem_small;

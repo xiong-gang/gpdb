@@ -223,6 +223,7 @@ extern Oid SessionGetResGroupId(SessionState *session);
 extern int32 SessionGetResGroupGlobalShareMemUsage(SessionState *session);
 extern void HandleMoveResourceGroup(void);
 extern void ResGroupMoveQuery(int sessionId, Oid groupId, const char *groupName);
+extern struct ResGroupSlotData * ResGroupGetSlotBySessionId(int sessionId);
 extern int32 ResGroupGetSessionMemUsage(int sessionId);
 extern int32 ResGroupGetGroupAvailableMem(Oid groupId);
 extern Oid ResGroupGetGroupIdBySessionId(int sessionId);
