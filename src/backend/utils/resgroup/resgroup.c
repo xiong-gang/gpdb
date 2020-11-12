@@ -4772,7 +4772,7 @@ moveQueryCheck(int sessionId, Oid groupId)
 		!TimestampDifferenceExceeds(slot->moveTimestamp, GetCurrentTimestamp(), 5000))
 	{
 		LWLockRelease(ResGroupLock);
-		elog(ERROR, "The query cannot be moved because it was been moving to a new group by another session");
+		elog(ERROR, "the query cannot be moved to a new resource group because a move initiated by another session is currently in progress.");
 	}
 
 	slot->moveTimestamp = GetCurrentTimestamp();

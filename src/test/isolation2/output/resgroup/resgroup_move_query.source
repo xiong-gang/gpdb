@@ -243,7 +243,7 @@ BEGIN
 (1 row)
 -- should fail
 3: SELECT pg_resgroup_move_query(pid, 'admin_group') FROM pg_stat_activity WHERE query LIKE '%hold_memory_by_percent_on_qe%' AND rsgname='rg_move_query';
-ERROR:  The query cannot be moved because it was been moving to a new group by another session (resgroup.c:4775)
+ERROR:  the query cannot be moved to a new resource group because a move initiated by another session is currently in progress. (resgroup.c:4775)
 3: select pg_sleep(5);
  pg_sleep 
 ----------
