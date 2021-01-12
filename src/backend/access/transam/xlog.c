@@ -8056,6 +8056,9 @@ StartupXLOG(void)
 	UpdateControlFile();
 	LWLockRelease(ControlFileLock);
 
+	/* truncate distributed log to oldest active xid */
+	DistributedLog_Truncate(oldestActiveXID);
+
 	/*
 	 * If there were cascading standby servers connected to us, nudge any wal
 	 * sender processes to notice that we've been promoted.
