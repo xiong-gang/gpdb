@@ -1928,7 +1928,7 @@ groupAcquireSlot(ResGroupInfo *pGroupInfo, bool isMoveQuery)
 	/*
 	 * Add into group wait queue (if not waiting yet).
 	 */
-	Assert(!procIsWaiting(MyProc) && !proc_exit_inprogress);
+	Assert(!proc_exit_inprogress);
 	groupWaitQueuePush(group, MyProc);
 
 	if (!group->lockedForDrop)
