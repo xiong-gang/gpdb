@@ -132,7 +132,7 @@ SELECT * FROM rg_concurrency_view;
 -- Upon receiving the terminate request, session 1 should start a new transaction to cleanup temp table.
 -- Note, that session 1 has already been waiting for resource group slot, its new transaction will bypass
 -- resource group since it's exiting.
-SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE wait_event_type='ResourceGroup' AND rsgname='rg_concurrency_test';
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE waiting_reason='resgroup' AND rsgname='rg_concurrency_test';
 1<:
 2:COMMIT;
 SELECT * FROM rg_concurrency_view;
