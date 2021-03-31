@@ -2727,6 +2727,7 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 		return;
 	/* Skip EXTERNAL TABLEs (like foreign tables in GPDB 6.x and below) */
 	if (tbinfo->relstorage == RELSTORAGE_EXTERNAL)
+		return;
 	/* Skip partitioned tables (data in partitions) */
 	if (tbinfo->relkind == RELKIND_PARTITIONED_TABLE)
 		return;
