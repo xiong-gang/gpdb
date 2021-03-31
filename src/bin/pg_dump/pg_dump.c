@@ -19416,6 +19416,18 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 	{
 		TableInfo  *owning_tab = findTableByOid(tbinfo->owning_tab);
 
+		/*
+		 * GPDB_12_MERGE_FIXME: same as the fixme in function getOwnedSeqs.
+		 */
+		if (owning_tab == NULL)
+		{
+			PQclear(res);
+
+			destroyPQExpBuffer(query);
+			destroyPQExpBuffer(delqry);
+			free(qseqname);
+			return;
+		}
 		if (owning_tab == NULL)
 			fatal("failed sanity check, parent table with OID %u of sequence with OID %u not found",
 				  tbinfo->owning_tab, tbinfo->dobj.catId.oid);
