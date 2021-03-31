@@ -17865,6 +17865,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		{
 			bool		isTemplatesSupported = fout->remoteVersion >= 80214;
 			bool		isPartitioned = false;
+			bool		isMultiColsList = false;
 			PQExpBuffer query = createPQExpBuffer();
 			PGresult   *res;
 
@@ -17961,6 +17962,23 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 				res = ExecuteSqlQueryForSingleRow(fout, query->data);
 				hasExternalPartitions = (PQgetvalue(res, 0, 0)[0] == 't');
 				PQclear(res);
+
+				/*
+				 * Skip the partitioned tables whose parkind is list and partition
+				 * attribute number is more than 1. This kind of partitioned table
+				 * is not supported in Greenplum 7.
+				 */
+				resetPQExpBuffer(query);
+				appendPQExpBuffer(query, "SELECT EXISTS (SELECT 1 FROM pg_partition "
+										 "WHERE parrelid = '%u'::pg_catalog.oid "
+										 "AND parkind = 'l' AND parnatts > 1);",
+								  tbinfo->dobj.catId.oid);
+			
+				res = ExecuteSqlQueryForSingleRow(fout, query->data);
+				isMultiColsList = (PQgetvalue(res, 0, 0)[0] == 't');
+				PQclear(res);
+				if (isMultiColsList)
+					pg_log_error("partitioned table of 'list' kind cannot have more than one column: %s", tbinfo->dobj.name);
 			}
 
 			destroyPQExpBuffer(query);
