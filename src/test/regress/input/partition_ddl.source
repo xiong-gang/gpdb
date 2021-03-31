@@ -976,3 +976,14 @@ alter table root_part_1_prt_interior_1 add primary key using index root_part_1_p
 create unique index on root_part_1_prt_interior_1_2_prt_leaf(a, b);
 alter table root_part_1_prt_interior_1_2_prt_leaf add primary key using index root_part_1_prt_interior_1_2_prt_leaf_a_b_idx2;
 drop table root_part;
+
+-- appendonly partitioned table with heap partition, the heap partition should not inherit the parent options
+CREATE TABLE pt_ao_with_heap_part(
+a integer,
+b integer
+)
+WITH (appendonly='true', compresstype=zlib, compresslevel='1') DISTRIBUTED BY (a) PARTITION BY RANGE(a)
+(
+PARTITION part1 START (40) END (45) WITH (tablename='pt_ao_with_heap_part_1_prt_part1', appendonly='true'),
+DEFAULT PARTITION dft WITH (tablename='pt_ao_with_heap_part_1_prt_dft', appendonly='false')
+);

@@ -1612,10 +1612,13 @@ generatePartitions(Oid parentrelid, GpPartitionDefinition *gpPartSpec,
 			/* if WITH has "tablename" then it will be used as name for partition */
 			partcomp.tablename = extract_tablename_from_options(&elem->options);
 
-			if (elem->options == NIL)
-				elem->options = parentoptions ? copyObject(parentoptions) : NIL;
 			if (elem->accessMethod == NULL)
 				elem->accessMethod = parentaccessmethod ? pstrdup(parentaccessmethod) : NULL;
+
+			/* inherit the parent option only when the child partition is appendonly */
+			if (elem->options == NIL &&
+				(elem->accessMethod && strcmp(elem->accessMethod, "heap") != 0))
+				elem->options = parentoptions ? copyObject(parentoptions) : NIL;
 
 			if (elem->accessMethod && strcmp(elem->accessMethod, "ao_column") == 0)
 				elem->colencs = merge_partition_encoding(pstate, elem->colencs, penc_cls);
