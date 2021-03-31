@@ -2569,7 +2569,13 @@ dumpTableData(Archive *fout, TableDataInfo *tdinfo)
 	char	   *copyStmt;
 	const char *copyFrom;
 
-	if (!dopt->dump_inserts)
+	/* Don't dump data for external table */
+	if (tbinfo->relstorage == RELSTORAGE_EXTERNAL)
+	{
+		dumpFn = NULL;
+		copyStmt = NULL;
+	}
+	else if (!dopt->dump_inserts)
 	{
 		/* Dump/restore using COPY */
 		dumpFn = dumpTableData_copy;
